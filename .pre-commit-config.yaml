@@ -1,0 +1,32 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-merge-conflict
+        stages: [pre-commit]
+      - id: detect-private-key
+        stages: [pre-commit]
+      - id: end-of-file-fixer
+        stages: [pre-commit]
+      - id: trailing-whitespace
+        stages: [pre-commit]
+      - id: mixed-line-ending
+        args: [--fix=no]
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      - id: commit-message-format
+        name: Check commit message format
+        entry: hooks/commit-msg
+        language: script
+        stages: [commit-msg]
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.8
+    hooks:
+      - id: clang-format
+        types_or: [c++, c]
+        args: [-style=file, -i]
+        pass_filenames: true
+        stages: [pre-commit]

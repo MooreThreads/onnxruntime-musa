@@ -1,0 +1,8 @@
+[general]
+ignore=body-is-missing
+
+[title-max-length]
+line-length=100
+
+[title-match-regex]
+regex=^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]*\))?: .+

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+commit_msg_file="$1"
+title="$(head -n 1 "${commit_msg_file}")"
+conventional_re='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]*\))?: .+'
+
+if [[ "${title}" == Merge* ]]; then
+  exit 0
+fi
+
+if [[ "${title}" =~ ${conventional_re} ]]; then
+  exit 0
+fi
+
+cat >&2 <<'MSG'
+Tip: commit messages are easier to scan when they follow conventional commits:
+  feat: add MUSA Add kernel
+  fix(matmul): handle empty matrix
+  style: format C++ sources
+MSG
+exit 0

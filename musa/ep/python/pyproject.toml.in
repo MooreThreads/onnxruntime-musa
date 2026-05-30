@@ -10,7 +10,8 @@ readme = "onnxruntime_musa/README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
-  "onnxruntime>=@min_onnxruntime_version@",
+  # ABI is pinned to the vendored ORT public headers (third_party/onnxruntime/VERSION).
+  "onnxruntime~=@onnxruntime_version@",
 ]
 
 [tool.setuptools.packages.find]

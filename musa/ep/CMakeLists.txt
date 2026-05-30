@@ -17,14 +17,17 @@ target_include_directories(${MUSA_PLUGIN_TARGET}
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels
-    ${ORT_ROOT}/include/onnxruntime
-    ${ORT_ROOT}/include/onnxruntime/core/session
-    ${ORT_BUILD_ROOT}/_deps/gsl-src/include
+    ${ONNXRUNTIME_INCLUDE_DIR}
+    ${ONNXRUNTIME_INCLUDE_DIR}/core/session
     ${MUSA_HOME}/include
 )
 
 target_link_directories(${MUSA_PLUGIN_TARGET} PRIVATE ${MUSA_HOME}/lib)
 target_link_libraries(${MUSA_PLUGIN_TARGET} PRIVATE musart mublas)
+
+target_compile_definitions(${MUSA_PLUGIN_TARGET} PRIVATE
+  ONNXRUNTIME_MUSA_VERSION="${ONNXRUNTIME_MUSA_VERSION}"
+)
 
 set_target_properties(${MUSA_PLUGIN_TARGET}
   PROPERTIES
@@ -37,5 +40,19 @@ set_target_properties(${MUSA_PLUGIN_TARGET}
 if(UNIX AND NOT APPLE)
   target_link_options(${MUSA_PLUGIN_TARGET} PRIVATE
     "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/ep_lib.lds"
+  )
+endif()
+
+# Regenerate musa/docs/supported_ops.md after every build by scanning the
+# kernel registration macros. Always runs (the generator itself is cheap and
+# overwrites the file in place).
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  set(_GEN_SUPPORTED_OPS "${CMAKE_SOURCE_DIR}/scripts/gen_supported_ops.py")
+  add_custom_command(TARGET ${MUSA_PLUGIN_TARGET} POST_BUILD
+    COMMAND ${Python3_EXECUTABLE} ${_GEN_SUPPORTED_OPS}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Regenerating musa/docs/supported_ops.md"
+    VERBATIM
   )
 endif()

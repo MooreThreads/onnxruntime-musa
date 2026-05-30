@@ -15,7 +15,9 @@ if ! command -v clang-format >/dev/null 2>&1; then
   exit 0
 fi
 
-mapfile -t files < <(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$' || true)
+mapfile -t files < <(git diff --cached --name-only --diff-filter=ACM \
+  | grep -E '\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$' \
+  | grep -v '^third_party/' || true)
 if [[ ${#files[@]} -eq 0 ]]; then
   exit 0
 fi

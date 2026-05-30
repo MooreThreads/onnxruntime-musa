@@ -1,20 +1,19 @@
 #include "ep_data_transfer.h"
 
-#include <gsl/span>
 #include <musa_runtime.h>
+
+#include <span>
 
 namespace {
 bool IsGpu(const OrtEpApi& ep_api, const OrtMemoryDevice* device) {
-  return ep_api.MemoryDevice_GetDeviceType(device) == OrtMemoryInfoDeviceType_GPU;
+  return ep_api.MemoryDevice_GetDeviceType(device) ==
+         OrtMemoryInfoDeviceType_GPU;
 }
 
-OrtStatus* CopyImpl(const OrtApi& api,
-                    const OrtEpApi& ep_api,
+OrtStatus* CopyImpl(const OrtApi& api, const OrtEpApi& ep_api,
                     const OrtMemoryDevice* src_device,
-                    const OrtMemoryDevice* dst_device,
-                    const void* src_data,
-                    void* dst_data,
-                    size_t bytes) {
+                    const OrtMemoryDevice* dst_device, const void* src_data,
+                    void* dst_data, size_t bytes) {
   if (bytes == 0 || src_data == dst_data) {
     return nullptr;
   }
@@ -39,12 +38,15 @@ OrtStatus* CopyImpl(const OrtApi& api,
 }
 }  // namespace
 
-bool ORT_API_CALL MusaDataTransfer::CanCopyImpl(const OrtDataTransferImpl* this_ptr,
-                                                const OrtMemoryDevice* src_memory_device,
-                                                const OrtMemoryDevice* dst_memory_device) noexcept {
+bool ORT_API_CALL MusaDataTransfer::CanCopyImpl(
+    const OrtDataTransferImpl* this_ptr,
+    const OrtMemoryDevice* src_memory_device,
+    const OrtMemoryDevice* dst_memory_device) noexcept {
   const auto& impl = *static_cast<const MusaDataTransfer*>(this_ptr);
-  bool src_is_our_device = impl.ep_api_.MemoryDevice_AreEqual(src_memory_device, impl.device_mem_info);
-  bool dst_is_our_device = impl.ep_api_.MemoryDevice_AreEqual(dst_memory_device, impl.device_mem_info);
+  bool src_is_our_device = impl.ep_api_.MemoryDevice_AreEqual(
+      src_memory_device, impl.device_mem_info);
+  bool dst_is_our_device = impl.ep_api_.MemoryDevice_AreEqual(
+      dst_memory_device, impl.device_mem_info);
 
   if (src_is_our_device || dst_is_our_device) {
     return true;
@@ -53,31 +55,36 @@ bool ORT_API_CALL MusaDataTransfer::CanCopyImpl(const OrtDataTransferImpl* this_
   return false;
 }
 
-OrtStatus* ORT_API_CALL MusaDataTransfer::CopyTensorsImpl(OrtDataTransferImpl* this_ptr,
-                                                          const OrtValue** src_tensors_ptr,
-                                                          OrtValue** dst_tensors_ptr,
-                                                          OrtSyncStream** /*streams_ptr*/,
-                                                          size_t num_tensors) noexcept {
+OrtStatus* ORT_API_CALL MusaDataTransfer::CopyTensorsImpl(
+    OrtDataTransferImpl* this_ptr, const OrtValue** src_tensors_ptr,
+    OrtValue** dst_tensors_ptr, OrtSyncStream** /*streams_ptr*/,
+    size_t num_tensors) noexcept {
   auto& impl = *static_cast<MusaDataTransfer*>(this_ptr);
 
-  auto src_tensors = gsl::make_span<const OrtValue*>(src_tensors_ptr, num_tensors);
-  auto dst_tensors = gsl::make_span<OrtValue*>(dst_tensors_ptr, num_tensors);
+  auto src_tensors =
+      std::span<const OrtValue* const>(src_tensors_ptr, num_tensors);
+  auto dst_tensors = std::span<OrtValue*>(dst_tensors_ptr, num_tensors);
 
   for (size_t i = 0; i < num_tensors; ++i) {
-    const OrtMemoryDevice* src_device = impl.ep_api_.Value_GetMemoryDevice(src_tensors[i]);
-    const OrtMemoryDevice* dst_device = impl.ep_api_.Value_GetMemoryDevice(dst_tensors[i]);
+    const OrtMemoryDevice* src_device =
+        impl.ep_api_.Value_GetMemoryDevice(src_tensors[i]);
+    const OrtMemoryDevice* dst_device =
+        impl.ep_api_.Value_GetMemoryDevice(dst_tensors[i]);
 
     const void* src_data = nullptr;
     void* dst_data = nullptr;
     size_t bytes = 0;
 
     RETURN_IF_ERROR(impl.ort_api_.GetTensorData(src_tensors[i], &src_data));
-    RETURN_IF_ERROR(impl.ort_api_.GetTensorMutableData(dst_tensors[i], &dst_data));
+    RETURN_IF_ERROR(
+        impl.ort_api_.GetTensorMutableData(dst_tensors[i], &dst_data));
     RETURN_IF_ERROR(impl.ort_api_.GetTensorSizeInBytes(src_tensors[i], &bytes));
-    RETURN_IF_ERROR(CopyImpl(impl.ort_api_, impl.ep_api_, src_device, dst_device, src_data, dst_data, bytes));
+    RETURN_IF_ERROR(CopyImpl(impl.ort_api_, impl.ep_api_, src_device,
+                             dst_device, src_data, dst_data, bytes));
   }
 
   return nullptr;
 }
 
-void ORT_API_CALL MusaDataTransfer::ReleaseImpl(OrtDataTransferImpl* /*this_ptr*/) noexcept {}
+void ORT_API_CALL
+MusaDataTransfer::ReleaseImpl(OrtDataTransferImpl* /*this_ptr*/) noexcept {}

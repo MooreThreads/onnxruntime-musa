@@ -3,10 +3,10 @@
 
 #pragma once
 
-#include <gsl/span>
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -29,8 +29,9 @@
     }                                                    \
   } while (0)
 
-// see ORT_ENFORCE for implementations that also capture a stack trace and work in builds with exceptions disabled
-// NOTE: In this simplistic implementation you must provide an argument, even it if's an empty string
+// see ORT_ENFORCE for implementations that also capture a stack trace and work
+// in builds with exceptions disabled NOTE: In this simplistic implementation
+// you must provide an argument, even it if's an empty string
 #define EP_ENFORCE(condition, ...)                       \
   do {                                                   \
     if (!(condition)) {                                  \
@@ -41,7 +42,8 @@
     }                                                    \
   } while (false)
 
-// Ignores an OrtStatus* while taking ownership of it so that it does not get leaked.
+// Ignores an OrtStatus* while taking ownership of it so that it does not get
+// leaked.
 #define IGNORE_ORTSTATUS(status_expr)   \
   do {                                  \
     OrtStatus* _status = (status_expr); \
@@ -56,12 +58,13 @@
 #define EP_FILE __FILE__
 #endif
 
-#define LOG(level, ...)                                                                            \
-  do {                                                                                             \
-    std::ostringstream ss;                                                                         \
-    ss << __VA_ARGS__;                                                                             \
-    IGNORE_ORTSTATUS(api_.Logger_LogMessage(&logger_, ORT_LOGGING_LEVEL_##level, ss.str().c_str(), \
-                                            EP_FILE, __LINE__, __FUNCTION__));                     \
+#define LOG(level, ...)                                                 \
+  do {                                                                  \
+    std::ostringstream ss;                                              \
+    ss << __VA_ARGS__;                                                  \
+    IGNORE_ORTSTATUS(api_.Logger_LogMessage(                            \
+        &logger_, ORT_LOGGING_LEVEL_##level, ss.str().c_str(), EP_FILE, \
+        __LINE__, __FUNCTION__));                                       \
   } while (false)
 
 #define RETURN_ERROR(code, ...)                       \
@@ -112,10 +115,12 @@ inline std::string GetLowercaseString(std::string str) {
   return str;
 }
 
-// Returns an entry in the session option configurations, or a default value if not present.
-inline OrtStatus* GetSessionConfigEntryOrDefault(const OrtSessionOptions& session_options,
-                                                 const char* config_key, const std::string& default_val,
-                                                 /*out*/ std::string& config_val) {
+// Returns an entry in the session option configurations, or a default value if
+// not present.
+inline OrtStatus* GetSessionConfigEntryOrDefault(
+    const OrtSessionOptions& session_options, const char* config_key,
+    const std::string& default_val,
+    /*out*/ std::string& config_val) {
   try {
     Ort::ConstSessionOptions sess_opt{&session_options};
     config_val = sess_opt.GetConfigEntryOrDefault(config_key, default_val);
@@ -127,7 +132,8 @@ inline OrtStatus* GetSessionConfigEntryOrDefault(const OrtSessionOptions& sessio
   return nullptr;
 }
 
-// Returns 0 (via output parameter) if the given OrtValueInfo represents a float tensor.
+// Returns 0 (via output parameter) if the given OrtValueInfo represents a float
+// tensor.
 inline void IsFloatTensor(Ort::ConstValueInfo value_info, bool& result) {
   result = false;
 
@@ -145,8 +151,10 @@ inline void IsFloatTensor(Ort::ConstValueInfo value_info, bool& result) {
   result = 0;
 }
 
-// Gets the tensor shape from `value_info`. Returns std::nullopt if `value_info` is not a tensor.
-inline std::optional<std::vector<int64_t>> GetTensorShape(Ort::ConstValueInfo value_info) {
+// Gets the tensor shape from `value_info`. Returns std::nullopt if `value_info`
+// is not a tensor.
+inline std::optional<std::vector<int64_t>> GetTensorShape(
+    Ort::ConstValueInfo value_info) {
   const auto type_info = value_info.TypeInfo();
   const auto onnx_type = type_info.GetONNXType();
   if (onnx_type != ONNX_TYPE_TENSOR) {
@@ -158,16 +166,18 @@ inline std::optional<std::vector<int64_t>> GetTensorShape(Ort::ConstValueInfo va
 }
 
 // Check if two shapes are static (no dynamic dimensions) and equal.
-inline bool AreShapesStaticAndEqual(gsl::span<const int64_t> shape0, gsl::span<const int64_t> shape1) {
-  const auto is_static_shape = [](gsl::span<const int64_t> shape) -> bool {
-    return std::all_of(shape.begin(), shape.end(), [](int64_t dim) { return dim >= 0; });
+inline bool AreShapesStaticAndEqual(std::span<const int64_t> shape0,
+                                    std::span<const int64_t> shape1) {
+  const auto is_static_shape = [](std::span<const int64_t> shape) -> bool {
+    return std::all_of(shape.begin(), shape.end(),
+                       [](int64_t dim) { return dim >= 0; });
   };
 
   if (!is_static_shape(shape0) || !is_static_shape(shape1)) {
     return false;  // a shape has dynamic dimensions
   }
 
-  return shape0 == shape1;
+  return std::equal(shape0.begin(), shape0.end(), shape1.begin(), shape1.end());
 }
 
 template <typename T>
@@ -187,7 +197,7 @@ inline ONNXTensorElementDataType GetTensorElemDataType<int64_t>() {
 
 template <typename T>
 inline OrtStatus* GetValueDataAndShape(Ort::ConstValue value,
-                                       /*out*/ gsl::span<const T>& data,
+                                       /*out*/ std::span<const T>& data,
                                        /*out*/ std::vector<int64_t>& shape) {
   auto type_shape = value.GetTensorTypeAndShapeInfo();
 
@@ -197,16 +207,17 @@ inline OrtStatus* GetValueDataAndShape(Ort::ConstValue value,
 
   const T* elem_data = value.GetTensorData<T>();
   size_t num_elems = type_shape.GetElementCount();
-  data = gsl::span<const T>(elem_data, num_elems);
+  data = std::span<const T>(elem_data, num_elems);
   shape = type_shape.GetShape();
 
   return nullptr;
 }
 
 template <typename T>
-inline OrtStatus* GetKernelInputDataAndShape(Ort::KernelContext kernel_context, size_t index,
-                                             /*out*/ gsl::span<const T>& data,
-                                             /*out*/ std::vector<int64_t>& shape) {
+inline OrtStatus* GetKernelInputDataAndShape(
+    Ort::KernelContext kernel_context, size_t index,
+    /*out*/ std::span<const T>& data,
+    /*out*/ std::vector<int64_t>& shape) {
   Ort::ConstValue input = kernel_context.GetInput(index);
   return GetValueDataAndShape<T>(input, data, shape);
 }

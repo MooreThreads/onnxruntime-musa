@@ -3,30 +3,32 @@
 
 #include "ep.h"
 
-#include <gsl/span>
 #include <array>
 #include <cassert>
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
-#include <vector>
 #include <unordered_set>
-
-#include "plugin_ep_utils.h"
+#include <vector>
 
 #include "ep_factory.h"
 #include "ep_profiling.h"
+#include "plugin_ep_utils.h"
 
-MusaEp::MusaEp(MusaEpFactory& factory, const Config& config, const OrtLogger& logger)
-    : OrtEp{},  // explicitly call the struct ctor to ensure all optional values are default initialized
+MusaEp::MusaEp(MusaEpFactory& factory, const Config& config,
+               const OrtLogger& logger)
+    : OrtEp{},  // explicitly call the struct ctor to ensure all optional values
+                // are default initialized
       factory_{factory},
       ort_api_{factory.GetOrtApi()},
       ep_api_{factory.GetEpApi()},
       name_{factory.GetEpName()},
       config_{config},
       logger_{logger} {
-  ort_version_supported = ORT_API_VERSION;  // set to the ORT version we were compiled with.
+  ort_version_supported =
+      ORT_API_VERSION;  // set to the ORT version we were compiled with.
 
   // Initialize the execution provider's function table
   GetName = GetNameImpl;
@@ -38,10 +40,10 @@ MusaEp::MusaEp(MusaEpFactory& factory, const Config& config, const OrtLogger& lo
   Compile = nullptr;
   ReleaseNodeComputeInfos = nullptr;
 
-  IGNORE_ORTSTATUS(ort_api_.Logger_LogMessage(&logger_,
-                                              OrtLoggingLevel::ORT_LOGGING_LEVEL_INFO,
-                                              ("MUSAExecutionProvider has been created with name " + name_).c_str(),
-                                              ORT_FILE, __LINE__, __FUNCTION__));
+  IGNORE_ORTSTATUS(ort_api_.Logger_LogMessage(
+      &logger_, OrtLoggingLevel::ORT_LOGGING_LEVEL_INFO,
+      ("MUSAExecutionProvider has been created with name " + name_).c_str(),
+      ORT_FILE, __LINE__, __FUNCTION__));
 }
 
 MusaEp::~MusaEp() = default;
@@ -53,8 +55,9 @@ const char* ORT_API_CALL MusaEp::GetNameImpl(const OrtEp* this_ptr) noexcept {
 }
 
 /*static*/
-OrtStatus* ORT_API_CALL MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
-                                                           OrtEpGraphSupportInfo* graph_support_info) noexcept {
+OrtStatus* ORT_API_CALL
+MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
+                          OrtEpGraphSupportInfo* graph_support_info) noexcept {
   try {
     MusaEp* ep = static_cast<MusaEp*>(this_ptr);
 
@@ -65,15 +68,16 @@ OrtStatus* ORT_API_CALL MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGrap
       return nullptr;  // No nodes to process
     }
 
-
     // Collect candidate nodes that this EP may support.
     std::vector<Ort::ConstNode> candidate_nodes;
     static const std::unordered_set<std::string> supported_ops = {
-        "MatMul", "Add", "Sub", "Mul", "Div", "Pow", "Sum",
-        "Relu", "LeakyRelu", "Sqrt", "Reciprocal", "Neg", "Log", "Tanh", "Sigmoid", "Softmax",
-        "Gemm", "FusedGemm", "FusedMatMul",
-        "Shape", "Cast", "Reshape", "Squeeze", "Unsqueeze", "Concat", "Transpose",
-        "Gather", "Slice", "Split", "ReduceProd", "ReduceSum", "ReduceMean",
+        "MatMul",     "Add",        "Sub",       "Mul",         "Div",
+        "Pow",        "Sum",        "Relu",      "LeakyRelu",   "Sqrt",
+        "Reciprocal", "Neg",        "Log",       "Tanh",        "Sigmoid",
+        "Softmax",    "Gemm",       "FusedGemm", "FusedMatMul", "Shape",
+        "Cast",       "Reshape",    "Squeeze",   "Unsqueeze",   "Concat",
+        "Transpose",  "Gather",     "Slice",     "Split",       "ReduceProd",
+        "ReduceSum",  "ReduceMean",
     };
 
     for (const auto& node : all_nodes) {
@@ -86,10 +90,12 @@ OrtStatus* ORT_API_CALL MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGrap
     // Mark candidate nodes as supported if we have a registered kernel.
     for (const auto& node : candidate_nodes) {
       const OrtKernelDef* kernel_def = nullptr;
-      RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_LookUpKernel(graph_support_info, node, &kernel_def));
+      RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_LookUpKernel(
+          graph_support_info, node, &kernel_def));
 
       if (kernel_def != nullptr) {
-        RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_AddSingleNode(graph_support_info, node));
+        RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_AddSingleNode(
+            graph_support_info, node));
       }
     }
   } catch (const Ort::Exception& ex) {
@@ -105,20 +111,21 @@ OrtStatus* ORT_API_CALL MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGrap
 
 /*static*/
 OrtStatus* ORT_API_CALL MusaEp::GetKernelRegistryImpl(
-    _In_ OrtEp* this_ptr,
-    _Outptr_result_maybenull_ const OrtKernelRegistry** kernel_registry) noexcept {
+    _In_ OrtEp* this_ptr, _Outptr_result_maybenull_ const OrtKernelRegistry**
+                              kernel_registry) noexcept {
   MusaEp* ep = static_cast<MusaEp*>(this_ptr);
 
   *kernel_registry = nullptr;
 
-  // Get the cached kernel registry from parent factory to avoid recreating the kernel registry for every EP instance.
+  // Get the cached kernel registry from parent factory to avoid recreating the
+  // kernel registry for every EP instance.
   RETURN_IF_ERROR(ep->factory_.GetKernelRegistryForEp(*ep, kernel_registry));
   return nullptr;
 }
 
 /*static*/
-OrtStatus* ORT_API_CALL MusaEp::CreateProfilerImpl(OrtEp* this_ptr,
-                                                            OrtEpProfilerImpl** profiler) noexcept {
+OrtStatus* ORT_API_CALL MusaEp::CreateProfilerImpl(
+    OrtEp* this_ptr, OrtEpProfilerImpl** profiler) noexcept {
   EXCEPTION_TO_RETURNED_STATUS_BEGIN
   MusaEp* ep = static_cast<MusaEp*>(this_ptr);
   auto profiler_unique_ptr = std::make_unique<MusaEpProfiler>(ep->ep_api_);

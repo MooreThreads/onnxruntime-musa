@@ -1,3 +1,35 @@
 # onnxruntime_musa
 
-Python helper package for registering the MUSA Plugin Execution Provider.
+Python helper package shipped inside the `onnxruntime-musa` wheel. It bundles the plugin
+shared library (`libonnxruntime_providers_musa_plugin.so`) and exposes two helpers used
+to register the MUSA Plugin Execution Provider into a stock ONNX Runtime install.
+
+## Usage
+
+```python
+import onnxruntime as ort
+import onnxruntime_musa as musa_ep
+
+ep_name = musa_ep.get_ep_name()         # "MUSAExecutionProvider"
+lib_path = musa_ep.get_library_path()   # absolute path to the bundled .so / .dll
+
+ort.register_execution_provider_library(ep_name, lib_path)
+
+# pick the MUSA device and create a session bound to it
+musa_device = next(d for d in ort.get_ep_devices() if d.ep_name == ep_name)
+so = ort.SessionOptions()
+so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+so.add_provider_for_devices([musa_device], {})
+session = ort.InferenceSession("model.onnx", sess_options=so)
+```
+
+A runnable end-to-end smoke test (1-op MatMul model, prints the device that ran the node)
+lives in the repository as [`run_matmul.py`](../../../../run_matmul.py) / `./run.sh`.
+
+## Requirements
+
+- Python >= 3.11
+- `onnxruntime` matching the wheel's `Requires-Dist` constraint (auto-derived from the
+  vendored ORT headers; currently `~=1.26.0`)
+- MUSA toolkit runtime libraries reachable via `LD_LIBRARY_PATH`
+  (e.g. `/usr/local/musa/lib:/usr/local/musa/lib64`)

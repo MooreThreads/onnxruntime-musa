@@ -1,7 +1,5 @@
 #include "basic_ops.h"
 
-#include "runtime/musa_runtime.h"
-
 #include <mublas.h>
 #include <musa_runtime.h>
 
@@ -12,11 +10,13 @@
 #include <memory>
 #include <numeric>
 #include <set>
+#include <span>
 #include <sstream>
 #include <unordered_set>
 
-namespace {
+#include "runtime/musa_runtime.h"
 
+namespace {
 
 thread_local mublasHandle_t g_basic_mublas_handle = nullptr;
 
@@ -64,7 +64,8 @@ T AttrOrDefault(Ort::ConstKernelInfo& info, const char* name, T default_value) {
   }
 }
 
-std::vector<int64_t> AttrsOrEmpty(Ort::ConstKernelInfo& info, const char* name) {
+std::vector<int64_t> AttrsOrEmpty(Ort::ConstKernelInfo& info,
+                                  const char* name) {
   try {
     return info.GetAttributes<int64_t>(name);
   } catch (...) {
@@ -73,8 +74,10 @@ std::vector<int64_t> AttrsOrEmpty(Ort::ConstKernelInfo& info, const char* name) 
 }
 
 bool IsGpuMemory(const OrtMemoryInfo* memory_info) {
-  const OrtMemoryDevice* device = Ort::GetEpApi().MemoryInfo_GetMemoryDevice(memory_info);
-  return Ort::GetEpApi().MemoryDevice_GetDeviceType(device) == OrtMemoryInfoDeviceType_GPU;
+  const OrtMemoryDevice* device =
+      Ort::GetEpApi().MemoryInfo_GetMemoryDevice(memory_info);
+  return Ort::GetEpApi().MemoryDevice_GetDeviceType(device) ==
+         OrtMemoryInfoDeviceType_GPU;
 }
 
 OrtStatus* CopyToHost(Ort::ConstValue value, std::vector<uint8_t>& bytes) {
@@ -86,7 +89,8 @@ OrtStatus* CopyToHost(Ort::ConstValue value, std::vector<uint8_t>& bytes) {
 
   const void* src = value.GetTensorRawData();
   if (IsGpuMemory(value.GetTensorMemoryInfo())) {
-    musaError_t status = musaMemcpy(bytes.data(), src, num_bytes, musaMemcpyDeviceToHost);
+    musaError_t status =
+        musaMemcpy(bytes.data(), src, num_bytes, musaMemcpyDeviceToHost);
     if (status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }
@@ -97,14 +101,16 @@ OrtStatus* CopyToHost(Ort::ConstValue value, std::vector<uint8_t>& bytes) {
   return nullptr;
 }
 
-OrtStatus* CopyFromHost(Ort::UnownedValue value, const void* src, size_t num_bytes) {
+OrtStatus* CopyFromHost(Ort::UnownedValue value, const void* src,
+                        size_t num_bytes) {
   if (num_bytes == 0) {
     return nullptr;
   }
 
   void* dst = value.GetTensorMutableRawData();
   if (IsGpuMemory(value.GetTensorMemoryInfo())) {
-    musaError_t status = musaMemcpy(dst, src, num_bytes, musaMemcpyHostToDevice);
+    musaError_t status =
+        musaMemcpy(dst, src, num_bytes, musaMemcpyHostToDevice);
     if (status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }
@@ -148,12 +154,14 @@ int64_t NormalizeAxis(int64_t axis, size_t rank) {
 std::vector<int64_t> Strides(const std::vector<int64_t>& shape) {
   std::vector<int64_t> strides(shape.size(), 1);
   for (int64_t i = static_cast<int64_t>(shape.size()) - 2; i >= 0; --i) {
-    strides[static_cast<size_t>(i)] = strides[static_cast<size_t>(i + 1)] * shape[static_cast<size_t>(i + 1)];
+    strides[static_cast<size_t>(i)] =
+        strides[static_cast<size_t>(i + 1)] * shape[static_cast<size_t>(i + 1)];
   }
   return strides;
 }
 
-std::vector<int64_t> Coordinates(int64_t linear, const std::vector<int64_t>& shape) {
+std::vector<int64_t> Coordinates(int64_t linear,
+                                 const std::vector<int64_t>& shape) {
   std::vector<int64_t> coord(shape.size(), 0);
   for (int64_t i = static_cast<int64_t>(shape.size()) - 1; i >= 0; --i) {
     int64_t dim = shape[static_cast<size_t>(i)];
@@ -163,7 +171,8 @@ std::vector<int64_t> Coordinates(int64_t linear, const std::vector<int64_t>& sha
   return coord;
 }
 
-int64_t Offset(const std::vector<int64_t>& coord, const std::vector<int64_t>& strides) {
+int64_t Offset(const std::vector<int64_t>& coord,
+               const std::vector<int64_t>& strides) {
   int64_t off = 0;
   for (size_t i = 0; i < coord.size(); ++i) {
     off += coord[i] * strides[i];
@@ -171,7 +180,8 @@ int64_t Offset(const std::vector<int64_t>& coord, const std::vector<int64_t>& st
   return off;
 }
 
-std::vector<int64_t> BroadcastShape(const std::vector<int64_t>& a, const std::vector<int64_t>& b) {
+std::vector<int64_t> BroadcastShape(const std::vector<int64_t>& a,
+                                    const std::vector<int64_t>& b) {
   size_t rank = std::max(a.size(), b.size());
   std::vector<int64_t> out(rank, 1);
   for (size_t i = 0; i < rank; ++i) {
@@ -200,8 +210,9 @@ int64_t BroadcastOffset(const std::vector<int64_t>& out_coord,
 }
 
 template <typename T>
-gsl::span<const T> Span(const std::vector<uint8_t>& bytes) {
-  return gsl::span<const T>(reinterpret_cast<const T*>(bytes.data()), bytes.size() / sizeof(T));
+std::span<const T> Span(const std::vector<uint8_t>& bytes) {
+  return std::span<const T>(reinterpret_cast<const T*>(bytes.data()),
+                            bytes.size() / sizeof(T));
 }
 
 template <typename T>
@@ -221,7 +232,8 @@ OrtStatus* WriteTyped(Ort::UnownedValue value, const std::vector<T>& data) {
 }
 
 template <typename T, typename Fn>
-OrtStatus* BinaryCompute(Ort::KernelContext& ctx, const std::vector<int64_t>& shape0,
+OrtStatus* BinaryCompute(Ort::KernelContext& ctx,
+                         const std::vector<int64_t>& shape0,
                          const std::vector<int64_t>& shape1, Fn fn) {
   std::vector<T> a = ReadTyped<T>(ctx.GetInput(0));
   std::vector<T> b = ReadTyped<T>(ctx.GetInput(1));
@@ -235,14 +247,16 @@ OrtStatus* BinaryCompute(Ort::KernelContext& ctx, const std::vector<int64_t>& sh
     auto coord = Coordinates(i, out_shape);
     int64_t o0 = BroadcastOffset(coord, shape0, s0);
     int64_t o1 = BroadcastOffset(coord, shape1, s1);
-    out[static_cast<size_t>(i)] = fn(a[static_cast<size_t>(o0)], b[static_cast<size_t>(o1)]);
+    out[static_cast<size_t>(i)] =
+        fn(a[static_cast<size_t>(o0)], b[static_cast<size_t>(o1)]);
   }
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
   return WriteTyped<T>(y, out);
 }
 
 template <typename T, typename Fn>
-OrtStatus* UnaryCompute(Ort::KernelContext& ctx, const std::vector<int64_t>& shape, Fn fn) {
+OrtStatus* UnaryCompute(Ort::KernelContext& ctx,
+                        const std::vector<int64_t>& shape, Fn fn) {
   std::vector<T> x = ReadTyped<T>(ctx.GetInput(0));
   std::vector<T> y_data(x.size());
   for (size_t i = 0; i < x.size(); ++i) {
@@ -278,12 +292,13 @@ std::set<int64_t> AxesSet(std::vector<int64_t> axes, size_t rank) {
   return out;
 }
 
-
-std::vector<int64_t> PrefixShape(const std::vector<int64_t>& shape, size_t trailing_dims) {
+std::vector<int64_t> PrefixShape(const std::vector<int64_t>& shape,
+                                 size_t trailing_dims) {
   if (shape.size() < trailing_dims) {
     return {};
   }
-  return std::vector<int64_t>(shape.begin(), shape.end() - static_cast<int64_t>(trailing_dims));
+  return std::vector<int64_t>(
+      shape.begin(), shape.end() - static_cast<int64_t>(trailing_dims));
 }
 
 std::vector<int64_t> BroadcastBatchCoord(const std::vector<int64_t>& out_coord,
@@ -299,7 +314,8 @@ std::vector<int64_t> BroadcastBatchCoord(const std::vector<int64_t>& out_coord,
   return coord;
 }
 
-void ApplyActivation(std::vector<float>& values, const std::string& activation, float activation_alpha) {
+void ApplyActivation(std::vector<float>& values, const std::string& activation,
+                     float activation_alpha) {
   if (activation.empty()) {
     return;
   }
@@ -316,19 +332,22 @@ void ApplyActivation(std::vector<float>& values, const std::string& activation, 
   }
 }
 
-OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a, bool trans_b, float alpha, float beta,
-                       const std::string& activation, float activation_alpha) {
+OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a, bool trans_b,
+                       float alpha, float beta, const std::string& activation,
+                       float activation_alpha) {
   auto a_info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto b_info = ctx.GetInput(1).GetTensorTypeAndShapeInfo();
   if (a_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
       b_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "Gemm only supports float tensors");
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Gemm only supports float tensors");
   }
 
   std::vector<int64_t> a_shape = a_info.GetShape();
   std::vector<int64_t> b_shape = b_info.GetShape();
   if (a_shape.size() != 2 || b_shape.size() != 2) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "Gemm requires rank-2 inputs");
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Gemm requires rank-2 inputs");
   }
 
   int64_t m = trans_a ? a_shape[1] : a_shape[0];
@@ -336,7 +355,8 @@ OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a, bool trans_b, floa
   int64_t kb = trans_b ? b_shape[1] : b_shape[0];
   int64_t n = trans_b ? b_shape[0] : b_shape[1];
   if (k != kb) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "Gemm K dimension mismatch");
+    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                      "Gemm K dimension mismatch");
   }
 
   std::vector<int64_t> out_shape = {m, n};
@@ -347,7 +367,8 @@ OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a, bool trans_b, floa
     can_use_mublas = IsGpuMemory(y.GetTensorMemoryInfo());
     if (can_use_mublas) {
       if (m > INT32_MAX || k > INT32_MAX || n > INT32_MAX) {
-        return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "Gemm dimensions exceed int32 mublas limits");
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT, "Gemm dimensions exceed int32 mublas limits");
       }
       const float* a_data = ctx.GetInput(0).GetTensorData<float>();
       const float* b_data = ctx.GetInput(1).GetTensorData<float>();
@@ -362,40 +383,42 @@ OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a, bool trans_b, floa
       int ki = static_cast<int>(k);
       int ni = static_cast<int>(n);
       float zero = 0.0f;
-      mublasStatus status = mublasSgemm(handle, op_b, op_a,
-                                        ni, mi, ki,
-                                        &alpha,
-                                        b_data, ldb,
-                                        a_data, lda,
-                                        &zero,
-                                        y_data, ni);
+      mublasStatus status =
+          mublasSgemm(handle, op_b, op_a, ni, mi, ki, &alpha, b_data, ldb,
+                      a_data, lda, &zero, y_data, ni);
       if (status != MUBLAS_STATUS_SUCCESS) {
         return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSgemm failed");
       }
       musaError_t sync_status = musaDeviceSynchronize();
       if (sync_status != musaSuccess) {
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(sync_status));
+        return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                          MusaErrorString(sync_status));
       }
       if (ctx.GetInputCount() <= 2 && activation.empty()) {
         return nullptr;
       }
 
       std::vector<float> out(static_cast<size_t>(m * n));
-      sync_status = musaMemcpy(out.data(), y_data, out.size() * sizeof(float), musaMemcpyDeviceToHost);
+      sync_status = musaMemcpy(out.data(), y_data, out.size() * sizeof(float),
+                               musaMemcpyDeviceToHost);
       if (sync_status != musaSuccess) {
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(sync_status));
+        return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                          MusaErrorString(sync_status));
       }
       if (ctx.GetInputCount() > 2) {
         auto c_value = ctx.GetInput(2);
         auto c_info = c_value.GetTensorTypeAndShapeInfo();
         if (c_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-          return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "Gemm bias only supports float tensors");
+          return Ort::GetApi().CreateStatus(
+              ORT_NOT_IMPLEMENTED, "Gemm bias only supports float tensors");
         }
         std::vector<int64_t> c_shape = c_info.GetShape();
         std::vector<float> c = ReadTyped<float>(c_value);
-        std::vector<int64_t> broadcast_shape = BroadcastShape(c_shape, out_shape);
+        std::vector<int64_t> broadcast_shape =
+            BroadcastShape(c_shape, out_shape);
         if (broadcast_shape != out_shape) {
-          return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "Gemm bias broadcast shape mismatch");
+          return Ort::GetApi().CreateStatus(
+              ORT_INVALID_ARGUMENT, "Gemm bias broadcast shape mismatch");
         }
         auto c_strides = Strides(c_shape);
         for (int64_t i = 0; i < NumElements(out_shape); ++i) {
@@ -428,13 +451,15 @@ OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a, bool trans_b, floa
     auto c_value = ctx.GetInput(2);
     auto c_info = c_value.GetTensorTypeAndShapeInfo();
     if (c_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "Gemm bias only supports float tensors");
+      return Ort::GetApi().CreateStatus(
+          ORT_NOT_IMPLEMENTED, "Gemm bias only supports float tensors");
     }
     std::vector<int64_t> c_shape = c_info.GetShape();
     std::vector<float> c = ReadTyped<float>(c_value);
     std::vector<int64_t> broadcast_shape = BroadcastShape(c_shape, out_shape);
     if (broadcast_shape != out_shape) {
-      return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "Gemm bias broadcast shape mismatch");
+      return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                        "Gemm bias broadcast shape mismatch");
     }
     auto c_strides = Strides(c_shape);
     for (int64_t i = 0; i < NumElements(out_shape); ++i) {
@@ -449,30 +474,39 @@ OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a, bool trans_b, floa
   return WriteTyped<float>(y, out);
 }
 
-OrtStatus* FusedMatMulCompute(Ort::KernelContext& ctx, bool trans_a, bool trans_b,
-                              bool trans_batch_a, bool trans_batch_b, float alpha) {
+OrtStatus* FusedMatMulCompute(Ort::KernelContext& ctx, bool trans_a,
+                              bool trans_b, bool trans_batch_a,
+                              bool trans_batch_b, float alpha) {
   if (trans_batch_a || trans_batch_b) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "FusedMatMul transBatch is not implemented");
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED, "FusedMatMul transBatch is not implemented");
   }
   auto a_info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto b_info = ctx.GetInput(1).GetTensorTypeAndShapeInfo();
   if (a_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
       b_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "FusedMatMul only supports float tensors");
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED, "FusedMatMul only supports float tensors");
   }
 
   std::vector<int64_t> a_shape = a_info.GetShape();
   std::vector<int64_t> b_shape = b_info.GetShape();
   if (a_shape.size() < 2 || b_shape.size() < 2) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "FusedMatMul requires rank >= 2 inputs");
+    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                      "FusedMatMul requires rank >= 2 inputs");
   }
 
-  int64_t m = trans_a ? a_shape[a_shape.size() - 1] : a_shape[a_shape.size() - 2];
-  int64_t k = trans_a ? a_shape[a_shape.size() - 2] : a_shape[a_shape.size() - 1];
-  int64_t kb = trans_b ? b_shape[b_shape.size() - 1] : b_shape[b_shape.size() - 2];
-  int64_t n = trans_b ? b_shape[b_shape.size() - 2] : b_shape[b_shape.size() - 1];
+  int64_t m =
+      trans_a ? a_shape[a_shape.size() - 1] : a_shape[a_shape.size() - 2];
+  int64_t k =
+      trans_a ? a_shape[a_shape.size() - 2] : a_shape[a_shape.size() - 1];
+  int64_t kb =
+      trans_b ? b_shape[b_shape.size() - 1] : b_shape[b_shape.size() - 2];
+  int64_t n =
+      trans_b ? b_shape[b_shape.size() - 2] : b_shape[b_shape.size() - 1];
   if (k != kb) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "FusedMatMul K dimension mismatch");
+    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                      "FusedMatMul K dimension mismatch");
   }
 
   std::vector<int64_t> a_batch = PrefixShape(a_shape, 2);
@@ -492,8 +526,10 @@ OrtStatus* FusedMatMulCompute(Ort::KernelContext& ctx, bool trans_a, bool trans_
 
   for (int64_t batch_idx = 0; batch_idx < batch_total; ++batch_idx) {
     std::vector<int64_t> batch_coord = Coordinates(batch_idx, batch_shape);
-    std::vector<int64_t> a_batch_coord = BroadcastBatchCoord(batch_coord, batch_shape, a_batch);
-    std::vector<int64_t> b_batch_coord = BroadcastBatchCoord(batch_coord, batch_shape, b_batch);
+    std::vector<int64_t> a_batch_coord =
+        BroadcastBatchCoord(batch_coord, batch_shape, a_batch);
+    std::vector<int64_t> b_batch_coord =
+        BroadcastBatchCoord(batch_coord, batch_shape, b_batch);
     for (int64_t row = 0; row < m; ++row) {
       for (int64_t col = 0; col < n; ++col) {
         float sum = 0.0f;
@@ -556,7 +592,8 @@ BasicOp::BasicOp(const OrtKernelInfo* info, void* /*state*/, PrivateTag)
   perm_attr_ = AttrsOrEmpty(kernel_info, "perm");
 }
 
-OrtStatus* BasicOp::CreateKernelImpl(const OrtKernelInfo* info, void* state, OrtKernelImpl*& kernel) noexcept {
+OrtStatus* BasicOp::CreateKernelImpl(const OrtKernelInfo* info, void* state,
+                                     OrtKernelImpl*& kernel) noexcept {
   EXCEPTION_TO_RETURNED_STATUS_BEGIN
   auto k = std::make_unique<BasicOp>(info, state, PrivateTag{});
   kernel = k.release();
@@ -564,7 +601,8 @@ OrtStatus* BasicOp::CreateKernelImpl(const OrtKernelInfo* info, void* state, Ort
   EXCEPTION_TO_RETURNED_STATUS_END
 }
 
-OrtStatus* ORT_API_CALL BasicOp::ComputeImpl(OrtKernelImpl* this_ptr, OrtKernelContext* kernel_ctx) noexcept {
+OrtStatus* ORT_API_CALL BasicOp::ComputeImpl(
+    OrtKernelImpl* this_ptr, OrtKernelContext* kernel_ctx) noexcept {
   EXCEPTION_TO_RETURNED_STATUS_BEGIN
   BasicOp* k = static_cast<BasicOp*>(this_ptr);
   Ort::KernelContext ctx(kernel_ctx);
@@ -582,58 +620,92 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
   auto elem_type = in0_info.GetElementType();
   auto shape0 = in0_info.GetShape();
 
-
   if (op_type_ == "Gemm" || op_type_ == "FusedGemm") {
     if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "Gemm only supports float tensors");
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "Gemm only supports float tensors");
     }
     return GemmCompute(ctx, trans_a_ != 0, trans_b_ != 0, alpha_gemm_, beta_,
-                       op_type_ == "FusedGemm" ? activation_ : std::string{}, alpha_);
+                       op_type_ == "FusedGemm" ? activation_ : std::string{},
+                       alpha_);
   }
 
   if (op_type_ == "FusedMatMul") {
     return FusedMatMulCompute(ctx, trans_a_ != 0, trans_b_ != 0,
-                              trans_batch_a_ != 0, trans_batch_b_ != 0, alpha_gemm_);
+                              trans_batch_a_ != 0, trans_batch_b_ != 0,
+                              alpha_gemm_);
   }
 
-  if (op_type_ == "Add" || op_type_ == "Sub" || op_type_ == "Mul" || op_type_ == "Div" || op_type_ == "Pow") {
+  if (op_type_ == "Add" || op_type_ == "Sub" || op_type_ == "Mul" ||
+      op_type_ == "Div" || op_type_ == "Pow") {
     auto shape1 = ctx.GetInput(1).GetTensorTypeAndShapeInfo().GetShape();
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      if (op_type_ == "Add") return BinaryCompute<float>(ctx, shape0, shape1, [](float a, float b) { return a + b; });
-      if (op_type_ == "Sub") return BinaryCompute<float>(ctx, shape0, shape1, [](float a, float b) { return a - b; });
-      if (op_type_ == "Mul") return BinaryCompute<float>(ctx, shape0, shape1, [](float a, float b) { return a * b; });
-      if (op_type_ == "Div") return BinaryCompute<float>(ctx, shape0, shape1, [](float a, float b) { return a / b; });
-      return BinaryCompute<float>(ctx, shape0, shape1, [](float a, float b) { return std::pow(a, b); });
+      if (op_type_ == "Add")
+        return BinaryCompute<float>(ctx, shape0, shape1,
+                                    [](float a, float b) { return a + b; });
+      if (op_type_ == "Sub")
+        return BinaryCompute<float>(ctx, shape0, shape1,
+                                    [](float a, float b) { return a - b; });
+      if (op_type_ == "Mul")
+        return BinaryCompute<float>(ctx, shape0, shape1,
+                                    [](float a, float b) { return a * b; });
+      if (op_type_ == "Div")
+        return BinaryCompute<float>(ctx, shape0, shape1,
+                                    [](float a, float b) { return a / b; });
+      return BinaryCompute<float>(
+          ctx, shape0, shape1, [](float a, float b) { return std::pow(a, b); });
     }
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-      if (op_type_ == "Add") return BinaryCompute<int64_t>(ctx, shape0, shape1, [](int64_t a, int64_t b) { return a + b; });
-      if (op_type_ == "Sub") return BinaryCompute<int64_t>(ctx, shape0, shape1, [](int64_t a, int64_t b) { return a - b; });
-      if (op_type_ == "Mul") return BinaryCompute<int64_t>(ctx, shape0, shape1, [](int64_t a, int64_t b) { return a * b; });
+      if (op_type_ == "Add")
+        return BinaryCompute<int64_t>(
+            ctx, shape0, shape1, [](int64_t a, int64_t b) { return a + b; });
+      if (op_type_ == "Sub")
+        return BinaryCompute<int64_t>(
+            ctx, shape0, shape1, [](int64_t a, int64_t b) { return a - b; });
+      if (op_type_ == "Mul")
+        return BinaryCompute<int64_t>(
+            ctx, shape0, shape1, [](int64_t a, int64_t b) { return a * b; });
     }
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "unsupported binary op dtype");
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "unsupported binary op dtype");
   }
 
-  if (op_type_ == "Relu" || op_type_ == "LeakyRelu" || op_type_ == "Sqrt" || op_type_ == "Reciprocal" ||
-      op_type_ == "Neg" || op_type_ == "Log" || op_type_ == "Tanh" || op_type_ == "Sigmoid") {
+  if (op_type_ == "Relu" || op_type_ == "LeakyRelu" || op_type_ == "Sqrt" ||
+      op_type_ == "Reciprocal" || op_type_ == "Neg" || op_type_ == "Log" ||
+      op_type_ == "Tanh" || op_type_ == "Sigmoid") {
     if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "unsupported unary op dtype");
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "unsupported unary op dtype");
     }
-    if (op_type_ == "Relu") return UnaryCompute<float>(ctx, shape0, [](float x) { return std::max(0.0f, x); });
+    if (op_type_ == "Relu")
+      return UnaryCompute<float>(ctx, shape0,
+                                 [](float x) { return std::max(0.0f, x); });
     if (op_type_ == "LeakyRelu") {
       float alpha = alpha_;
-      return UnaryCompute<float>(ctx, shape0, [alpha](float x) { return x >= 0.0f ? x : alpha * x; });
+      return UnaryCompute<float>(
+          ctx, shape0, [alpha](float x) { return x >= 0.0f ? x : alpha * x; });
     }
-    if (op_type_ == "Sqrt") return UnaryCompute<float>(ctx, shape0, [](float x) { return std::sqrt(x); });
-    if (op_type_ == "Reciprocal") return UnaryCompute<float>(ctx, shape0, [](float x) { return 1.0f / x; });
-    if (op_type_ == "Neg") return UnaryCompute<float>(ctx, shape0, [](float x) { return -x; });
-    if (op_type_ == "Log") return UnaryCompute<float>(ctx, shape0, [](float x) { return std::log(x); });
-    if (op_type_ == "Tanh") return UnaryCompute<float>(ctx, shape0, [](float x) { return std::tanh(x); });
-    return UnaryCompute<float>(ctx, shape0, [](float x) { return 1.0f / (1.0f + std::exp(-x)); });
+    if (op_type_ == "Sqrt")
+      return UnaryCompute<float>(ctx, shape0,
+                                 [](float x) { return std::sqrt(x); });
+    if (op_type_ == "Reciprocal")
+      return UnaryCompute<float>(ctx, shape0, [](float x) { return 1.0f / x; });
+    if (op_type_ == "Neg")
+      return UnaryCompute<float>(ctx, shape0, [](float x) { return -x; });
+    if (op_type_ == "Log")
+      return UnaryCompute<float>(ctx, shape0,
+                                 [](float x) { return std::log(x); });
+    if (op_type_ == "Tanh")
+      return UnaryCompute<float>(ctx, shape0,
+                                 [](float x) { return std::tanh(x); });
+    return UnaryCompute<float>(
+        ctx, shape0, [](float x) { return 1.0f / (1.0f + std::exp(-x)); });
   }
 
   if (op_type_ == "Sum") {
     if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "Sum only supports float");
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "Sum only supports float");
     }
     std::vector<int64_t> out_shape = shape0;
     std::vector<float> out = ReadTyped<float>(input0);
@@ -643,12 +715,14 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
       std::vector<float> lhs = out;
       std::vector<int64_t> lhs_shape = idx == 1 ? shape0 : out_shape;
       std::vector<float> rhs = ReadTyped<float>(ctx.GetInput(idx));
-      std::vector<float> next(static_cast<size_t>(NumElements(out_shape)), 0.0f);
+      std::vector<float> next(static_cast<size_t>(NumElements(out_shape)),
+                              0.0f);
       auto ls = Strides(lhs_shape), rs = Strides(shape);
       for (int64_t i = 0; i < NumElements(out_shape); ++i) {
         auto coord = Coordinates(i, out_shape);
-        next[static_cast<size_t>(i)] = lhs[static_cast<size_t>(BroadcastOffset(coord, lhs_shape, ls))] +
-                                       rhs[static_cast<size_t>(BroadcastOffset(coord, shape, rs))];
+        next[static_cast<size_t>(i)] =
+            lhs[static_cast<size_t>(BroadcastOffset(coord, lhs_shape, ls))] +
+            rhs[static_cast<size_t>(BroadcastOffset(coord, shape, rs))];
       }
       out = std::move(next);
     }
@@ -660,7 +734,8 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
     int64_t rank = static_cast<int64_t>(shape0.size());
     int64_t start = 0;
     int64_t end = rank;
-    // start/end attributes are uncommon in this model. Keep default full shape for now.
+    // start/end attributes are uncommon in this model. Keep default full shape
+    // for now.
     std::vector<int64_t> out(shape0.begin() + start, shape0.begin() + end);
     Ort::UnownedValue y = ctx.GetOutput(0, {static_cast<int64_t>(out.size())});
     return WriteTyped<int64_t>(y, out);
@@ -674,25 +749,33 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT && to_ == kInt64) {
       auto x = Span<float>(in);
       std::vector<int64_t> out(static_cast<size_t>(n));
-      for (int64_t i = 0; i < n; ++i) out[static_cast<size_t>(i)] = static_cast<int64_t>(x[static_cast<size_t>(i)]);
+      for (int64_t i = 0; i < n; ++i)
+        out[static_cast<size_t>(i)] =
+            static_cast<int64_t>(x[static_cast<size_t>(i)]);
       return WriteTyped<int64_t>(y, out);
     }
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT && to_ == kInt32) {
       auto x = Span<float>(in);
       std::vector<int32_t> out(static_cast<size_t>(n));
-      for (int64_t i = 0; i < n; ++i) out[static_cast<size_t>(i)] = static_cast<int32_t>(x[static_cast<size_t>(i)]);
+      for (int64_t i = 0; i < n; ++i)
+        out[static_cast<size_t>(i)] =
+            static_cast<int32_t>(x[static_cast<size_t>(i)]);
       return WriteTyped<int32_t>(y, out);
     }
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 && to_ == kFloat) {
       auto x = Span<int64_t>(in);
       std::vector<float> out(static_cast<size_t>(n));
-      for (int64_t i = 0; i < n; ++i) out[static_cast<size_t>(i)] = static_cast<float>(x[static_cast<size_t>(i)]);
+      for (int64_t i = 0; i < n; ++i)
+        out[static_cast<size_t>(i)] =
+            static_cast<float>(x[static_cast<size_t>(i)]);
       return WriteTyped<float>(y, out);
     }
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 && to_ == kFloat) {
       auto x = Span<int32_t>(in);
       std::vector<float> out(static_cast<size_t>(n));
-      for (int64_t i = 0; i < n; ++i) out[static_cast<size_t>(i)] = static_cast<float>(x[static_cast<size_t>(i)]);
+      for (int64_t i = 0; i < n; ++i)
+        out[static_cast<size_t>(i)] =
+            static_cast<float>(x[static_cast<size_t>(i)]);
       return WriteTyped<float>(y, out);
     }
     if ((elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 && to_ == kInt32) ||
@@ -700,12 +783,16 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
       if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
         auto x = Span<int64_t>(in);
         std::vector<int32_t> out(static_cast<size_t>(n));
-        for (int64_t i = 0; i < n; ++i) out[static_cast<size_t>(i)] = static_cast<int32_t>(x[static_cast<size_t>(i)]);
+        for (int64_t i = 0; i < n; ++i)
+          out[static_cast<size_t>(i)] =
+              static_cast<int32_t>(x[static_cast<size_t>(i)]);
         return WriteTyped<int32_t>(y, out);
       }
       auto x = Span<int32_t>(in);
       std::vector<int64_t> out(static_cast<size_t>(n));
-      for (int64_t i = 0; i < n; ++i) out[static_cast<size_t>(i)] = static_cast<int64_t>(x[static_cast<size_t>(i)]);
+      for (int64_t i = 0; i < n; ++i)
+        out[static_cast<size_t>(i)] =
+            static_cast<int64_t>(x[static_cast<size_t>(i)]);
       return WriteTyped<int64_t>(y, out);
     }
     return CopyFromHost(y, in.data(), in.size());
@@ -725,7 +812,8 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
         known *= out_shape[i];
       }
     }
-    if (infer_idx >= 0) out_shape[static_cast<size_t>(infer_idx)] = input_size / known;
+    if (infer_idx >= 0)
+      out_shape[static_cast<size_t>(infer_idx)] = input_size / known;
     std::vector<uint8_t> in;
     RETURN_IF_ERROR(CopyToHost(input0, in));
     Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
@@ -768,9 +856,11 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
       shapes.push_back(v.GetTensorTypeAndShapeInfo().GetShape());
       inputs.emplace_back();
       RETURN_IF_ERROR(CopyToHost(v, inputs.back()));
-      out_shape[static_cast<size_t>(axis)] += shapes.back()[static_cast<size_t>(axis)];
+      out_shape[static_cast<size_t>(axis)] +=
+          shapes.back()[static_cast<size_t>(axis)];
     }
-    std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) * elem_size);
+    std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
+                             elem_size);
     auto out_strides = Strides(out_shape);
     std::vector<int64_t> axis_offsets;
     int64_t acc = 0;
@@ -785,9 +875,11 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
         auto coord = Coordinates(i, shapes[input_idx]);
         auto out_coord = coord;
         out_coord[static_cast<size_t>(axis)] += axis_offsets[input_idx];
-        std::memcpy(out.data() + static_cast<size_t>(Offset(out_coord, out_strides)) * elem_size,
-                    inputs[input_idx].data() + static_cast<size_t>(i) * elem_size,
-                    elem_size);
+        std::memcpy(
+            out.data() +
+                static_cast<size_t>(Offset(out_coord, out_strides)) * elem_size,
+            inputs[input_idx].data() + static_cast<size_t>(i) * elem_size,
+            elem_size);
       }
     }
     Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
@@ -797,22 +889,27 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
   if (op_type_ == "Transpose") {
     std::vector<int64_t> perm = perm_attr_;
     if (perm.empty()) {
-      for (int64_t i = static_cast<int64_t>(shape0.size()) - 1; i >= 0; --i) perm.push_back(i);
+      for (int64_t i = static_cast<int64_t>(shape0.size()) - 1; i >= 0; --i)
+        perm.push_back(i);
     }
     std::vector<int64_t> out_shape;
     for (int64_t p : perm) out_shape.push_back(shape0[static_cast<size_t>(p)]);
     size_t elem_size = ElementSize(elem_type);
     std::vector<uint8_t> in;
     RETURN_IF_ERROR(CopyToHost(input0, in));
-    std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) * elem_size);
+    std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
+                             elem_size);
     auto in_strides = Strides(shape0);
     for (int64_t i = 0; i < NumElements(out_shape); ++i) {
       auto out_coord = Coordinates(i, out_shape);
       std::vector<int64_t> in_coord(shape0.size());
-      for (size_t j = 0; j < perm.size(); ++j) in_coord[static_cast<size_t>(perm[j])] = out_coord[j];
-      std::memcpy(out.data() + static_cast<size_t>(i) * elem_size,
-                  in.data() + static_cast<size_t>(Offset(in_coord, in_strides)) * elem_size,
-                  elem_size);
+      for (size_t j = 0; j < perm.size(); ++j)
+        in_coord[static_cast<size_t>(perm[j])] = out_coord[j];
+      std::memcpy(
+          out.data() + static_cast<size_t>(i) * elem_size,
+          in.data() +
+              static_cast<size_t>(Offset(in_coord, in_strides)) * elem_size,
+          elem_size);
     }
     Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
     return CopyFromHost(y, out.data(), out.size());
@@ -824,29 +921,34 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
     auto indices_shape = ctx.GetInput(1).GetTensorTypeAndShapeInfo().GetShape();
     std::vector<int64_t> out_shape;
     out_shape.insert(out_shape.end(), shape0.begin(), shape0.begin() + axis);
-    out_shape.insert(out_shape.end(), indices_shape.begin(), indices_shape.end());
+    out_shape.insert(out_shape.end(), indices_shape.begin(),
+                     indices_shape.end());
     out_shape.insert(out_shape.end(), shape0.begin() + axis + 1, shape0.end());
     size_t elem_size = ElementSize(elem_type);
     std::vector<uint8_t> in;
     RETURN_IF_ERROR(CopyToHost(input0, in));
-    std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) * elem_size);
+    std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
+                             elem_size);
     auto in_strides = Strides(shape0);
     for (int64_t i = 0; i < NumElements(out_shape); ++i) {
       auto oc = Coordinates(i, out_shape);
       std::vector<int64_t> ic(shape0.size(), 0);
-      for (int64_t d = 0; d < axis; ++d) ic[static_cast<size_t>(d)] = oc[static_cast<size_t>(d)];
+      for (int64_t d = 0; d < axis; ++d)
+        ic[static_cast<size_t>(d)] = oc[static_cast<size_t>(d)];
       int64_t idx_offset = 0;
       auto idx_strides = Strides(indices_shape);
-      for (size_t j = 0; j < indices_shape.size(); ++j) idx_offset += oc[static_cast<size_t>(axis) + j] * idx_strides[j];
+      for (size_t j = 0; j < indices_shape.size(); ++j)
+        idx_offset += oc[static_cast<size_t>(axis) + j] * idx_strides[j];
       int64_t gather_idx = indices[static_cast<size_t>(idx_offset)];
       if (gather_idx < 0) gather_idx += shape0[static_cast<size_t>(axis)];
       ic[static_cast<size_t>(axis)] = gather_idx;
       for (size_t d = static_cast<size_t>(axis) + 1; d < shape0.size(); ++d) {
         ic[d] = oc[d - 1 + indices_shape.size()];
       }
-      std::memcpy(out.data() + static_cast<size_t>(i) * elem_size,
-                  in.data() + static_cast<size_t>(Offset(ic, in_strides)) * elem_size,
-                  elem_size);
+      std::memcpy(
+          out.data() + static_cast<size_t>(i) * elem_size,
+          in.data() + static_cast<size_t>(Offset(ic, in_strides)) * elem_size,
+          elem_size);
     }
     Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
     return CopyFromHost(y, out.data(), out.size());
@@ -864,32 +966,39 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
       std::iota(axes.begin(), axes.end(), 0);
     }
     std::vector<int64_t> out_shape = shape0;
-    std::vector<int64_t> norm_starts(shape0.size(), 0), norm_steps(shape0.size(), 1);
+    std::vector<int64_t> norm_starts(shape0.size(), 0),
+        norm_steps(shape0.size(), 1);
     for (size_t i = 0; i < axes.size(); ++i) {
       int64_t axis = NormalizeAxis(axes[i], shape0.size());
       int64_t dim = shape0[static_cast<size_t>(axis)];
       int64_t step = steps[i];
-      if (step <= 0) return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "Slice negative step not implemented");
+      if (step <= 0)
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED, "Slice negative step not implemented");
       int64_t start = starts[i] < 0 ? starts[i] + dim : starts[i];
       int64_t end = ends[i] < 0 ? ends[i] + dim : ends[i];
       start = std::max<int64_t>(0, std::min(start, dim));
       end = std::max<int64_t>(0, std::min(end, dim));
       norm_starts[static_cast<size_t>(axis)] = start;
       norm_steps[static_cast<size_t>(axis)] = step;
-      out_shape[static_cast<size_t>(axis)] = std::max<int64_t>(0, (end - start + step - 1) / step);
+      out_shape[static_cast<size_t>(axis)] =
+          std::max<int64_t>(0, (end - start + step - 1) / step);
     }
     size_t elem_size = ElementSize(elem_type);
     std::vector<uint8_t> in;
     RETURN_IF_ERROR(CopyToHost(input0, in));
-    std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) * elem_size);
+    std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
+                             elem_size);
     auto in_strides = Strides(shape0);
     for (int64_t i = 0; i < NumElements(out_shape); ++i) {
       auto oc = Coordinates(i, out_shape);
       auto ic = oc;
-      for (size_t d = 0; d < ic.size(); ++d) ic[d] = norm_starts[d] + oc[d] * norm_steps[d];
-      std::memcpy(out.data() + static_cast<size_t>(i) * elem_size,
-                  in.data() + static_cast<size_t>(Offset(ic, in_strides)) * elem_size,
-                  elem_size);
+      for (size_t d = 0; d < ic.size(); ++d)
+        ic[d] = norm_starts[d] + oc[d] * norm_steps[d];
+      std::memcpy(
+          out.data() + static_cast<size_t>(i) * elem_size,
+          in.data() + static_cast<size_t>(Offset(ic, in_strides)) * elem_size,
+          elem_size);
     }
     Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
     return CopyFromHost(y, out.data(), out.size());
@@ -902,7 +1011,8 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
       splits = ReadIntTensor(ctx, 1);
     } else {
       size_t count = ctx.GetOutputCount();
-      splits.assign(count, shape0[static_cast<size_t>(axis)] / static_cast<int64_t>(count));
+      splits.assign(count, shape0[static_cast<size_t>(axis)] /
+                               static_cast<int64_t>(count));
     }
     size_t elem_size = ElementSize(elem_type);
     std::vector<uint8_t> in;
@@ -912,14 +1022,16 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
     for (size_t out_idx = 0; out_idx < splits.size(); ++out_idx) {
       std::vector<int64_t> out_shape = shape0;
       out_shape[static_cast<size_t>(axis)] = splits[out_idx];
-      std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) * elem_size);
+      std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
+                               elem_size);
       for (int64_t i = 0; i < NumElements(out_shape); ++i) {
         auto oc = Coordinates(i, out_shape);
         auto ic = oc;
         ic[static_cast<size_t>(axis)] += axis_start;
-        std::memcpy(out.data() + static_cast<size_t>(i) * elem_size,
-                    in.data() + static_cast<size_t>(Offset(ic, in_strides)) * elem_size,
-                    elem_size);
+        std::memcpy(
+            out.data() + static_cast<size_t>(i) * elem_size,
+            in.data() + static_cast<size_t>(Offset(ic, in_strides)) * elem_size,
+            elem_size);
       }
       Ort::UnownedValue y = ctx.GetOutput(out_idx, out_shape);
       RETURN_IF_ERROR(CopyFromHost(y, out.data(), out.size()));
@@ -928,7 +1040,8 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
     return nullptr;
   }
 
-  if (op_type_ == "ReduceProd" || op_type_ == "ReduceSum" || op_type_ == "ReduceMean") {
+  if (op_type_ == "ReduceProd" || op_type_ == "ReduceSum" ||
+      op_type_ == "ReduceMean") {
     std::vector<int64_t> axes = axes_attr_;
     if (ctx.GetInputCount() > 1) axes = ReadIntTensor(ctx, 1);
     auto axes_set = AxesSet(axes, shape0.size());
@@ -944,7 +1057,8 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
     auto out_strides = Strides(out_shape);
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
       std::vector<int64_t> x = ReadTyped<int64_t>(input0);
-      std::vector<int64_t> out(static_cast<size_t>(NumElements(out_shape)), op_type_ == "ReduceProd" ? 1 : 0);
+      std::vector<int64_t> out(static_cast<size_t>(NumElements(out_shape)),
+                               op_type_ == "ReduceProd" ? 1 : 0);
       auto in_strides = Strides(shape0);
       for (int64_t i = 0; i < NumElements(shape0); ++i) {
         auto ic = Coordinates(i, shape0);
@@ -958,15 +1072,18 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
         }
         if (oc.empty()) oc.push_back(0);
         int64_t oo = Offset(oc, out_strides);
-        if (op_type_ == "ReduceProd") out[static_cast<size_t>(oo)] *= x[static_cast<size_t>(i)];
-        else out[static_cast<size_t>(oo)] += x[static_cast<size_t>(i)];
+        if (op_type_ == "ReduceProd")
+          out[static_cast<size_t>(oo)] *= x[static_cast<size_t>(i)];
+        else
+          out[static_cast<size_t>(oo)] += x[static_cast<size_t>(i)];
       }
       Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
       return WriteTyped<int64_t>(y, out);
     }
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
       std::vector<float> x = ReadTyped<float>(input0);
-      std::vector<float> out(static_cast<size_t>(NumElements(out_shape)), op_type_ == "ReduceProd" ? 1.0f : 0.0f);
+      std::vector<float> out(static_cast<size_t>(NumElements(out_shape)),
+                             op_type_ == "ReduceProd" ? 1.0f : 0.0f);
       std::vector<int64_t> counts(out.size(), 0);
       for (int64_t i = 0; i < NumElements(shape0); ++i) {
         auto ic = Coordinates(i, shape0);
@@ -980,12 +1097,15 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
         }
         if (oc.empty()) oc.push_back(0);
         int64_t oo = Offset(oc, out_strides);
-        if (op_type_ == "ReduceProd") out[static_cast<size_t>(oo)] *= x[static_cast<size_t>(i)];
-        else out[static_cast<size_t>(oo)] += x[static_cast<size_t>(i)];
+        if (op_type_ == "ReduceProd")
+          out[static_cast<size_t>(oo)] *= x[static_cast<size_t>(i)];
+        else
+          out[static_cast<size_t>(oo)] += x[static_cast<size_t>(i)];
         counts[static_cast<size_t>(oo)]++;
       }
       if (op_type_ == "ReduceMean") {
-        for (size_t i = 0; i < out.size(); ++i) out[i] /= static_cast<float>(counts[i]);
+        for (size_t i = 0; i < out.size(); ++i)
+          out[i] /= static_cast<float>(counts[i]);
       }
       Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
       return WriteTyped<float>(y, out);
@@ -993,95 +1113,156 @@ OrtStatus* BasicOp::ComputeInternal(Ort::KernelContext& ctx) const {
   }
 
   if (op_type_ == "Softmax") {
-    if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, "Softmax only supports float");
+    if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "Softmax only supports float");
     int64_t axis = NormalizeAxis(axis_, shape0.size());
     int64_t outer = 1, dim = shape0[static_cast<size_t>(axis)], inner = 1;
     for (int64_t i = 0; i < axis; ++i) outer *= shape0[static_cast<size_t>(i)];
-    for (size_t i = static_cast<size_t>(axis) + 1; i < shape0.size(); ++i) inner *= shape0[i];
+    for (size_t i = static_cast<size_t>(axis) + 1; i < shape0.size(); ++i)
+      inner *= shape0[i];
     std::vector<float> x = ReadTyped<float>(input0);
     std::vector<float> out(x.size());
     for (int64_t o = 0; o < outer; ++o) {
       for (int64_t in = 0; in < inner; ++in) {
         float max_v = -std::numeric_limits<float>::infinity();
-        for (int64_t d = 0; d < dim; ++d) max_v = std::max(max_v, x[static_cast<size_t>((o * dim + d) * inner + in)]);
+        for (int64_t d = 0; d < dim; ++d)
+          max_v = std::max(max_v,
+                           x[static_cast<size_t>((o * dim + d) * inner + in)]);
         float sum = 0.0f;
         for (int64_t d = 0; d < dim; ++d) {
-          float e = std::exp(x[static_cast<size_t>((o * dim + d) * inner + in)] - max_v);
+          float e = std::exp(
+              x[static_cast<size_t>((o * dim + d) * inner + in)] - max_v);
           out[static_cast<size_t>((o * dim + d) * inner + in)] = e;
           sum += e;
         }
-        for (int64_t d = 0; d < dim; ++d) out[static_cast<size_t>((o * dim + d) * inner + in)] /= sum;
+        for (int64_t d = 0; d < dim; ++d)
+          out[static_cast<size_t>((o * dim + d) * inner + in)] /= sum;
       }
     }
     Ort::UnownedValue y = ctx.GetOutput(0, shape0);
     return WriteTyped<float>(y, out);
   }
 
-  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, ("unsupported op: " + op_type_).c_str());
+  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                    ("unsupported op: " + op_type_).c_str());
 }
 
 // Kernel definitions.
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Add, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Sub, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Mul, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Div, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Pow, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Sum, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Gemm, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(FusedGemm, kMSDomain, 1, 1,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(FusedMatMul, kMSDomain, 1, 1,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Add, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Sub, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Mul, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Div, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Pow, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Sum, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Gemm, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    FusedGemm, kMSDomain, 1, 1,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    FusedMatMul, kMSDomain, 1, 1,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Relu, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(LeakyRelu, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Sqrt, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Reciprocal, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Neg, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Log, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Tanh, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Sigmoid, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Softmax, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Relu, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    LeakyRelu, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Sqrt, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Reciprocal, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Neg, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Log, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Tanh, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Sigmoid, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Softmax, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Shape, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Cast, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T1", AllTensorTypes()).AddTypeConstraint("T2", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Reshape, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Squeeze, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Unsqueeze, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Concat, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Transpose, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Shape, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Cast, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T1", AllTensorTypes())
+         .AddTypeConstraint("T2", AllTensorTypes())),
+    BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Reshape, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Squeeze, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Unsqueeze, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Concat, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Transpose, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(Gather, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes()).AddTypeConstraint("Tind", IntTensorTypes())), BasicOp)
+                                  (Ort::KernelDefBuilder()
+                                       .AddTypeConstraint("T", AllTensorTypes())
+                                       .AddTypeConstraint("Tind",
+                                                          IntTensorTypes())),
+                                  BasicOp)
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(Slice, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes()).AddTypeConstraint("Tind", IntTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Split, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(ReduceProd, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(ReduceSum, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(ReduceMean, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), BasicOp)
+                                  (Ort::KernelDefBuilder()
+                                       .AddTypeConstraint("T", AllTensorTypes())
+                                       .AddTypeConstraint("Tind",
+                                                          IntTensorTypes())),
+                                  BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Split, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    ReduceProd, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    ReduceSum, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), BasicOp)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    ReduceMean, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    BasicOp)

@@ -1,6 +1,5 @@
 #include "matmul.h"
 
-#include "runtime/musa_runtime.h"
 #include <mublas.h>
 #include <musa_runtime.h>
 
@@ -11,12 +10,12 @@
 #include <sstream>
 #include <vector>
 
+#include "runtime/ep_musa_utils.h"
+
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    MatMul,
-    kOnnxDomain,
-    13,
-    17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT))),
+    MatMul, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint(
+        "T", GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT))),
     MatMul)
 
 namespace {
@@ -42,8 +41,10 @@ int64_t NumElements(const std::vector<int64_t>& shape) {
 }
 
 bool IsGpuMemory(const OrtMemoryInfo* memory_info) {
-  const OrtMemoryDevice* device = Ort::GetEpApi().MemoryInfo_GetMemoryDevice(memory_info);
-  return Ort::GetEpApi().MemoryDevice_GetDeviceType(device) == OrtMemoryInfoDeviceType_GPU;
+  const OrtMemoryDevice* device =
+      Ort::GetEpApi().MemoryInfo_GetMemoryDevice(memory_info);
+  return Ort::GetEpApi().MemoryDevice_GetDeviceType(device) ==
+         OrtMemoryInfoDeviceType_GPU;
 }
 
 OrtStatus* CopyFloatToHost(Ort::ConstValue value, std::vector<float>& data) {
@@ -54,7 +55,8 @@ OrtStatus* CopyFloatToHost(Ort::ConstValue value, std::vector<float>& data) {
   }
   const void* src = value.GetTensorRawData();
   if (IsGpuMemory(value.GetTensorMemoryInfo())) {
-    musaError_t status = musaMemcpy(data.data(), src, num_bytes, musaMemcpyDeviceToHost);
+    musaError_t status =
+        musaMemcpy(data.data(), src, num_bytes, musaMemcpyDeviceToHost);
     if (status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }
@@ -64,14 +66,16 @@ OrtStatus* CopyFloatToHost(Ort::ConstValue value, std::vector<float>& data) {
   return nullptr;
 }
 
-OrtStatus* CopyFloatFromHost(Ort::UnownedValue value, const std::vector<float>& data) {
+OrtStatus* CopyFloatFromHost(Ort::UnownedValue value,
+                             const std::vector<float>& data) {
   size_t num_bytes = data.size() * sizeof(float);
   if (num_bytes == 0) {
     return nullptr;
   }
   void* dst = value.GetTensorMutableRawData();
   if (IsGpuMemory(value.GetTensorMemoryInfo())) {
-    musaError_t status = musaMemcpy(dst, data.data(), num_bytes, musaMemcpyHostToDevice);
+    musaError_t status =
+        musaMemcpy(dst, data.data(), num_bytes, musaMemcpyHostToDevice);
     if (status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }
@@ -84,12 +88,14 @@ OrtStatus* CopyFloatFromHost(Ort::UnownedValue value, const std::vector<float>& 
 std::vector<int64_t> Strides(const std::vector<int64_t>& shape) {
   std::vector<int64_t> strides(shape.size(), 1);
   for (int64_t i = static_cast<int64_t>(shape.size()) - 2; i >= 0; --i) {
-    strides[static_cast<size_t>(i)] = strides[static_cast<size_t>(i + 1)] * shape[static_cast<size_t>(i + 1)];
+    strides[static_cast<size_t>(i)] =
+        strides[static_cast<size_t>(i + 1)] * shape[static_cast<size_t>(i + 1)];
   }
   return strides;
 }
 
-std::vector<int64_t> Coordinates(int64_t linear, const std::vector<int64_t>& shape) {
+std::vector<int64_t> Coordinates(int64_t linear,
+                                 const std::vector<int64_t>& shape) {
   std::vector<int64_t> coord(shape.size(), 0);
   for (int64_t i = static_cast<int64_t>(shape.size()) - 1; i >= 0; --i) {
     int64_t dim = shape[static_cast<size_t>(i)];
@@ -99,7 +105,8 @@ std::vector<int64_t> Coordinates(int64_t linear, const std::vector<int64_t>& sha
   return coord;
 }
 
-int64_t Offset(const std::vector<int64_t>& coord, const std::vector<int64_t>& strides) {
+int64_t Offset(const std::vector<int64_t>& coord,
+               const std::vector<int64_t>& strides) {
   int64_t off = 0;
   for (size_t i = 0; i < coord.size(); ++i) {
     off += coord[i] * strides[i];
@@ -107,7 +114,8 @@ int64_t Offset(const std::vector<int64_t>& coord, const std::vector<int64_t>& st
   return off;
 }
 
-std::vector<int64_t> BroadcastShape(const std::vector<int64_t>& a, const std::vector<int64_t>& b) {
+std::vector<int64_t> BroadcastShape(const std::vector<int64_t>& a,
+                                    const std::vector<int64_t>& b) {
   size_t rank = std::max(a.size(), b.size());
   std::vector<int64_t> out(rank, 1);
   for (size_t i = 0; i < rank; ++i) {
@@ -121,11 +129,13 @@ std::vector<int64_t> BroadcastShape(const std::vector<int64_t>& a, const std::ve
   return out;
 }
 
-std::vector<int64_t> PrefixShape(const std::vector<int64_t>& shape, size_t trailing_dims) {
+std::vector<int64_t> PrefixShape(const std::vector<int64_t>& shape,
+                                 size_t trailing_dims) {
   if (shape.size() < trailing_dims) {
     return {};
   }
-  return std::vector<int64_t>(shape.begin(), shape.end() - static_cast<int64_t>(trailing_dims));
+  return std::vector<int64_t>(
+      shape.begin(), shape.end() - static_cast<int64_t>(trailing_dims));
 }
 
 std::vector<int64_t> BroadcastBatchCoord(const std::vector<int64_t>& out_coord,
@@ -141,17 +151,21 @@ std::vector<int64_t> BroadcastBatchCoord(const std::vector<int64_t>& out_coord,
   return coord;
 }
 
-OrtStatus* ComputeHostMatMul(Ort::KernelContext& kernel_context, Ort::ConstValue a, Ort::ConstValue b,
-                             const std::vector<int64_t>& a_shape, const std::vector<int64_t>& b_shape) {
+OrtStatus* ComputeHostMatMul(Ort::KernelContext& kernel_context,
+                             Ort::ConstValue a, Ort::ConstValue b,
+                             const std::vector<int64_t>& a_shape,
+                             const std::vector<int64_t>& b_shape) {
   if (a_shape.size() < 2 || b_shape.size() < 2) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "MUSA MatMul requires rank >= 2 tensors.");
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT, "MUSA MatMul requires rank >= 2 tensors.");
   }
   int64_t m = a_shape[a_shape.size() - 2];
   int64_t k = a_shape[a_shape.size() - 1];
   int64_t kb = b_shape[b_shape.size() - 2];
   int64_t n = b_shape[b_shape.size() - 1];
   if (k != kb) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "MUSA MatMul input shapes are incompatible.");
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT, "MUSA MatMul input shapes are incompatible.");
   }
 
   std::vector<int64_t> a_batch = PrefixShape(a_shape, 2);
@@ -173,8 +187,10 @@ OrtStatus* ComputeHostMatMul(Ort::KernelContext& kernel_context, Ort::ConstValue
   int64_t batch_total = NumElements(batch_shape);
   for (int64_t batch_idx = 0; batch_idx < batch_total; ++batch_idx) {
     std::vector<int64_t> batch_coord = Coordinates(batch_idx, batch_shape);
-    std::vector<int64_t> a_batch_coord = BroadcastBatchCoord(batch_coord, batch_shape, a_batch);
-    std::vector<int64_t> b_batch_coord = BroadcastBatchCoord(batch_coord, batch_shape, b_batch);
+    std::vector<int64_t> a_batch_coord =
+        BroadcastBatchCoord(batch_coord, batch_shape, a_batch);
+    std::vector<int64_t> b_batch_coord =
+        BroadcastBatchCoord(batch_coord, batch_shape, b_batch);
     for (int64_t row = 0; row < m; ++row) {
       for (int64_t col = 0; col < n; ++col) {
         float sum = 0.0f;
@@ -200,23 +216,30 @@ OrtStatus* ComputeHostMatMul(Ort::KernelContext& kernel_context, Ort::ConstValue
   return CopyFloatFromHost(y, y_host);
 }
 
-OrtStatus* ComputeMublasBatchedMatMul(Ort::KernelContext& kernel_context, Ort::ConstValue a, Ort::ConstValue b,
-                                      const std::vector<int64_t>& a_shape, const std::vector<int64_t>& b_shape) {
-  if (!IsGpuMemory(a.GetTensorMemoryInfo()) || !IsGpuMemory(b.GetTensorMemoryInfo())) {
+OrtStatus* ComputeMublasBatchedMatMul(Ort::KernelContext& kernel_context,
+                                      Ort::ConstValue a, Ort::ConstValue b,
+                                      const std::vector<int64_t>& a_shape,
+                                      const std::vector<int64_t>& b_shape) {
+  if (!IsGpuMemory(a.GetTensorMemoryInfo()) ||
+      !IsGpuMemory(b.GetTensorMemoryInfo())) {
     return ComputeHostMatMul(kernel_context, a, b, a_shape, b_shape);
   }
   if (a_shape.size() < 2 || b_shape.size() < 2) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "MUSA MatMul requires rank >= 2 tensors.");
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT, "MUSA MatMul requires rank >= 2 tensors.");
   }
   int64_t m64 = a_shape[a_shape.size() - 2];
   int64_t k64 = a_shape[a_shape.size() - 1];
   int64_t kb64 = b_shape[b_shape.size() - 2];
   int64_t n64 = b_shape[b_shape.size() - 1];
   if (k64 != kb64) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "MUSA MatMul input shapes are incompatible.");
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT, "MUSA MatMul input shapes are incompatible.");
   }
   if (m64 > INT32_MAX || k64 > INT32_MAX || n64 > INT32_MAX) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "MUSA MatMul dimensions exceed int32 mublas limits.");
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT,
+        "MUSA MatMul dimensions exceed int32 mublas limits.");
   }
 
   std::vector<int64_t> a_batch = PrefixShape(a_shape, 2);
@@ -248,8 +271,10 @@ OrtStatus* ComputeMublasBatchedMatMul(Ort::KernelContext& kernel_context, Ort::C
   int64_t batch_total = NumElements(batch_shape);
   for (int64_t batch_idx = 0; batch_idx < batch_total; ++batch_idx) {
     std::vector<int64_t> batch_coord = Coordinates(batch_idx, batch_shape);
-    std::vector<int64_t> a_batch_coord = BroadcastBatchCoord(batch_coord, batch_shape, a_batch);
-    std::vector<int64_t> b_batch_coord = BroadcastBatchCoord(batch_coord, batch_shape, b_batch);
+    std::vector<int64_t> a_batch_coord =
+        BroadcastBatchCoord(batch_coord, batch_shape, a_batch);
+    std::vector<int64_t> b_batch_coord =
+        BroadcastBatchCoord(batch_coord, batch_shape, b_batch);
     std::vector<int64_t> y_batch_coord = batch_coord;
     a_batch_coord.push_back(0);
     a_batch_coord.push_back(0);
@@ -260,13 +285,9 @@ OrtStatus* ComputeMublasBatchedMatMul(Ort::KernelContext& kernel_context, Ort::C
     const float* a_ptr = a_data + Offset(a_batch_coord, a_strides);
     const float* b_ptr = b_data + Offset(b_batch_coord, b_strides);
     float* y_ptr = y_data + Offset(y_batch_coord, y_strides);
-    mublasStatus status = mublasSgemm(handle, MUBLAS_OP_N, MUBLAS_OP_N,
-                                      n, m, k,
-                                      &alpha,
-                                      b_ptr, n,
-                                      a_ptr, k,
-                                      &beta,
-                                      y_ptr, n);
+    mublasStatus status =
+        mublasSgemm(handle, MUBLAS_OP_N, MUBLAS_OP_N, n, m, k, &alpha, b_ptr, n,
+                    a_ptr, k, &beta, y_ptr, n);
     if (status != MUBLAS_STATUS_SUCCESS) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSgemm failed");
     }
@@ -274,7 +295,8 @@ OrtStatus* ComputeMublasBatchedMatMul(Ort::KernelContext& kernel_context, Ort::C
 
   musaError_t sync_status = musaDeviceSynchronize();
   if (sync_status != musaSuccess) {
-    return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(sync_status));
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                      MusaErrorString(sync_status));
   }
   return nullptr;
 }
@@ -287,7 +309,8 @@ MatMul::MatMul(const OrtKernelInfo* info, void* /*state*/, PrivateTag)
   kernel_base.Release = ReleaseImpl;
 }
 
-OrtStatus* MatMul::CreateKernelImpl(const OrtKernelInfo* info, void* state, OrtKernelImpl*& kernel) noexcept {
+OrtStatus* MatMul::CreateKernelImpl(const OrtKernelInfo* info, void* state,
+                                    OrtKernelImpl*& kernel) noexcept {
   EXCEPTION_TO_RETURNED_STATUS_BEGIN
   auto matmul = std::make_unique<MatMul>(info, state, PrivateTag{});
   kernel = reinterpret_cast<OrtKernelImpl*>(matmul.release());
@@ -295,7 +318,8 @@ OrtStatus* MatMul::CreateKernelImpl(const OrtKernelInfo* info, void* state, OrtK
   EXCEPTION_TO_RETURNED_STATUS_END
 }
 
-OrtStatus* ORT_API_CALL MatMul::ComputeImpl(OrtKernelImpl* this_ptr, OrtKernelContext* kernel_ctx) noexcept {
+OrtStatus* ORT_API_CALL MatMul::ComputeImpl(
+    OrtKernelImpl* this_ptr, OrtKernelContext* kernel_ctx) noexcept {
   EXCEPTION_TO_RETURNED_STATUS_BEGIN
   auto* matmul = reinterpret_cast<MatMul*>(this_ptr);
   static_cast<void>(matmul->info_);
@@ -313,17 +337,22 @@ OrtStatus* ORT_API_CALL MatMul::ComputeImpl(OrtKernelImpl* this_ptr, OrtKernelCo
     return ComputeMublasBatchedMatMul(kernel_context, a, b, a_shape, b_shape);
   }
   if (a_shape[1] != b_shape[0]) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "MUSA MatMul input shapes are incompatible.");
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT, "MUSA MatMul input shapes are incompatible.");
   }
   if (a_shape[0] <= 0 || a_shape[1] <= 0 || b_shape[1] <= 0) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "MUSA MatMul skeleton requires positive static dimensions.");
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT,
+        "MUSA MatMul skeleton requires positive static dimensions.");
   }
 
   const int64_t m64 = a_shape[0];
   const int64_t k64 = a_shape[1];
   const int64_t n64 = b_shape[1];
   if (m64 > INT32_MAX || k64 > INT32_MAX || n64 > INT32_MAX) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, "MUSA MatMul dimensions exceed int32 mublas limits.");
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT,
+        "MUSA MatMul dimensions exceed int32 mublas limits.");
   }
   const int m = static_cast<int>(m64);
   const int k = static_cast<int>(k64);
@@ -344,20 +373,17 @@ OrtStatus* ORT_API_CALL MatMul::ComputeImpl(OrtKernelImpl* this_ptr, OrtKernelCo
 
   // muBLAS uses column-major semantics. For row-major ONNX tensors:
   // C(m,n) = A(m,k) * B(k,n) is computed as C^T(n,m) = B^T(n,k) * A^T(k,m).
-  mublasStatus status = mublasSgemm(handle, MUBLAS_OP_N, MUBLAS_OP_N,
-                                    n, m, k,
-                                    &alpha,
-                                    b_data, n,
-                                    a_data, k,
-                                    &beta,
-                                    y_data, n);
+  mublasStatus status =
+      mublasSgemm(handle, MUBLAS_OP_N, MUBLAS_OP_N, n, m, k, &alpha, b_data, n,
+                  a_data, k, &beta, y_data, n);
   if (status != MUBLAS_STATUS_SUCCESS) {
     return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSgemm failed");
   }
 
   musaError_t sync_status = musaDeviceSynchronize();
   if (sync_status != musaSuccess) {
-    return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(sync_status));
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                      MusaErrorString(sync_status));
   }
 
   return nullptr;

@@ -5,3 +5,5 @@ build/
 __pycache__/
 .pytest_cache/
 dist/
+.vscode/
+.venv/

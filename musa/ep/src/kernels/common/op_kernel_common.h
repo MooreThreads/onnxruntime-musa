@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-#include "runtime/musa_runtime.h"
+#include "runtime/ep_musa_utils.h"
 #include "utils.h"
 
 // CRTP base shared by every elementary kernel. Derived classes only need to

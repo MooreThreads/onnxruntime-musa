@@ -2,14 +2,24 @@
 
 Graph-level capability and fusion logic for the MUSA Plugin EP.
 
-The Plugin EP partitions graphs through the kernel registry (`ep_kernel_registration.cc`),
-so the bulk of "which nodes can we run" is implicit in the list of registered
-`ONNX_OPERATOR_VERSIONED_KERNEL_EX` entries. This directory holds the free-standing
-predicates and (future) fusion patterns that the EP needs in addition to the registry:
+## Why this directory exists
 
-- [`supported_ops.h`](supported_ops.h) / [`supported_ops.cc`](supported_ops.cc) — small
-  predicates the EP can call without going through the registry (e.g. to short-circuit
-  partitioning decisions or to gate experimental ops).
+The Plugin EP partitions graphs in [`../ep.cc`](../ep.cc): for every node it checks
+an op-type allow-list and then confirms a matching kernel is registered through the
+kernel registry (`../ep_kernel_registration.cc`). As a result, "which nodes can we
+run" is today fully derived from the registered
+`ONNX_OPERATOR_VERSIONED_KERNEL_EX` entries under [`../kernels/`](../kernels) — no
+extra graph-level code is required, so this directory currently holds no sources.
 
-Planned: fusion-pattern matchers that emit `com.microsoft`-domain fused kernels
-(`FusedGemm`, `FusedMatMul`, …) registered from `kernels/`.
+It is kept as the designated home for graph-level logic that does **not** fit the
+per-kernel registry model and will be added as the EP grows:
+
+- **Fusion-pattern matchers** that rewrite subgraphs into `com.microsoft`-domain
+  fused kernels (e.g. `FusedGemm`, `FusedMatMul`) before partitioning.
+- **Free-standing capability predicates** for decisions the registry cannot
+  express on its own, such as gating a node on attribute values, input shapes, or
+  experimental flags.
+
+When such logic lands, its `.h`/`.cc` files go here and must be added explicitly to
+[`../../CMakeLists.txt`](../../CMakeLists.txt) (only `src/kernels/*.cc` is
+auto-globbed; sources in this directory are not).

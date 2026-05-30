@@ -66,7 +66,11 @@ _DTYPE_TOKEN_RE = re.compile(r"ONNX_TENSOR_ELEMENT_DATA_TYPE_(\w+)")
 
 
 def _read_sources() -> list[tuple[Path, str]]:
-    return [(p, p.read_text()) for p in sorted(KERNELS_DIR.glob("*.cc"))]
+    # Kernel implementations live in `*.cc`; shared type-constraint helpers
+    # (AllTensorTypes / FloatTensorTypes / ...) live in `common/*.h`. Both are
+    # scanned: the headers populate the helper table, the sources the macros.
+    paths = sorted(KERNELS_DIR.glob("*.cc")) + sorted(KERNELS_DIR.glob("common/*.h"))
+    return [(p, p.read_text()) for p in paths]
 
 
 def _strip_block_comments(text: str) -> str:

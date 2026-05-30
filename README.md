@@ -44,7 +44,8 @@ GSL is **not** used; `std::span` (C++20) replaced `gsl::span` everywhere.
 Runtime:
 
 - Python **>=3.11**.
-- `pip install -r requirements.txt` — pins `onnxruntime==1.26.0`, `onnx==1.21.0`, `numpy`.
+- `pip install -r requirements.txt` — pins `onnxruntime==1.26.0`, `onnx==1.21.0`, `numpy`,
+  plus `pytest>=7.0` for the op tests under `test/`.
   The wheel itself declares `onnxruntime~=1.26.0` (auto-derived from
   `third_party/onnxruntime/VERSION`), because the plugin's C ABI is locked to the
   vendored ORT headers. Bumping to ORT 1.27 requires re-vendoring the headers
@@ -102,6 +103,7 @@ runtime dependencies live in [requirements.txt](requirements.txt):
 onnxruntime==1.26.0
 onnx==1.21.0
 numpy
+pytest>=7.0
 ```
 
 Install everything into a fresh venv:
@@ -143,6 +145,35 @@ Expected output tail:
 ```
 
 `providers` listing `MUSAExecutionProvider` first confirms the plugin EP claimed the node.
+
+---
+
+## Op tests
+
+End-to-end per-op tests live under [test/ops/](test/ops). Each `test_<op>.py` builds a
+single-node ONNX model, runs it on the stock CPU EP and on the MUSA EP, and asserts the
+outputs match (`test/ops/op_test_utils.py` holds the shared helpers).
+
+The MUSA session is created with `session.disable_cpu_ep_fallback=1` and refuses to run
+if no MUSA device is present, so an op/dtype the EP does **not** support fails loudly
+instead of silently falling back to CPU (which would degrade into a meaningless
+CPU-vs-CPU comparison). On a machine with no MUSA device the suite is skipped via
+[test/ops/conftest.py](test/ops/conftest.py).
+
+Run the whole suite with the one-shot script (auto-discovers every test sub-directory
+under `test/`):
+
+```bash
+cd test
+bash run_all.sh                 # = python -m pytest ops/
+bash run_all.sh -v -k div       # extra args are forwarded to pytest
+```
+
+Or invoke pytest directly:
+
+```bash
+python -m pytest test/ops/
+```
 
 ---
 

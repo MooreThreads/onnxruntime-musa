@@ -4,23 +4,25 @@
 #include "common/op_kernel_common.h"
 
 namespace {
-class Relu : public OpKernelBase<Relu> {
+class Sigmoid : public OpKernelBase<Sigmoid> {
  public:
-  Relu(const OrtKernelInfo* /*info*/, void* /*state*/) {}
+  Sigmoid(const OrtKernelInfo* /*info*/, void* /*state*/) {}
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
 };
 
-OrtStatus* Relu::Compute(Ort::KernelContext& ctx) const {
+OrtStatus* Sigmoid::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "unsupported unary op dtype");
   }
-  return UnaryCompute<float>(ctx, info.GetShape(),
-                             [](float x) { return std::max(0.0f, x); });
+  return UnaryCompute<float>(ctx, info.GetShape(), [](float x) {
+    return 1.0f / (1.0f + std::exp(-x));
+  });
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Relu, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), Relu)
+    Sigmoid, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    Sigmoid)

@@ -32,7 +32,7 @@ musa/
         basic_ops.{h,cc}     Elementwise, reductions, shape ops, activations
         matmul.{h,cc}        MatMul kernel backed by mublasSgemm
       graph/
-        supported_ops.{h,cc} Free-standing predicates used by graph partitioning
+        README.md            Reserved for graph-level fusion/capability logic (no sources yet)
       runtime/
         musa_runtime.h       Thin wrappers + error-string helpers around musart
     python/

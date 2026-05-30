@@ -4,23 +4,24 @@
 #include "common/op_kernel_common.h"
 
 namespace {
-class Relu : public OpKernelBase<Relu> {
+class Reciprocal : public OpKernelBase<Reciprocal> {
  public:
-  Relu(const OrtKernelInfo* /*info*/, void* /*state*/) {}
+  Reciprocal(const OrtKernelInfo* /*info*/, void* /*state*/) {}
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
 };
 
-OrtStatus* Relu::Compute(Ort::KernelContext& ctx) const {
+OrtStatus* Reciprocal::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "unsupported unary op dtype");
   }
   return UnaryCompute<float>(ctx, info.GetShape(),
-                             [](float x) { return std::max(0.0f, x); });
+                             [](float x) { return 1.0f / x; });
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Relu, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), Relu)
+    Reciprocal, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    Reciprocal)

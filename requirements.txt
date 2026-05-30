@@ -1,5 +1,6 @@
-# Runtime requirements for onnxruntime-musa
+# Requirements for onnxruntime-musa
 # Python: >=3.11 (enforced by pyproject.toml `requires-python`)
 onnxruntime==1.26.0
 onnx==1.21.0
 numpy
+pytest>=7.0

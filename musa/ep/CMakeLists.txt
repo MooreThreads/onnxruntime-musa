@@ -1,5 +1,8 @@
 set(MUSA_PLUGIN_TARGET onnxruntime_providers_musa_plugin)
 
+# Core EP sources are listed explicitly; kernel implementations under
+# src/kernels/*.cc are auto-discovered so adding a new operator only requires
+# dropping a new .cc file (CONFIGURE_DEPENDS re-globs on the next build).
 set(MUSA_PLUGIN_SOURCES
   src/ep_lib_entry.cc
   src/ep_factory.cc
@@ -7,9 +10,11 @@ set(MUSA_PLUGIN_SOURCES
   src/ep_kernel_registration.cc
   src/ep_data_transfer.cc
   src/ep_profiling.cc
-  src/kernels/basic_ops.cc
-  src/kernels/matmul.cc
 )
+
+file(GLOB MUSA_PLUGIN_KERNEL_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cc")
+list(APPEND MUSA_PLUGIN_SOURCES ${MUSA_PLUGIN_KERNEL_SOURCES})
 
 add_library(${MUSA_PLUGIN_TARGET} SHARED ${MUSA_PLUGIN_SOURCES})
 

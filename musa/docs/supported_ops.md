@@ -5,35 +5,35 @@ Total registered kernels: **32**
 
 | Op | Domain | Opset (since–until) | Type constraints | Source |
 | --- | --- | --- | --- | --- |
-| `Add` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Cast` | `ai.onnx` | 13–17 | `T1`: float32, int32, int64<br>`T2`: float32, int32, int64 | `basic_ops.cc` |
-| `Concat` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Div` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Gather` | `ai.onnx` | 13–17 | `T`: float32, int32, int64<br>`Tind`: int32, int64 | `basic_ops.cc` |
-| `Gemm` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
-| `LeakyRelu` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
-| `Log` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
+| `Add` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `add.cc` |
+| `Cast` | `ai.onnx` | 13–17 | `T1`: float32, int32, int64<br>`T2`: float32, int32, int64 | `cast.cc` |
+| `Concat` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `concat.cc` |
+| `Div` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `div.cc` |
+| `Gather` | `ai.onnx` | 13–17 | `T`: float32, int32, int64<br>`Tind`: int32, int64 | `gather.cc` |
+| `Gemm` | `ai.onnx` | 13–17 | `T`: float32 | `gemm.cc` |
+| `LeakyRelu` | `ai.onnx` | 13–17 | `T`: float32 | `leaky_relu.cc` |
+| `Log` | `ai.onnx` | 13–17 | `T`: float32 | `log.cc` |
 | `MatMul` | `ai.onnx` | 13–17 | `T`: float32 | `matmul.cc` |
-| `Mul` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Neg` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
-| `Pow` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Reciprocal` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
-| `ReduceMean` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
-| `ReduceProd` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `ReduceSum` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Relu` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
-| `Reshape` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Shape` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Sigmoid` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
-| `Slice` | `ai.onnx` | 13–17 | `T`: float32, int32, int64<br>`Tind`: int32, int64 | `basic_ops.cc` |
-| `Softmax` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
-| `Split` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Sqrt` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
-| `Squeeze` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Sub` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Sum` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Tanh` | `ai.onnx` | 13–17 | `T`: float32 | `basic_ops.cc` |
-| `Transpose` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `Unsqueeze` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `basic_ops.cc` |
-| `FusedGemm` | `com.microsoft` | 1–1 | `T`: float32 | `basic_ops.cc` |
-| `FusedMatMul` | `com.microsoft` | 1–1 | `T`: float32 | `basic_ops.cc` |
+| `Mul` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `mul.cc` |
+| `Neg` | `ai.onnx` | 13–17 | `T`: float32 | `neg.cc` |
+| `Pow` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `pow.cc` |
+| `Reciprocal` | `ai.onnx` | 13–17 | `T`: float32 | `reciprocal.cc` |
+| `ReduceMean` | `ai.onnx` | 13–17 | `T`: float32 | `reduce_mean.cc` |
+| `ReduceProd` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `reduce_prod.cc` |
+| `ReduceSum` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `reduce_sum.cc` |
+| `Relu` | `ai.onnx` | 13–17 | `T`: float32 | `relu.cc` |
+| `Reshape` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `reshape.cc` |
+| `Shape` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `shape.cc` |
+| `Sigmoid` | `ai.onnx` | 13–17 | `T`: float32 | `sigmoid.cc` |
+| `Slice` | `ai.onnx` | 13–17 | `T`: float32, int32, int64<br>`Tind`: int32, int64 | `slice.cc` |
+| `Softmax` | `ai.onnx` | 13–17 | `T`: float32 | `softmax.cc` |
+| `Split` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `split.cc` |
+| `Sqrt` | `ai.onnx` | 13–17 | `T`: float32 | `sqrt.cc` |
+| `Squeeze` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `squeeze.cc` |
+| `Sub` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `sub.cc` |
+| `Sum` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `sum.cc` |
+| `Tanh` | `ai.onnx` | 13–17 | `T`: float32 | `tanh.cc` |
+| `Transpose` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `transpose.cc` |
+| `Unsqueeze` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `unsqueeze.cc` |
+| `FusedGemm` | `com.microsoft` | 1–1 | `T`: float32 | `fused_gemm.cc` |
+| `FusedMatMul` | `com.microsoft` | 1–1 | `T`: float32 | `fused_matmul.cc` |

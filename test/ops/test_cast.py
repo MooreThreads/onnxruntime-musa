@@ -8,7 +8,7 @@ from op_test_utils import TensorProto, run_and_compare
 
 
 def test_cast_float_to_int64():
-    x = np.random.default_rng(0).uniform(-5.0, 5.0, (3, 4)).astype(np.float32)
+    x = np.random.default_rng(0).uniform(-5.0, 5.0, (16, 32)).astype(np.float32)
     run_and_compare(
         "Cast",
         inputs={"X": x},
@@ -18,7 +18,7 @@ def test_cast_float_to_int64():
 
 
 def test_cast_int64_to_float():
-    x = np.arange(-6, 6, dtype=np.int64).reshape(3, 4)
+    x = np.arange(-256, 256, dtype=np.int64).reshape(16, 32)
     run_and_compare(
         "Cast",
         inputs={"X": x},
@@ -28,7 +28,7 @@ def test_cast_int64_to_float():
 
 
 def test_cast_float_to_int32():
-    x = np.random.default_rng(1).uniform(-5.0, 5.0, (3, 4)).astype(np.float32)
+    x = np.random.default_rng(1).uniform(-5.0, 5.0, (16, 32)).astype(np.float32)
     run_and_compare(
         "Cast",
         inputs={"X": x},

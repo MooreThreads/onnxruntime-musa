@@ -9,9 +9,9 @@ from op_test_utils import TensorProto, run_and_compare
 
 def test_gemm_no_trans_with_bias():
     rng = np.random.default_rng(0)
-    a = rng.standard_normal((4, 3)).astype(np.float32)
-    b = rng.standard_normal((3, 5)).astype(np.float32)
-    c = rng.standard_normal((4, 5)).astype(np.float32)
+    a = rng.standard_normal((16, 32)).astype(np.float32)
+    b = rng.standard_normal((32, 64)).astype(np.float32)
+    c = rng.standard_normal((16, 64)).astype(np.float32)
     run_and_compare(
         "Gemm",
         inputs={"A": a, "B": b, "C": c},
@@ -22,9 +22,9 @@ def test_gemm_no_trans_with_bias():
 
 def test_gemm_trans_b_scaled():
     rng = np.random.default_rng(1)
-    a = rng.standard_normal((4, 3)).astype(np.float32)
-    b = rng.standard_normal((5, 3)).astype(np.float32)
-    c = rng.standard_normal((4, 5)).astype(np.float32)
+    a = rng.standard_normal((16, 32)).astype(np.float32)
+    b = rng.standard_normal((64, 32)).astype(np.float32)
+    c = rng.standard_normal((16, 64)).astype(np.float32)
     run_and_compare(
         "Gemm",
         inputs={"A": a, "B": b, "C": c},
@@ -35,9 +35,9 @@ def test_gemm_trans_b_scaled():
 
 def test_gemm_trans_a():
     rng = np.random.default_rng(2)
-    a = rng.standard_normal((3, 4)).astype(np.float32)
-    b = rng.standard_normal((3, 5)).astype(np.float32)
-    c = rng.standard_normal((5,)).astype(np.float32)
+    a = rng.standard_normal((32, 16)).astype(np.float32)
+    b = rng.standard_normal((32, 64)).astype(np.float32)
+    c = rng.standard_normal((64,)).astype(np.float32)
     run_and_compare(
         "Gemm",
         inputs={"A": a, "B": b, "C": c},

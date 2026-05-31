@@ -8,7 +8,7 @@ from op_test_utils import TensorProto, run_and_compare
 
 
 def test_softmax_last_axis():
-    x = np.random.default_rng(0).standard_normal((3, 5)).astype(np.float32)
+    x = np.random.default_rng(0).standard_normal((16, 32)).astype(np.float32)
     run_and_compare(
         "Softmax",
         inputs={"X": x},
@@ -18,7 +18,7 @@ def test_softmax_last_axis():
 
 
 def test_softmax_axis0():
-    x = np.random.default_rng(1).standard_normal((3, 5)).astype(np.float32)
+    x = np.random.default_rng(1).standard_normal((16, 32)).astype(np.float32)
     run_and_compare(
         "Softmax",
         inputs={"X": x},

@@ -152,16 +152,16 @@ def run_and_compare(
     cpu_outputs = run(model_bytes, inputs, use_musa=False)
     musa_outputs = run(model_bytes, inputs, use_musa=True)
 
-    assert len(cpu_outputs) == len(musa_outputs), (
-        f"{op_type}: output count mismatch cpu={len(cpu_outputs)} musa={len(musa_outputs)}"
-    )
+    assert len(cpu_outputs) == len(
+        musa_outputs
+    ), f"{op_type}: output count mismatch cpu={len(cpu_outputs)} musa={len(musa_outputs)}"
     for i, (c, m) in enumerate(zip(cpu_outputs, musa_outputs)):
-        assert c.shape == m.shape, (
-            f"{op_type} output[{i}] shape mismatch cpu={c.shape} musa={m.shape}"
-        )
-        assert c.dtype == m.dtype, (
-            f"{op_type} output[{i}] dtype mismatch cpu={c.dtype} musa={m.dtype}"
-        )
+        assert (
+            c.shape == m.shape
+        ), f"{op_type} output[{i}] shape mismatch cpu={c.shape} musa={m.shape}"
+        assert (
+            c.dtype == m.dtype
+        ), f"{op_type} output[{i}] dtype mismatch cpu={c.dtype} musa={m.dtype}"
         np.testing.assert_allclose(
             m, c, rtol=rtol, atol=atol, err_msg=f"{op_type} output[{i}] CPU vs MUSA mismatch"
         )

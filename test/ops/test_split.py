@@ -8,8 +8,8 @@ from op_test_utils import TensorProto, run_and_compare
 
 
 def test_split_even_axis0():
-    x = np.random.default_rng(0).standard_normal((4, 2)).astype(np.float32)
-    split = np.array([2, 2], dtype=np.int64)
+    x = np.random.default_rng(0).standard_normal((32, 16)).astype(np.float32)
+    split = np.array([16, 16], dtype=np.int64)
     run_and_compare(
         "Split",
         inputs={"X": x, "split": split},
@@ -19,8 +19,8 @@ def test_split_even_axis0():
 
 
 def test_split_uneven_axis1():
-    x = np.random.default_rng(1).standard_normal((2, 5)).astype(np.float32)
-    split = np.array([2, 3], dtype=np.int64)
+    x = np.random.default_rng(1).standard_normal((32, 48)).astype(np.float32)
+    split = np.array([16, 32], dtype=np.int64)
     run_and_compare(
         "Split",
         inputs={"X": x, "split": split},

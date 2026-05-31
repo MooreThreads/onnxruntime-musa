@@ -10,6 +10,7 @@ if command -v pre-commit >/dev/null 2>&1; then
   exit $?
 fi
 
+# --- C/C++ formatting (clang-format) ---
 if ! command -v clang-format >/dev/null 2>&1; then
   echo "clang-format is not installed; skipping C/C++ formatting."
   exit 0

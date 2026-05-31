@@ -11,7 +11,7 @@ from op_test_utils import TensorProto, run_and_compare
 
 
 def test_reduce_mean_axis1_keepdims():
-    x = np.random.default_rng(0).standard_normal((3, 4)).astype(np.float32)
+    x = np.random.default_rng(0).standard_normal((16, 32)).astype(np.float32)
     run_and_compare(
         "ReduceMean",
         inputs={"X": x},
@@ -21,7 +21,7 @@ def test_reduce_mean_axis1_keepdims():
 
 
 def test_reduce_mean_axis0_no_keepdims():
-    x = np.random.default_rng(1).standard_normal((3, 4)).astype(np.float32)
+    x = np.random.default_rng(1).standard_normal((16, 32)).astype(np.float32)
     run_and_compare(
         "ReduceMean",
         inputs={"X": x},

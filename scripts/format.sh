@@ -5,6 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 
+# --- C/C++ formatting (clang-format) ---
 if ! command -v clang-format >/dev/null 2>&1; then
   echo "clang-format is required but was not found on PATH."
   exit 1
@@ -21,4 +22,4 @@ if [[ ${#files[@]} -eq 0 ]]; then
 fi
 
 clang-format -style=file -i "${files[@]}"
-echo "Formatted ${#files[@]} files."
+echo "Formatted ${#files[@]} C/C++ files."

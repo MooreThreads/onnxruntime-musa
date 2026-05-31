@@ -123,9 +123,7 @@ def collect_ops() -> list[dict]:
         for m in _MACRO_RE.finditer(text):
             constraints_in_order: dict[str, list[str]] = {}
             for c in _CONSTRAINT_RE.finditer(m.group("builder")):
-                constraints_in_order[c.group("key")] = _resolve_constraint(
-                    c.group("expr"), helpers
-                )
+                constraints_in_order[c.group("key")] = _resolve_constraint(c.group("expr"), helpers)
             ops.append(
                 {
                     "op": m.group("name"),

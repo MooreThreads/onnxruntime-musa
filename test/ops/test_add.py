@@ -8,18 +8,18 @@ from op_test_utils import TensorProto, run_and_compare
 
 
 def test_add_float():
-    a = np.random.default_rng(0).standard_normal((3, 4)).astype(np.float32)
-    b = np.random.default_rng(1).standard_normal((3, 4)).astype(np.float32)
+    a = np.random.default_rng(0).standard_normal((16, 32)).astype(np.float32)
+    b = np.random.default_rng(1).standard_normal((16, 32)).astype(np.float32)
     run_and_compare("Add", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
 
 
 def test_add_int64():
-    a = np.arange(-6, 6, dtype=np.int64).reshape(3, 4)
-    b = np.arange(1, 13, dtype=np.int64).reshape(3, 4)
+    a = np.arange(-256, 256, dtype=np.int64).reshape(16, 32)
+    b = np.arange(1, 513, dtype=np.int64).reshape(16, 32)
     run_and_compare("Add", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.INT64)])
 
 
 def test_add_broadcast():
-    a = np.random.default_rng(2).standard_normal((2, 1, 4)).astype(np.float32)
-    b = np.random.default_rng(3).standard_normal((1, 3, 4)).astype(np.float32)
+    a = np.random.default_rng(2).standard_normal((32, 1, 16)).astype(np.float32)
+    b = np.random.default_rng(3).standard_normal((1, 32, 16)).astype(np.float32)
     run_and_compare("Add", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])

@@ -8,5 +8,5 @@ from op_test_utils import TensorProto, run_and_compare
 
 
 def test_relu_float():
-    x = np.random.default_rng(0).standard_normal((4, 5)).astype(np.float32)
+    x = np.random.default_rng(0).standard_normal((16, 32)).astype(np.float32)
     run_and_compare("Relu", inputs={"X": x}, outputs=[("Y", TensorProto.FLOAT)])

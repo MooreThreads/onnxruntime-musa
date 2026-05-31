@@ -13,9 +13,9 @@ from op_test_utils import TensorProto, run_and_compare
 
 def test_fused_gemm_relu():
     rng = np.random.default_rng(0)
-    a = rng.standard_normal((4, 3)).astype(np.float32)
-    b = rng.standard_normal((3, 5)).astype(np.float32)
-    c = rng.standard_normal((4, 5)).astype(np.float32)
+    a = rng.standard_normal((16, 32)).astype(np.float32)
+    b = rng.standard_normal((32, 64)).astype(np.float32)
+    c = rng.standard_normal((16, 64)).astype(np.float32)
     run_and_compare(
         "FusedGemm",
         inputs={"A": a, "B": b, "C": c},
@@ -29,9 +29,9 @@ def test_fused_gemm_transb():
     # The CPU reference FusedGemm requires a valid `activation` attribute, so we
     # always supply one; here we additionally exercise the transB path.
     rng = np.random.default_rng(1)
-    a = rng.standard_normal((4, 3)).astype(np.float32)
-    b = rng.standard_normal((5, 3)).astype(np.float32)
-    c = rng.standard_normal((4, 5)).astype(np.float32)
+    a = rng.standard_normal((16, 32)).astype(np.float32)
+    b = rng.standard_normal((64, 32)).astype(np.float32)
+    c = rng.standard_normal((16, 64)).astype(np.float32)
     run_and_compare(
         "FusedGemm",
         inputs={"A": a, "B": b, "C": c},

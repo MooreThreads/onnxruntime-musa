@@ -11,7 +11,7 @@ from op_test_utils import TensorProto, run_and_compare
 
 
 def test_reduce_prod_axis1_keepdims():
-    x = np.random.default_rng(0).uniform(0.5, 1.5, (3, 4)).astype(np.float32)
+    x = np.random.default_rng(0).uniform(0.5, 1.5, (16, 32)).astype(np.float32)
     run_and_compare(
         "ReduceProd",
         inputs={"X": x},
@@ -21,7 +21,8 @@ def test_reduce_prod_axis1_keepdims():
 
 
 def test_reduce_prod_int64():
-    x = np.arange(1, 13, dtype=np.int64).reshape(3, 4)
+    # Use tile of [1, 2] so each row product = 2**16 (no overflow)
+    x = np.tile(np.array([1, 2], dtype=np.int64), (16, 16))
     run_and_compare(
         "ReduceProd",
         inputs={"X": x},

@@ -8,8 +8,8 @@ from op_test_utils import TensorProto, run_and_compare
 
 
 def test_gather_axis0():
-    data = np.random.default_rng(0).standard_normal((4, 3)).astype(np.float32)
-    indices = np.array([0, 2], dtype=np.int64)
+    data = np.random.default_rng(0).standard_normal((32, 16)).astype(np.float32)
+    indices = np.array([0, 8, 16, 24], dtype=np.int64)
     run_and_compare(
         "Gather",
         inputs={"data": data, "indices": indices},
@@ -19,8 +19,8 @@ def test_gather_axis0():
 
 
 def test_gather_axis1():
-    data = np.random.default_rng(1).standard_normal((3, 5)).astype(np.float32)
-    indices = np.array([[0, 2], [1, 4]], dtype=np.int64)
+    data = np.random.default_rng(1).standard_normal((16, 32)).astype(np.float32)
+    indices = np.array([[0, 8], [16, 24]], dtype=np.int64)
     run_and_compare(
         "Gather",
         inputs={"data": data, "indices": indices},

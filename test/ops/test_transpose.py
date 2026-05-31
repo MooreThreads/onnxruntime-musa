@@ -8,12 +8,12 @@ from op_test_utils import TensorProto, run_and_compare
 
 
 def test_transpose_default():
-    x = np.random.default_rng(0).standard_normal((2, 3)).astype(np.float32)
+    x = np.random.default_rng(0).standard_normal((16, 32)).astype(np.float32)
     run_and_compare("Transpose", inputs={"X": x}, outputs=[("Y", TensorProto.FLOAT)])
 
 
 def test_transpose_perm():
-    x = np.random.default_rng(1).standard_normal((2, 3, 4)).astype(np.float32)
+    x = np.random.default_rng(1).standard_normal((16, 32, 16)).astype(np.float32)
     run_and_compare(
         "Transpose",
         inputs={"X": x},

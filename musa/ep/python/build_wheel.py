@@ -28,6 +28,7 @@ def _read_vendored_ort_version() -> str:
         )
     return m.group(1)
 
+
 _TEMPLATE_VARIABLE_PATTERN = re.compile(r"@(\w+)@")
 BINARY_PATTERNS = [
     "onnxruntime_providers_musa_plugin.dll",
@@ -53,7 +54,9 @@ AUDITWHEEL_EXCLUDE = [
 ]
 
 
-def gen_file_from_template(template_file: Path, output_file: Path, variable_substitutions: dict[str, str]) -> None:
+def gen_file_from_template(
+    template_file: Path, output_file: Path, variable_substitutions: dict[str, str]
+) -> None:
     content = template_file.read_text(encoding="utf-8")
     variables_in_file: set[str] = set()
 
@@ -74,7 +77,9 @@ def gen_file_from_template(template_file: Path, output_file: Path, variable_subs
     output_file.write_text(content, encoding="utf-8")
 
 
-def prepare_staging_dir(staging_dir: Path, binary_dir: Path, version: str, package_name: str) -> None:
+def prepare_staging_dir(
+    staging_dir: Path, binary_dir: Path, version: str, package_name: str
+) -> None:
     staging_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(SCRIPT_DIR / "setup.py", staging_dir / "setup.py")
     shutil.copytree(SCRIPT_DIR / "onnxruntime_musa", staging_dir / "onnxruntime_musa")
@@ -88,7 +93,9 @@ def prepare_staging_dir(staging_dir: Path, binary_dir: Path, version: str, packa
             shutil.copy2(src, dst)
             copied.append(dst)
     if not copied:
-        raise FileNotFoundError(f"No plugin binaries found in {binary_dir}. Looked for: {BINARY_PATTERNS}")
+        raise FileNotFoundError(
+            f"No plugin binaries found in {binary_dir}. Looked for: {BINARY_PATTERNS}"
+        )
 
     min_ort_version = _read_vendored_ort_version()
 
@@ -130,7 +137,15 @@ def auditwheel_repair(wheel_dir: Path, wheel_name_prefix: str) -> None:
     with tempfile.TemporaryDirectory() as repaired_dir_name:
         repaired_dir = Path(repaired_dir_name)
         for wheel in original_wheels:
-            cmd = [sys.executable, "-m", "auditwheel", "repair", str(wheel), "--wheel-dir", str(repaired_dir)]
+            cmd = [
+                sys.executable,
+                "-m",
+                "auditwheel",
+                "repair",
+                str(wheel),
+                "--wheel-dir",
+                str(repaired_dir),
+            ]
             for lib in AUDITWHEEL_EXCLUDE:
                 cmd.extend(["--exclude", lib])
             print(f"Running: {' '.join(cmd)}")
@@ -158,10 +173,21 @@ def collect_wheels(wheel_dir: Path, output_dir: Path, wheel_name_prefix: str) ->
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build onnxruntime-ep-musa wheel")
-    parser.add_argument("--binary_dir", required=True, type=Path, help="Directory containing built plugin EP binaries")
+    parser.add_argument(
+        "--binary_dir",
+        required=True,
+        type=Path,
+        help="Directory containing built plugin EP binaries",
+    )
     parser.add_argument("--version", required=True, help="Package version string (PEP 440 format)")
-    parser.add_argument("--package_name", required=True, help="Python distribution name to write into pyproject.toml")
-    parser.add_argument("--output_dir", required=True, type=Path, help="Directory to place the built wheel")
+    parser.add_argument(
+        "--package_name",
+        required=True,
+        help="Python distribution name to write into pyproject.toml",
+    )
+    parser.add_argument(
+        "--output_dir", required=True, type=Path, help="Directory to place the built wheel"
+    )
     args = parser.parse_args()
 
     if not args.binary_dir.is_dir():

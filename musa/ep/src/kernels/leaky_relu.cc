@@ -24,9 +24,11 @@ OrtStatus* LeakyRelu::Compute(Ort::KernelContext& ctx) const {
                                       "unsupported unary op dtype");
   }
   float alpha = alpha_;
-  return UnaryCompute<float>(ctx, info.GetShape(), [alpha](float x) {
-    return x >= 0.0f ? x : alpha * x;
-  });
+  return UnaryCompute<float>(ctx, info.GetShape(),
+                             [alpha](float x) {
+                               return x >= 0.0f ? x : alpha * x;
+                             },
+                             MusaUnaryOp::LeakyRelu, alpha);
 }
 }  // namespace
 

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -16,9 +17,11 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "runtime/ep_musa_utils.h"
+#include "basic_kernels.h"
 #include "utils.h"
 
 // CRTP base shared by every elementary kernel. Derived classes only need to
@@ -71,6 +74,15 @@ inline std::vector<const OrtDataType*> AllTensorTypes() {
   };
 }
 
+inline std::vector<const OrtDataType*> TensorTypesWithBool() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL),
+  };
+}
+
 inline std::vector<const OrtDataType*> FloatTensorTypes() {
   return {GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)};
 }
@@ -80,6 +92,10 @@ inline std::vector<const OrtDataType*> IntTensorTypes() {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
   };
+}
+
+inline std::vector<const OrtDataType*> BoolTensorTypes() {
+  return {GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL)};
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +169,85 @@ inline OrtStatus* CopyFromHost(Ort::UnownedValue value, const void* src,
   }
 
   return nullptr;
+}
+
+inline OrtStatus* CopyRawTensor(Ort::ConstValue src_value,
+                                Ort::UnownedValue dst_value,
+                                size_t num_bytes) {
+  if (num_bytes == 0) {
+    return nullptr;
+  }
+  const void* src = src_value.GetTensorRawData();
+  void* dst = dst_value.GetTensorMutableRawData();
+  if (src == dst) {
+    return nullptr;
+  }
+
+  const bool src_gpu = IsGpuMemory(src_value.GetTensorMemoryInfo());
+  const bool dst_gpu = IsGpuMemory(dst_value.GetTensorMemoryInfo());
+  if (src_gpu && dst_gpu) {
+    musaError_t status =
+        musaMemcpyAsync(dst, src, num_bytes, musaMemcpyDeviceToDevice, nullptr);
+    if (status != musaSuccess) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    }
+  } else if (src_gpu) {
+    musaError_t status = musaMemcpy(dst, src, num_bytes, musaMemcpyDeviceToHost);
+    if (status != musaSuccess) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    }
+  } else if (dst_gpu) {
+    musaError_t status = musaMemcpy(dst, src, num_bytes, musaMemcpyHostToDevice);
+    if (status != musaSuccess) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    }
+  } else {
+    std::memcpy(dst, src, num_bytes);
+  }
+  return nullptr;
+}
+
+inline OrtStatus* DeviceMemcpy(void* dst, const void* src, size_t num_bytes) {
+  if (num_bytes == 0 || dst == src) {
+    return nullptr;
+  }
+  musaError_t status =
+      musaMemcpyAsync(dst, src, num_bytes, musaMemcpyDeviceToDevice, nullptr);
+  if (status != musaSuccess) {
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+  }
+  return nullptr;
+}
+
+inline OrtStatus* DeviceMemcpy2D(void* dst, size_t dst_pitch, const void* src,
+                                 size_t src_pitch, size_t width_bytes,
+                                 size_t height) {
+  if (width_bytes == 0 || height == 0) {
+    return nullptr;
+  }
+  musaError_t status = musaMemcpy2DAsync(
+      dst, dst_pitch, src, src_pitch, width_bytes, height,
+      musaMemcpyDeviceToDevice, nullptr);
+  if (status != musaSuccess) {
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+  }
+  return nullptr;
+}
+
+inline OrtStatus* LaunchStatus(musaError_t status) {
+  if (status != musaSuccess) {
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+  }
+  return nullptr;
+}
+
+inline bool AllGpuInputs(Ort::KernelContext& ctx) {
+  for (size_t i = 0; i < ctx.GetInputCount(); ++i) {
+    if (!IsGpuMemory(ctx.GetInput(i).GetTensorMemoryInfo())) {
+      return false;
+    }
+  }
+  return true;
 }
 
 inline size_t ElementSize(ONNXTensorElementDataType type) {
@@ -230,6 +325,54 @@ inline std::vector<int64_t> BroadcastShape(const std::vector<int64_t>& a,
     out[i] = std::max(da, db);
   }
   return out;
+}
+
+inline MusaBroadcastParams MakeBroadcastParams(
+    const std::vector<int64_t>& out_shape,
+    const std::vector<int64_t>& lhs_shape,
+    const std::vector<int64_t>& rhs_shape) {
+  MusaBroadcastParams params{};
+  const size_t rank = out_shape.size();
+  params.rank = static_cast<int32_t>(rank);
+  params.total_elements = NumElements(out_shape);
+
+  auto out_strides = Strides(out_shape);
+  auto lhs_strides = Strides(lhs_shape);
+  auto rhs_strides = Strides(rhs_shape);
+  const size_t lhs_rank = lhs_shape.size();
+  const size_t rhs_rank = rhs_shape.size();
+  const size_t lhs_offset = rank - lhs_rank;
+  const size_t rhs_offset = rank - rhs_rank;
+
+  for (size_t dim = 0; dim < rank; ++dim) {
+    params.output_strides[dim] = out_strides[dim];
+
+    if (dim < lhs_offset) {
+      params.lhs_strides[dim] = 0;
+    } else {
+      const size_t lhs_dim = dim - lhs_offset;
+      params.lhs_strides[dim] =
+          lhs_shape[lhs_dim] == 1 ? 0 : lhs_strides[lhs_dim];
+    }
+
+    if (dim < rhs_offset) {
+      params.rhs_strides[dim] = 0;
+    } else {
+      const size_t rhs_dim = dim - rhs_offset;
+      params.rhs_strides[dim] =
+          rhs_shape[rhs_dim] == 1 ? 0 : rhs_strides[rhs_dim];
+    }
+  }
+
+  return params;
+}
+
+inline bool CanUseBroadcastKernel(const std::vector<int64_t>& out_shape,
+                                  const std::vector<int64_t>& lhs_shape,
+                                  const std::vector<int64_t>& rhs_shape) {
+  return out_shape.size() <= kMusaMaxBroadcastRank &&
+         lhs_shape.size() <= kMusaMaxBroadcastRank &&
+         rhs_shape.size() <= kMusaMaxBroadcastRank;
 }
 
 inline int64_t BroadcastOffset(const std::vector<int64_t>& out_coord,
@@ -357,4 +500,47 @@ OrtStatus* UnaryCompute(Ort::KernelContext& ctx,
   }
   Ort::UnownedValue y = ctx.GetOutput(0, shape);
   return WriteTyped<T>(y, y_data);
+}
+
+template <typename T, typename Fn>
+OrtStatus* BinaryCompute(Ort::KernelContext& ctx,
+                         const std::vector<int64_t>& shape0,
+                         const std::vector<int64_t>& shape1, Fn fn,
+                         MusaBinaryOp device_op) {
+  if constexpr (std::is_same_v<T, float>) {
+    std::vector<int64_t> out_shape = BroadcastShape(shape0, shape1);
+    Ort::ConstValue lhs = ctx.GetInput(0);
+    Ort::ConstValue rhs = ctx.GetInput(1);
+    if (IsGpuMemory(lhs.GetTensorMemoryInfo()) &&
+        IsGpuMemory(rhs.GetTensorMemoryInfo()) &&
+        CanUseBroadcastKernel(out_shape, shape0, shape1)) {
+      Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+      if (IsGpuMemory(y.GetTensorMemoryInfo())) {
+        MusaBroadcastParams params =
+            MakeBroadcastParams(out_shape, shape0, shape1);
+        return LaunchStatus(LaunchMusaBinaryFloatKernel(
+            lhs.GetTensorData<float>(), rhs.GetTensorData<float>(),
+            y.GetTensorMutableData<float>(), params, device_op, nullptr));
+      }
+    }
+  }
+  return BinaryCompute<T>(ctx, shape0, shape1, fn);
+}
+
+template <typename T, typename Fn>
+OrtStatus* UnaryCompute(Ort::KernelContext& ctx,
+                        const std::vector<int64_t>& shape, Fn fn,
+                        MusaUnaryOp device_op, float alpha = 0.0f) {
+  if constexpr (std::is_same_v<T, float>) {
+    Ort::ConstValue input = ctx.GetInput(0);
+    if (IsGpuMemory(input.GetTensorMemoryInfo())) {
+      Ort::UnownedValue y = ctx.GetOutput(0, shape);
+      if (IsGpuMemory(y.GetTensorMemoryInfo())) {
+        return LaunchStatus(LaunchMusaUnaryFloatKernel(
+            input.GetTensorData<float>(), y.GetTensorMutableData<float>(),
+            NumElements(shape), device_op, alpha, nullptr));
+      }
+    }
+  }
+  return UnaryCompute<T>(ctx, shape, fn);
 }

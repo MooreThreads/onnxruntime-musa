@@ -17,7 +17,8 @@ OrtStatus* Reciprocal::Compute(Ort::KernelContext& ctx) const {
                                       "unsupported unary op dtype");
   }
   return UnaryCompute<float>(ctx, info.GetShape(),
-                             [](float x) { return 1.0f / x; });
+                             [](float x) { return 1.0f / x; },
+                             MusaUnaryOp::Reciprocal);
 }
 }  // namespace
 

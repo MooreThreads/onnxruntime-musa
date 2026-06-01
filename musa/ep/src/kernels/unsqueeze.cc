@@ -21,8 +21,6 @@ OrtStatus* Unsqueeze::Compute(Ort::KernelContext& ctx) const {
   auto shape0 = input0.GetTensorTypeAndShapeInfo().GetShape();
   std::vector<int64_t> axes = axes_attr_;
   if (ctx.GetInputCount() > 1) axes = ReadIntTensor(ctx, 1);
-  std::vector<uint8_t> in;
-  RETURN_IF_ERROR(CopyToHost(input0, in));
   std::vector<int64_t> out_shape;
   int64_t out_rank = static_cast<int64_t>(shape0.size() + axes.size());
   std::set<int64_t> ax;
@@ -32,11 +30,11 @@ OrtStatus* Unsqueeze::Compute(Ort::KernelContext& ctx) const {
     out_shape.push_back(ax.count(i) ? 1 : shape0[src++]);
   }
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-  return CopyFromHost(y, in.data(), in.size());
+  return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes());
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Unsqueeze, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", TensorTypesWithBool()).AddInputOutputAlias(0, 0)),
     Unsqueeze)

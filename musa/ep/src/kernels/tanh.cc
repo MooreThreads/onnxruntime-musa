@@ -17,7 +17,8 @@ OrtStatus* Tanh::Compute(Ort::KernelContext& ctx) const {
                                       "unsupported unary op dtype");
   }
   return UnaryCompute<float>(ctx, info.GetShape(),
-                             [](float x) { return std::tanh(x); });
+                             [](float x) { return std::tanh(x); },
+                             MusaUnaryOp::Tanh);
 }
 }  // namespace
 

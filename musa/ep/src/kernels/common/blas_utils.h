@@ -4,11 +4,16 @@
 #pragma once
 
 #include <mublas.h>
+#include <mudnncxx/mudnn.h>
+
+#include <cstdlib>
+#include <memory>
 
 #include "common/op_kernel_common.h"
+#include "gemm_post_kernels.h"
 
-// Shared mUBLAS handle + Gemm implementation used by the Gemm / FusedGemm
-// kernels. MatMul keeps its own copy in matmul.cc.
+// Shared GEMM implementation used by Gemm and FusedGemm. MatMul keeps its
+// own implementation because it also handles batched MatMul shapes.
 inline OrtStatus* EnsureMublasHandle(mublasHandle_t* handle) {
   static thread_local mublasHandle_t g_handle = nullptr;
   if (g_handle == nullptr) {
@@ -19,6 +24,119 @@ inline OrtStatus* EnsureMublasHandle(mublasHandle_t* handle) {
   }
   *handle = g_handle;
   return nullptr;
+}
+
+inline bool ResolveTF32EnabledForGemm() {
+  const char* tf32_env = std::getenv("MUSA_ENABLE_TF32");
+  return tf32_env != nullptr && std::atoi(tf32_env) != 0;
+}
+
+inline OrtStatus* EnsureMudnnHandle(::musa::dnn::Handle** handle) {
+  static thread_local std::unique_ptr<::musa::dnn::Handle> g_handle;
+  if (!g_handle) {
+    g_handle = std::make_unique<::musa::dnn::Handle>();
+    auto status = g_handle->SetAllowTF32(ResolveTF32EnabledForGemm());
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                        "mudnn Handle SetAllowTF32 failed");
+    }
+  }
+  *handle = g_handle.get();
+  return nullptr;
+}
+
+inline bool SetMudnnFloatTensor(::musa::dnn::Tensor& tensor, const void* data,
+                                const std::vector<int64_t>& shape) {
+  if (tensor.SetAddr(data) != ::musa::dnn::Status::SUCCESS) return false;
+  if (tensor.SetType(::musa::dnn::Tensor::Type::FLOAT) !=
+      ::musa::dnn::Status::SUCCESS)
+    return false;
+  if (tensor.SetFormat(::musa::dnn::Tensor::Format::NCHW) !=
+      ::musa::dnn::Status::SUCCESS)
+    return false;
+  std::vector<int64_t> dims = shape.empty() ? std::vector<int64_t>{1} : shape;
+  return tensor.SetNdInfo(static_cast<int64_t>(dims.size()), dims.data()) ==
+         ::musa::dnn::Status::SUCCESS;
+}
+
+inline bool TryMudnnGemm(float* y_data, const float* a_data,
+                         const float* b_data, const float* c_data,
+                         const std::vector<int64_t>& a_shape,
+                         const std::vector<int64_t>& b_shape,
+                         const std::vector<int64_t>& c_shape,
+                         const std::vector<int64_t>& out_shape, bool trans_a,
+                         bool trans_b, float alpha, float beta,
+                         bool has_bias) {
+  ::musa::dnn::Handle* handle = nullptr;
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  if (handle_status != nullptr) {
+    Ort::GetApi().ReleaseStatus(handle_status);
+    return false;
+  }
+
+  ::musa::dnn::Tensor a_tensor;
+  ::musa::dnn::Tensor b_tensor;
+  ::musa::dnn::Tensor y_tensor;
+  if (!SetMudnnFloatTensor(a_tensor, a_data, a_shape) ||
+      !SetMudnnFloatTensor(b_tensor, b_data, b_shape) ||
+      !SetMudnnFloatTensor(y_tensor, y_data, out_shape)) {
+    return false;
+  }
+
+  ::musa::dnn::MatMul matmul;
+  if (matmul.SetTranspose(trans_a, trans_b) != ::musa::dnn::Status::SUCCESS)
+    return false;
+  if (matmul.SetComputeMode(::musa::dnn::MatMul::ComputeMode::TENSOR) !=
+      ::musa::dnn::Status::SUCCESS)
+    return false;
+  if (matmul.SetAlpha(static_cast<double>(alpha)) !=
+      ::musa::dnn::Status::SUCCESS)
+    return false;
+  if (matmul.SetBeta(0.0) != ::musa::dnn::Status::SUCCESS) return false;
+  if (matmul.SetGamma(0.0) != ::musa::dnn::Status::SUCCESS) return false;
+
+  if (!has_bias || beta == 0.0f) {
+    return matmul.Run(*handle, y_tensor, a_tensor, b_tensor) ==
+           ::musa::dnn::Status::SUCCESS;
+  }
+
+  const int64_t m = out_shape[0];
+  const int64_t n = out_shape[1];
+  ::musa::dnn::Tensor c_tensor;
+  ::musa::dnn::Tensor empty_tensor;
+
+  if (c_shape.size() == 1 && c_shape[0] == n) {
+    if (!SetMudnnFloatTensor(c_tensor, c_data, c_shape)) return false;
+    if (matmul.SetGamma(static_cast<double>(beta)) !=
+        ::musa::dnn::Status::SUCCESS)
+      return false;
+    return matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor,
+                                 y_tensor, c_tensor) ==
+           ::musa::dnn::Status::SUCCESS;
+  }
+
+  if (c_shape.size() == 2 && c_shape[0] == 1 && c_shape[1] == n) {
+    std::vector<int64_t> bias_shape = {n};
+    if (!SetMudnnFloatTensor(c_tensor, c_data, bias_shape)) return false;
+    if (matmul.SetGamma(static_cast<double>(beta)) !=
+        ::musa::dnn::Status::SUCCESS)
+      return false;
+    return matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor,
+                                 y_tensor, c_tensor) ==
+           ::musa::dnn::Status::SUCCESS;
+  }
+
+  if (c_shape.size() == 2 && c_shape[0] == m && c_shape[1] == n) {
+    if (!SetMudnnFloatTensor(c_tensor, c_data, c_shape)) return false;
+    if (matmul.SetBeta(static_cast<double>(beta)) !=
+        ::musa::dnn::Status::SUCCESS)
+      return false;
+    return matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor,
+                                 c_tensor, empty_tensor) ==
+           ::musa::dnn::Status::SUCCESS;
+  }
+
+  return false;
 }
 
 inline void ApplyActivation(std::vector<float>& values,
@@ -38,6 +156,22 @@ inline void ApplyActivation(std::vector<float>& values,
   if (activation == "Tanh") {
     for (float& v : values) v = std::tanh(v);
   }
+}
+
+inline bool TryMapActivation(const std::string& activation, MusaUnaryOp& op) {
+  if (activation == "Relu") {
+    op = MusaUnaryOp::Relu;
+    return true;
+  }
+  if (activation == "LeakyRelu") {
+    op = MusaUnaryOp::LeakyRelu;
+    return true;
+  }
+  if (activation == "Tanh") {
+    op = MusaUnaryOp::Tanh;
+    return true;
+  }
+  return false;
 }
 
 inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
@@ -82,6 +216,57 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
       const float* a_data = ctx.GetInput(0).GetTensorData<float>();
       const float* b_data = ctx.GetInput(1).GetTensorData<float>();
       float* y_data = y.GetTensorMutableData<float>();
+      std::vector<int64_t> c_shape = {1};
+      const float* c_data = nullptr;
+      const bool has_bias = ctx.GetInputCount() > 2;
+      bool bias_is_gpu = true;
+      if (has_bias) {
+        auto c_value = ctx.GetInput(2);
+        auto c_info = c_value.GetTensorTypeAndShapeInfo();
+        if (c_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+          return Ort::GetApi().CreateStatus(
+              ORT_NOT_IMPLEMENTED, "Gemm bias only supports float tensors");
+        }
+        c_shape = c_info.GetShape();
+        std::vector<int64_t> broadcast_shape =
+            BroadcastShape(c_shape, out_shape);
+        if (broadcast_shape != out_shape) {
+          return Ort::GetApi().CreateStatus(
+              ORT_INVALID_ARGUMENT, "Gemm bias broadcast shape mismatch");
+        }
+        c_data = c_value.GetTensorData<float>();
+        bias_is_gpu = IsGpuMemory(c_value.GetTensorMemoryInfo());
+      }
+
+      if (bias_is_gpu &&
+          TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape, b_shape,
+                       c_shape, out_shape, trans_a, trans_b, alpha, beta,
+                       has_bias)) {
+        if (activation.empty()) {
+          return nullptr;
+        }
+
+        MusaUnaryOp activation_op = MusaUnaryOp::Relu;
+        if (TryMapActivation(activation, activation_op)) {
+          MusaBroadcastParams params =
+              MakeBroadcastParams(out_shape, out_shape, {1});
+          return LaunchStatus(LaunchMusaGemmPostFloatKernel(
+              y_data, nullptr, params, false, 0.0f, activation_op, true,
+              activation_alpha, nullptr));
+        }
+
+        std::vector<float> out(static_cast<size_t>(m * n));
+        musaError_t sync_status =
+            musaMemcpy(out.data(), y_data, out.size() * sizeof(float),
+                       musaMemcpyDeviceToHost);
+        if (sync_status != musaSuccess) {
+          return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                            MusaErrorString(sync_status));
+        }
+        ApplyActivation(out, activation, activation_alpha);
+        return WriteTyped<float>(y, out);
+      }
+
       mublasHandle_t handle = nullptr;
       RETURN_IF_ERROR(EnsureMublasHandle(&handle));
       mublasOperation_t op_a = trans_a ? MUBLAS_OP_T : MUBLAS_OP_N;
@@ -98,18 +283,28 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
       if (status != MUBLAS_STATUS_SUCCESS) {
         return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSgemm failed");
       }
-      musaError_t sync_status = musaDeviceSynchronize();
-      if (sync_status != musaSuccess) {
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                          MusaErrorString(sync_status));
-      }
       if (ctx.GetInputCount() <= 2 && activation.empty()) {
         return nullptr;
       }
 
+      MusaUnaryOp activation_op = MusaUnaryOp::Relu;
+      const bool has_activation = !activation.empty();
+      const bool activation_supported =
+          !has_activation || TryMapActivation(activation, activation_op);
+      if (activation_supported && (!has_bias || bias_is_gpu)) {
+        if (CanUseBroadcastKernel(out_shape, out_shape, c_shape)) {
+          MusaBroadcastParams params =
+              MakeBroadcastParams(out_shape, out_shape, c_shape);
+          return LaunchStatus(LaunchMusaGemmPostFloatKernel(
+              y_data, c_data, params, has_bias, beta, activation_op,
+              has_activation, activation_alpha, nullptr));
+        }
+      }
+
       std::vector<float> out(static_cast<size_t>(m * n));
-      sync_status = musaMemcpy(out.data(), y_data, out.size() * sizeof(float),
-                               musaMemcpyDeviceToHost);
+      musaError_t sync_status =
+          musaMemcpy(out.data(), y_data, out.size() * sizeof(float),
+                     musaMemcpyDeviceToHost);
       if (sync_status != musaSuccess) {
         return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                           MusaErrorString(sync_status));
@@ -148,9 +343,12 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
     for (int64_t col = 0; col < n; ++col) {
       float sum = 0.0f;
       for (int64_t kk = 0; kk < k; ++kk) {
-        int64_t a_off = trans_a ? kk * a_shape[1] + row : row * a_shape[1] + kk;
-        int64_t b_off = trans_b ? col * b_shape[1] + kk : kk * b_shape[1] + col;
-        sum += a[static_cast<size_t>(a_off)] * b[static_cast<size_t>(b_off)];
+        int64_t a_off =
+            trans_a ? kk * a_shape[1] + row : row * a_shape[1] + kk;
+        int64_t b_off =
+            trans_b ? col * b_shape[1] + kk : kk * b_shape[1] + col;
+        sum += a[static_cast<size_t>(a_off)] *
+               b[static_cast<size_t>(b_off)];
       }
       out[static_cast<size_t>(row * n + col)] = alpha * sum;
     }
@@ -160,8 +358,8 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
     auto c_value = ctx.GetInput(2);
     auto c_info = c_value.GetTensorTypeAndShapeInfo();
     if (c_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      return Ort::GetApi().CreateStatus(
-          ORT_NOT_IMPLEMENTED, "Gemm bias only supports float tensors");
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "Gemm bias only supports float tensors");
     }
     std::vector<int64_t> c_shape = c_info.GetShape();
     std::vector<float> c = ReadTyped<float>(c_value);

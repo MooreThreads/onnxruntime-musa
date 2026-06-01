@@ -44,6 +44,22 @@ static const BuildKernelCreateInfoFn build_kernel_create_info_funcs[] = {
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Softmax)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Abs)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Erf)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Equal)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Greater)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Max)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Min)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 1, 17, Not)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 7, 17, Or)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Shape)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Cast)>,
@@ -53,6 +69,8 @@ static const BuildKernelCreateInfoFn build_kernel_create_info_funcs[] = {
         kOnnxDomain, 13, 17, Squeeze)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Unsqueeze)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Expand)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Concat)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
@@ -69,6 +87,10 @@ static const BuildKernelCreateInfoFn build_kernel_create_info_funcs[] = {
         kOnnxDomain, 13, 17, ReduceSum)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, ReduceMean)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, ReduceSumSquare)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 15, 17, BatchNormalization)>,
 };
 
 size_t GetNumKernels() { return std::size(build_kernel_create_info_funcs); }

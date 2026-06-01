@@ -16,9 +16,10 @@ OrtStatus* Sigmoid::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "unsupported unary op dtype");
   }
-  return UnaryCompute<float>(ctx, info.GetShape(), [](float x) {
-    return 1.0f / (1.0f + std::exp(-x));
-  });
+  return UnaryCompute<float>(
+      ctx, info.GetShape(),
+      [](float x) { return 1.0f / (1.0f + std::exp(-x)); },
+      MusaUnaryOp::Sigmoid);
 }
 }  // namespace
 

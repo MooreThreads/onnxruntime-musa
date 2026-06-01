@@ -29,6 +29,26 @@ OrtStatus* Transpose::Compute(Ort::KernelContext& ctx) const {
   std::vector<int64_t> out_shape;
   for (int64_t p : perm) out_shape.push_back(shape0[static_cast<size_t>(p)]);
   size_t elem_size = ElementSize(elem_type);
+  if (elem_size == 0)
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Transpose unsupported dtype");
+  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+  if (shape0.size() <= kMusaMaxBroadcastRank &&
+      IsGpuMemory(input0.GetTensorMemoryInfo()) &&
+      IsGpuMemory(y.GetTensorMemoryInfo())) {
+    auto in_strides = Strides(shape0);
+    MusaTransposeParams params{};
+    params.rank = static_cast<int32_t>(shape0.size());
+    params.total_elements = NumElements(out_shape);
+    for (size_t dim = 0; dim < shape0.size(); ++dim) {
+      params.input_strides[dim] = in_strides[dim];
+      params.output_dims[dim] = out_shape[dim];
+      params.perm[dim] = static_cast<int32_t>(perm[dim]);
+    }
+    return LaunchStatus(LaunchMusaTransposeKernel(
+        input0.GetTensorRawData(), y.GetTensorMutableRawData(),
+        static_cast<int32_t>(elem_size), params, nullptr));
+  }
   std::vector<uint8_t> in;
   RETURN_IF_ERROR(CopyToHost(input0, in));
   std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
@@ -44,12 +64,11 @@ OrtStatus* Transpose::Compute(Ort::KernelContext& ctx) const {
                                 elem_size,
                 elem_size);
   }
-  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
   return CopyFromHost(y, out.data(), out.size());
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Transpose, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", TensorTypesWithBool())),
     Transpose)

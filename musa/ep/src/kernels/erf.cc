@@ -4,23 +4,25 @@
 #include "common/op_kernel_common.h"
 
 namespace {
-class Neg : public OpKernelBase<Neg> {
+class Erf : public OpKernelBase<Erf> {
  public:
-  Neg(const OrtKernelInfo* /*info*/, void* /*state*/) {}
+  Erf(const OrtKernelInfo* /*info*/, void* /*state*/) {}
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
 };
 
-OrtStatus* Neg::Compute(Ort::KernelContext& ctx) const {
+OrtStatus* Erf::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "unsupported unary op dtype");
+                                      "Erf only supports float tensors");
   }
   return UnaryCompute<float>(ctx, info.GetShape(),
-                             [](float x) { return -x; }, MusaUnaryOp::Neg);
+                             [](float x) { return std::erf(x); },
+                             MusaUnaryOp::Erf);
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Neg, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), Neg)
+    Erf, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    Erf)

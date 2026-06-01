@@ -33,13 +33,11 @@ OrtStatus* Reshape::Compute(Ort::KernelContext& ctx) const {
   }
   if (infer_idx >= 0)
     out_shape[static_cast<size_t>(infer_idx)] = input_size / known;
-  std::vector<uint8_t> in;
-  RETURN_IF_ERROR(CopyToHost(input0, in));
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-  return CopyFromHost(y, in.data(), in.size());
+  return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes());
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Reshape, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), Reshape)
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", TensorTypesWithBool()).AddInputOutputAlias(0, 0)), Reshape)

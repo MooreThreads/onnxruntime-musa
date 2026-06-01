@@ -23,17 +23,55 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
   auto shape0 = in0_info.GetShape();
   int64_t axis = NormalizeAxis(axis_, shape0.size());
   std::vector<std::vector<int64_t>> shapes;
-  std::vector<std::vector<uint8_t>> inputs;
   size_t elem_size = ElementSize(elem_type);
+  if (elem_size == 0) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Concat unsupported dtype");
+  }
   std::vector<int64_t> out_shape = shape0;
   out_shape[static_cast<size_t>(axis)] = 0;
   for (size_t i = 0; i < ctx.GetInputCount(); ++i) {
     auto v = ctx.GetInput(i);
     shapes.push_back(v.GetTensorTypeAndShapeInfo().GetShape());
-    inputs.emplace_back();
-    RETURN_IF_ERROR(CopyToHost(v, inputs.back()));
     out_shape[static_cast<size_t>(axis)] +=
         shapes.back()[static_cast<size_t>(axis)];
+  }
+
+  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+  if (AllGpuInputs(ctx) && IsGpuMemory(y.GetTensorMemoryInfo())) {
+    const int64_t outer =
+        axis == 0
+            ? 1
+            : std::accumulate(out_shape.begin(), out_shape.begin() + axis,
+                              int64_t{1}, std::multiplies<int64_t>());
+    const int64_t inner =
+        axis + 1 == static_cast<int64_t>(out_shape.size())
+            ? 1
+            : std::accumulate(out_shape.begin() + axis + 1, out_shape.end(),
+                              int64_t{1}, std::multiplies<int64_t>());
+    const int64_t output_axis = out_shape[static_cast<size_t>(axis)];
+    auto* dst_base = static_cast<uint8_t*>(y.GetTensorMutableRawData());
+    int64_t dst_axis_offset = 0;
+    for (size_t input_idx = 0; input_idx < shapes.size(); ++input_idx) {
+      Ort::ConstValue v = ctx.GetInput(input_idx);
+      const int64_t input_axis = shapes[input_idx][static_cast<size_t>(axis)];
+      const size_t width_bytes = static_cast<size_t>(input_axis * inner) * elem_size;
+      const size_t src_pitch = width_bytes;
+      const size_t dst_pitch = static_cast<size_t>(output_axis * inner) * elem_size;
+      const auto* src = static_cast<const uint8_t*>(v.GetTensorRawData());
+      auto* dst = dst_base + static_cast<size_t>(dst_axis_offset * inner) * elem_size;
+      RETURN_IF_ERROR(DeviceMemcpy2D(dst, dst_pitch, src, src_pitch,
+                                     width_bytes, static_cast<size_t>(outer)));
+      dst_axis_offset += input_axis;
+    }
+    return nullptr;
+  }
+
+  std::vector<std::vector<uint8_t>> inputs;
+  inputs.reserve(shapes.size());
+  for (size_t i = 0; i < ctx.GetInputCount(); ++i) {
+    inputs.emplace_back();
+    RETURN_IF_ERROR(CopyToHost(ctx.GetInput(i), inputs.back()));
   }
   std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
                            elem_size);
@@ -57,11 +95,10 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
           elem_size);
     }
   }
-  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
   return CopyFromHost(y, out.data(), out.size());
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Concat, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())), Concat)
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", TensorTypesWithBool())), Concat)

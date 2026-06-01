@@ -7,6 +7,7 @@ namespace {
 constexpr int64_t kFloat = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
 constexpr int64_t kInt32 = ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32;
 constexpr int64_t kInt64 = ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
+constexpr int64_t kBool = ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
 
 class Cast : public OpKernelBase<Cast> {
  public:
@@ -26,10 +27,24 @@ OrtStatus* Cast::Compute(Ort::KernelContext& ctx) const {
   auto elem_type = in0_info.GetElementType();
   auto shape0 = in0_info.GetShape();
 
-  std::vector<uint8_t> in;
-  RETURN_IF_ERROR(CopyToHost(input0, in));
   int64_t n = NumElements(shape0);
   Ort::UnownedValue y = ctx.GetOutput(0, shape0);
+  if (to_ == kFloat && IsGpuMemory(input0.GetTensorMemoryInfo()) &&
+      IsGpuMemory(y.GetTensorMemoryInfo())) {
+    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+      return LaunchStatus(LaunchMusaCastInt32ToFloatKernel(
+          input0.GetTensorData<int32_t>(), y.GetTensorMutableData<float>(), n,
+          nullptr));
+    }
+    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+      return LaunchStatus(LaunchMusaCastInt64ToFloatKernel(
+          input0.GetTensorData<int64_t>(), y.GetTensorMutableData<float>(), n,
+          nullptr));
+    }
+  }
+
+  std::vector<uint8_t> in;
+  RETURN_IF_ERROR(CopyToHost(input0, in));
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT && to_ == kInt64) {
     auto x = Span<float>(in);
     std::vector<int64_t> out(static_cast<size_t>(n));
@@ -79,6 +94,50 @@ OrtStatus* Cast::Compute(Ort::KernelContext& ctx) const {
           static_cast<int64_t>(x[static_cast<size_t>(i)]);
     return WriteTyped<int64_t>(y, out);
   }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL && to_ == kFloat) {
+    auto x = Span<uint8_t>(in);
+    std::vector<float> out(static_cast<size_t>(n));
+    for (int64_t i = 0; i < n; ++i)
+      out[static_cast<size_t>(i)] =
+          x[static_cast<size_t>(i)] ? 1.0f : 0.0f;
+    return WriteTyped<float>(y, out);
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL && to_ == kInt64) {
+    auto x = Span<uint8_t>(in);
+    std::vector<int64_t> out(static_cast<size_t>(n));
+    for (int64_t i = 0; i < n; ++i)
+      out[static_cast<size_t>(i)] = x[static_cast<size_t>(i)] ? 1 : 0;
+    return WriteTyped<int64_t>(y, out);
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL && to_ == kInt32) {
+    auto x = Span<uint8_t>(in);
+    std::vector<int32_t> out(static_cast<size_t>(n));
+    for (int64_t i = 0; i < n; ++i)
+      out[static_cast<size_t>(i)] = x[static_cast<size_t>(i)] ? 1 : 0;
+    return WriteTyped<int32_t>(y, out);
+  }
+  if (to_ == kBool) {
+    std::vector<uint8_t> out(static_cast<size_t>(n));
+    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+      auto x = Span<float>(in);
+      for (int64_t i = 0; i < n; ++i)
+        out[static_cast<size_t>(i)] =
+            static_cast<uint8_t>(x[static_cast<size_t>(i)] != 0.0f);
+    } else if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+      auto x = Span<int64_t>(in);
+      for (int64_t i = 0; i < n; ++i)
+        out[static_cast<size_t>(i)] =
+            static_cast<uint8_t>(x[static_cast<size_t>(i)] != 0);
+    } else if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+      auto x = Span<int32_t>(in);
+      for (int64_t i = 0; i < n; ++i)
+        out[static_cast<size_t>(i)] =
+            static_cast<uint8_t>(x[static_cast<size_t>(i)] != 0);
+    } else {
+      return CopyFromHost(y, in.data(), in.size());
+    }
+    return WriteTyped<uint8_t>(y, out);
+  }
   return CopyFromHost(y, in.data(), in.size());
 }
 }  // namespace
@@ -86,6 +145,6 @@ OrtStatus* Cast::Compute(Ort::KernelContext& ctx) const {
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Cast, kOnnxDomain, 13, 17,
     (Ort::KernelDefBuilder()
-         .AddTypeConstraint("T1", AllTensorTypes())
-         .AddTypeConstraint("T2", AllTensorTypes())),
+         .AddTypeConstraint("T1", TensorTypesWithBool())
+         .AddTypeConstraint("T2", TensorTypesWithBool())),
     Cast)

@@ -45,6 +45,29 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
         std::max<int64_t>(0, (end - start + step - 1) / step);
   }
   size_t elem_size = ElementSize(elem_type);
+  if (elem_size == 0)
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Slice unsupported dtype");
+  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+  if (shape0.size() <= kMusaMaxBroadcastRank &&
+      IsGpuMemory(input0.GetTensorMemoryInfo()) &&
+      IsGpuMemory(y.GetTensorMemoryInfo())) {
+    auto in_strides = Strides(shape0);
+    MusaSliceParams params{};
+    params.rank = static_cast<int32_t>(shape0.size());
+    params.total_elements = NumElements(out_shape);
+    for (size_t dim = 0; dim < shape0.size(); ++dim) {
+      params.input_strides[dim] = in_strides[dim];
+      params.output_dims[dim] = out_shape[dim];
+      params.starts[dim] = norm_starts[dim];
+      params.steps[dim] = norm_steps[dim];
+    }
+    return LaunchStatus(LaunchMusaSliceKernel(
+        input0.GetTensorRawData(), y.GetTensorMutableRawData(),
+        static_cast<int32_t>(elem_size), params, nullptr));
+  }
+
+
   std::vector<uint8_t> in;
   RETURN_IF_ERROR(CopyToHost(input0, in));
   std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
@@ -60,14 +83,13 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
         in.data() + static_cast<size_t>(Offset(ic, in_strides)) * elem_size,
         elem_size);
   }
-  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
   return CopyFromHost(y, out.data(), out.size());
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(Slice, kOnnxDomain, 13, 17,
                                   (Ort::KernelDefBuilder()
-                                       .AddTypeConstraint("T", AllTensorTypes())
+                                       .AddTypeConstraint("T", TensorTypesWithBool())
                                        .AddTypeConstraint("Tind",
                                                           IntTensorTypes())),
                                   Slice)

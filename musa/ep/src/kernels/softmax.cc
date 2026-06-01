@@ -28,6 +28,13 @@ OrtStatus* Softmax::Compute(Ort::KernelContext& ctx) const {
   for (int64_t i = 0; i < axis; ++i) outer *= shape0[static_cast<size_t>(i)];
   for (size_t i = static_cast<size_t>(axis) + 1; i < shape0.size(); ++i)
     inner *= shape0[i];
+  Ort::UnownedValue y = ctx.GetOutput(0, shape0);
+  if (IsGpuMemory(input0.GetTensorMemoryInfo()) &&
+      IsGpuMemory(y.GetTensorMemoryInfo())) {
+    return LaunchStatus(LaunchMusaSoftmaxFloatKernel(
+        input0.GetTensorData<float>(), y.GetTensorMutableData<float>(), outer,
+        dim, inner, nullptr));
+  }
   std::vector<float> x = ReadTyped<float>(input0);
   std::vector<float> out(x.size());
   for (int64_t o = 0; o < outer; ++o) {
@@ -47,7 +54,6 @@ OrtStatus* Softmax::Compute(Ort::KernelContext& ctx) const {
         out[static_cast<size_t>((o * dim + d) * inner + in)] /= sum;
     }
   }
-  Ort::UnownedValue y = ctx.GetOutput(0, shape0);
   return WriteTyped<float>(y, out);
 }
 }  // namespace

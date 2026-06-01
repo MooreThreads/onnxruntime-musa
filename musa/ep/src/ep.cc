@@ -75,9 +75,11 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
         "Pow",        "Sum",        "Relu",      "LeakyRelu",   "Sqrt",
         "Reciprocal", "Neg",        "Log",       "Tanh",        "Sigmoid",
         "Softmax",    "Gemm",       "FusedGemm", "FusedMatMul", "Shape",
-        "Cast",       "Reshape",    "Squeeze",   "Unsqueeze",   "Concat",
-        "Transpose",  "Gather",     "Slice",     "Split",       "ReduceProd",
-        "ReduceSum",  "ReduceMean",
+        "Abs",        "Erf",        "Equal",     "Greater",     "Max",
+        "Min",        "Not",        "Or",        "Cast",        "Reshape",
+        "Squeeze",    "Unsqueeze",  "Expand",    "Concat",      "Transpose",
+        "Gather",     "Slice",      "Split",     "ReduceProd",  "ReduceSum",
+        "ReduceMean", "ReduceSumSquare", "BatchNormalization",
     };
 
     for (const auto& node : all_nodes) {

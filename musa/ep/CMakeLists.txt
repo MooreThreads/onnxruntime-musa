@@ -14,9 +14,27 @@ set(MUSA_PLUGIN_SOURCES
 
 file(GLOB MUSA_PLUGIN_KERNEL_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cc")
-list(APPEND MUSA_PLUGIN_SOURCES ${MUSA_PLUGIN_KERNEL_SOURCES})
+list(APPEND MUSA_PLUGIN_SOURCES
+  ${MUSA_PLUGIN_KERNEL_SOURCES}
+  src/kernels/basic_kernels.mu
+  src/kernels/gemm_post_kernels.mu
+  src/kernels/matmul_batched_kernels.mu
+)
 
-add_library(${MUSA_PLUGIN_TARGET} SHARED ${MUSA_PLUGIN_SOURCES})
+list(APPEND CMAKE_MODULE_PATH "${MUSA_HOME}/cmake")
+set(MUSA_TOOLKIT_ROOT_DIR "${MUSA_HOME}")
+find_package(MUSA REQUIRED)
+list(APPEND MUSA_MCC_FLAGS -std=c++17)
+
+set_source_files_properties(
+  src/kernels/basic_kernels.mu
+  src/kernels/gemm_post_kernels.mu
+  src/kernels/matmul_batched_kernels.mu
+  PROPERTIES
+    MUSA_SOURCE_PROPERTY_FORMAT OBJ
+)
+
+musa_add_library(${MUSA_PLUGIN_TARGET} SHARED ${MUSA_PLUGIN_SOURCES})
 
 target_include_directories(${MUSA_PLUGIN_TARGET}
   PRIVATE
@@ -25,10 +43,11 @@ target_include_directories(${MUSA_PLUGIN_TARGET}
     ${ONNXRUNTIME_INCLUDE_DIR}
     ${ONNXRUNTIME_INCLUDE_DIR}/core/session
     ${MUSA_HOME}/include
+    ${MUSA_INCLUDE_DIRS}
 )
 
 target_link_directories(${MUSA_PLUGIN_TARGET} PRIVATE ${MUSA_HOME}/lib)
-target_link_libraries(${MUSA_PLUGIN_TARGET} PRIVATE musart mublas)
+target_link_libraries(${MUSA_PLUGIN_TARGET} musart mublas mudnncxx mudnn)
 
 target_compile_definitions(${MUSA_PLUGIN_TARGET} PRIVATE
   ONNXRUNTIME_MUSA_VERSION="${ONNXRUNTIME_MUSA_VERSION}"

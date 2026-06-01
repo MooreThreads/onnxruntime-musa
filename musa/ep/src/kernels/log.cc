@@ -17,7 +17,8 @@ OrtStatus* Log::Compute(Ort::KernelContext& ctx) const {
                                       "unsupported unary op dtype");
   }
   return UnaryCompute<float>(ctx, info.GetShape(),
-                             [](float x) { return std::log(x); });
+                             [](float x) { return std::log(x); },
+                             MusaUnaryOp::Log);
 }
 }  // namespace
 

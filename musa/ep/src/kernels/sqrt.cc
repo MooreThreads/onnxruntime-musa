@@ -17,7 +17,8 @@ OrtStatus* Sqrt::Compute(Ort::KernelContext& ctx) const {
                                       "unsupported unary op dtype");
   }
   return UnaryCompute<float>(ctx, info.GetShape(),
-                             [](float x) { return std::sqrt(x); });
+                             [](float x) { return std::sqrt(x); },
+                             MusaUnaryOp::Sqrt);
 }
 }  // namespace
 

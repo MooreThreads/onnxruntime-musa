@@ -10,7 +10,6 @@
 #include <mutex>
 #include <span>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "ep_factory.h"
@@ -68,29 +67,10 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
       return nullptr;  // No nodes to process
     }
 
-    // Collect candidate nodes that this EP may support.
-    std::vector<Ort::ConstNode> candidate_nodes;
-    static const std::unordered_set<std::string> supported_ops = {
-        "MatMul",     "Add",        "Sub",       "Mul",         "Div",
-        "Pow",        "Sum",        "Relu",      "LeakyRelu",   "Sqrt",
-        "Reciprocal", "Neg",        "Log",       "Tanh",        "Sigmoid",
-        "Softmax",    "Gemm",       "FusedGemm", "FusedMatMul", "Shape",
-        "Abs",        "Erf",        "Equal",     "Greater",     "Max",
-        "Min",        "Not",        "Or",        "Cast",        "Reshape",
-        "Squeeze",    "Unsqueeze",  "Expand",    "Concat",      "Transpose",
-        "Gather",     "Slice",      "Split",     "ReduceProd",  "ReduceSum",
-        "ReduceMean", "ReduceSumSquare", "BatchNormalization",
-    };
-
+    // Mark nodes as supported based on the registered kernel registry.
+    // Any op registered in ep_kernel_registration.cc is automatically picked
+    // up.
     for (const auto& node : all_nodes) {
-      std::string op_type = node.GetOperatorType();
-      if (supported_ops.count(op_type) != 0) {
-        candidate_nodes.push_back(node);
-      }
-    }
-
-    // Mark candidate nodes as supported if we have a registered kernel.
-    for (const auto& node : candidate_nodes) {
       const OrtKernelDef* kernel_def = nullptr;
       RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_LookUpKernel(
           graph_support_info, node, &kernel_def));

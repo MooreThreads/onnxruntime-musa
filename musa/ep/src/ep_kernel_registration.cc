@@ -91,6 +91,44 @@ static const BuildKernelCreateInfoFn build_kernel_create_info_funcs[] = {
         kOnnxDomain, 13, 17, ReduceSumSquare)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 15, 17, BatchNormalization)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 7, 17, And)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 18, 18, BitwiseAnd)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 9, 17, ConstantOfShape)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 11, 17, Conv)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 12, 17, Einsum)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Exp)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 12, 17, GreaterOrEqual)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, IsNaN)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Less)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, NonZero)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Pad)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 1, 17, RandomUniform)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 1, 17, RandomUniformLike)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, ReduceMax)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 11, 17, Round)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 17, Sign)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 1, 17, Softplus)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 6, 17, Tile)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 9, 17, Where)>,
 };
 
 size_t GetNumKernels() { return std::size(build_kernel_create_info_funcs); }

@@ -10,6 +10,7 @@ set(MUSA_PLUGIN_SOURCES
   src/ep_kernel_registration.cc
   src/ep_data_transfer.cc
   src/ep_profiling.cc
+  src/ep_stream.cc
 )
 
 file(GLOB MUSA_PLUGIN_KERNEL_SOURCES CONFIGURE_DEPENDS
@@ -20,6 +21,10 @@ list(APPEND MUSA_PLUGIN_SOURCES
   src/kernels/gemm_post_kernels.mu
   src/kernels/matmul_batched_kernels.mu
 )
+
+file(GLOB MUSA_PLUGIN_FUSION_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/fusion/*.cc")
+list(APPEND MUSA_PLUGIN_SOURCES ${MUSA_PLUGIN_FUSION_SOURCES})
 
 list(APPEND CMAKE_MODULE_PATH "${MUSA_HOME}/cmake")
 set(MUSA_TOOLKIT_ROOT_DIR "${MUSA_HOME}")

@@ -23,5 +23,7 @@ class ReduceSum : public OpKernelBase<ReduceSum> {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     ReduceSum, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())),
+    (Ort::KernelDefBuilder()
+        .AddTypeConstraint("T", AllTensorTypes())
+        .SetInputMemType(1, OrtMemTypeCPUInput)),
     ReduceSum)

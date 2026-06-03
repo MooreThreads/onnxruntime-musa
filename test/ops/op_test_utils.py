@@ -104,6 +104,42 @@ def build_model(
     return model.SerializeToString()
 
 
+def build_graph_model(
+    nodes: Sequence[onnx.NodeProto],
+    inputs: Mapping[str, np.ndarray],
+    outputs: Sequence[tuple[str, int]],
+    *,
+    initializers: Sequence[onnx.TensorProto] | None = None,
+    opset: int = 17,
+    name: str = "graph",
+) -> bytes:
+    """Serialize a small multi-node graph model for fusion pattern tests."""
+    input_vis = [
+        helper.make_tensor_value_info(
+            input_name,
+            helper.np_dtype_to_tensor_dtype(input_value.dtype),
+            list(input_value.shape),
+        )
+        for input_name, input_value in inputs.items()
+    ]
+    output_vis = [
+        helper.make_tensor_value_info(output_name, elem_type, None)
+        for output_name, elem_type in outputs
+    ]
+
+    graph = helper.make_graph(
+        list(nodes),
+        name,
+        input_vis,
+        output_vis,
+        initializer=list(initializers or []),
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", opset)])
+    # Keep IR version within what ORT 1.26 accepts.
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
+
+
 def _make_session(model_bytes: bytes, use_musa: bool) -> ort.InferenceSession:
     if use_musa:
         devices = musa_devices()
@@ -168,11 +204,44 @@ def run_and_compare(
     return musa_outputs
 
 
+def run_model_and_compare(
+    model_bytes: bytes,
+    feeds: Mapping[str, np.ndarray],
+    *,
+    rtol: float = 1e-3,
+    atol: float = 1e-4,
+) -> list[np.ndarray]:
+    """Run a full ONNX model on CPU and MUSA, then compare all outputs."""
+    cpu_outputs = run(model_bytes, feeds, use_musa=False)
+    musa_outputs = run(model_bytes, feeds, use_musa=True)
+
+    assert len(cpu_outputs) == len(
+        musa_outputs
+    ), f"model output count mismatch cpu={len(cpu_outputs)} musa={len(musa_outputs)}"
+    for i, (cpu_output, musa_output) in enumerate(zip(cpu_outputs, musa_outputs)):
+        assert (
+            cpu_output.shape == musa_output.shape
+        ), f"output[{i}] shape mismatch cpu={cpu_output.shape} musa={musa_output.shape}"
+        assert (
+            cpu_output.dtype == musa_output.dtype
+        ), f"output[{i}] dtype mismatch cpu={cpu_output.dtype} musa={musa_output.dtype}"
+        np.testing.assert_allclose(
+            musa_output,
+            cpu_output,
+            rtol=rtol,
+            atol=atol,
+            err_msg=f"output[{i}] CPU vs MUSA mismatch",
+        )
+    return musa_outputs
+
+
 __all__ = [
     "TensorProto",
+    "build_graph_model",
     "build_model",
     "musa_available",
     "musa_devices",
     "run",
     "run_and_compare",
+    "run_model_and_compare",
 ]

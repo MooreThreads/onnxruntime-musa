@@ -49,6 +49,57 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Slice unsupported dtype");
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+  const bool full_slice =
+      out_shape == shape0 &&
+      std::all_of(norm_starts.begin(), norm_starts.end(),
+                  [](int64_t start) { return start == 0; }) &&
+      std::all_of(norm_steps.begin(), norm_steps.end(),
+                  [](int64_t step) { return step == 1; });
+  if (full_slice) {
+    const bool src_gpu = IsGpuMemory(input0.GetTensorMemoryInfo());
+    const bool dst_gpu = IsGpuMemory(y.GetTensorMemoryInfo());
+    if (!src_gpu && dst_gpu) {
+      return LaunchStatus(musaMemcpyAsync(
+          y.GetTensorMutableRawData(), input0.GetTensorRawData(),
+          input0.GetTensorSizeInBytes(), musaMemcpyHostToDevice, nullptr));
+    }
+    return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes());
+  }
+
+  if (shape0.size() == 2 && norm_steps[0] == 1 && norm_steps[1] == 1) {
+    const int64_t width_elems = out_shape[1];
+    const int64_t height = out_shape[0];
+    if (width_elems > 0 && height > 0) {
+      const auto* src_base =
+          static_cast<const uint8_t*>(input0.GetTensorRawData());
+      auto* dst_base = static_cast<uint8_t*>(y.GetTensorMutableRawData());
+      const size_t src_pitch = static_cast<size_t>(shape0[1]) * elem_size;
+      const size_t dst_pitch = static_cast<size_t>(width_elems) * elem_size;
+      const size_t width_bytes = static_cast<size_t>(width_elems) * elem_size;
+      const size_t src_offset =
+          static_cast<size_t>(norm_starts[0] * shape0[1] + norm_starts[1]) *
+          elem_size;
+      const bool src_gpu = IsGpuMemory(input0.GetTensorMemoryInfo());
+      const bool dst_gpu = IsGpuMemory(y.GetTensorMemoryInfo());
+      if (!src_gpu && dst_gpu) {
+        musaError_t status = musaMemcpy2DAsync(
+            dst_base, dst_pitch, src_base + src_offset, src_pitch,
+            width_bytes, static_cast<size_t>(height), musaMemcpyHostToDevice,
+            nullptr);
+        return LaunchStatus(status);
+      }
+      if (!src_gpu && !dst_gpu) {
+        for (int64_t row = 0; row < height; ++row) {
+          std::memcpy(dst_base + static_cast<size_t>(row) * dst_pitch,
+                      src_base + src_offset +
+                          static_cast<size_t>(row) * src_pitch,
+                      width_bytes);
+        }
+        return nullptr;
+      }
+    }
+  }
+
   if (shape0.size() <= kMusaMaxBroadcastRank &&
       IsGpuMemory(input0.GetTensorMemoryInfo()) &&
       IsGpuMemory(y.GetTensorMemoryInfo())) {
@@ -91,5 +142,9 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(Slice, kOnnxDomain, 13, 17,
                                   (Ort::KernelDefBuilder()
                                        .AddTypeConstraint("T", TensorTypesWithBool())
                                        .AddTypeConstraint("Tind",
-                                                          IntTensorTypes())),
+                                                          IntTensorTypes())
+                                       .SetInputMemType(1, OrtMemTypeCPUInput)
+                                       .SetInputMemType(2, OrtMemTypeCPUInput)
+                                       .SetInputMemType(3, OrtMemTypeCPUInput)
+                                       .SetInputMemType(4, OrtMemTypeCPUInput)),
                                   Slice)

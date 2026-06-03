@@ -2,6 +2,15 @@
 
 #include "utils.h"
 
+#include <cstdint>
+#include <vector>
+
+OrtStatus* ComputeMusaMatMulDevice(const float* a_data, const float* b_data,
+                                   float* y_data,
+                                   const std::vector<int64_t>& a_shape,
+                                   const std::vector<int64_t>& b_shape,
+                                   const std::vector<int64_t>& y_shape);
+
 struct MatMul {
   struct PrivateTag {};
 

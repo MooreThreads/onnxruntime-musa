@@ -2,8 +2,80 @@
 // Licensed under the MIT License.
 
 #include "common/op_kernel_common.h"
+#include "common/blas_utils.h"
 
 namespace {
+::musa::dnn::Tensor::Format MudnnFormatForShape(
+    const std::vector<int64_t>& shape) {
+  if (shape.empty() || shape.size() == 1 || shape.size() == 3) {
+    return ::musa::dnn::Tensor::Format::NCW;
+  }
+  if (shape.size() == 4) {
+    return ::musa::dnn::Tensor::Format::NCHW;
+  }
+  if (shape.size() == 5) {
+    return ::musa::dnn::Tensor::Format::NCDHW;
+  }
+  return ::musa::dnn::Tensor::Format::NCHW;
+}
+
+bool SetupMudnnFloatTensor(::musa::dnn::Tensor& tensor, const void* data,
+                           const std::vector<int64_t>& shape) {
+  if (tensor.SetType(::musa::dnn::Tensor::Type::FLOAT) !=
+      ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+  if (tensor.SetAddr(data) != ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+  if (tensor.SetFormat(MudnnFormatForShape(shape)) !=
+      ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+
+  std::vector<int64_t> dims = shape.empty() ? std::vector<int64_t>{1} : shape;
+  std::vector<int64_t> strides =
+      shape.empty() ? std::vector<int64_t>{1} : Strides(shape);
+  return tensor.SetNdInfo(static_cast<int>(dims.size()), dims.data(),
+                          strides.data()) == ::musa::dnn::Status::SUCCESS;
+}
+
+bool TryMudnnConcatFloat(Ort::KernelContext& ctx,
+                         const std::vector<std::vector<int64_t>>& shapes,
+                         const std::vector<int64_t>& out_shape, int64_t axis,
+                         Ort::UnownedValue y) {
+  ::musa::dnn::Handle* handle = nullptr;
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  if (handle_status != nullptr) {
+    Ort::GetApi().ReleaseStatus(handle_status);
+    return false;
+  }
+
+  std::vector<::musa::dnn::Tensor> input_tensors(shapes.size());
+  for (size_t i = 0; i < shapes.size(); ++i) {
+    if (!SetupMudnnFloatTensor(input_tensors[i],
+                               ctx.GetInput(i).GetTensorData<float>(),
+                               shapes[i])) {
+      return false;
+    }
+  }
+
+  ::musa::dnn::Tensor output_tensor;
+  if (!SetupMudnnFloatTensor(output_tensor, y.GetTensorMutableData<float>(),
+                             out_shape)) {
+    return false;
+  }
+
+  ::musa::dnn::Concat concat_op;
+  if (concat_op.SetAxis(static_cast<int>(axis)) !=
+      ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+  return concat_op.Run(*handle, output_tensor,
+                       static_cast<int>(input_tensors.size()),
+                       input_tensors.data()) == ::musa::dnn::Status::SUCCESS;
+}
+
 class Concat : public OpKernelBase<Concat> {
  public:
   Concat(const OrtKernelInfo* info, void* /*state*/) {
@@ -39,6 +111,11 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
 
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
   if (AllGpuInputs(ctx) && IsGpuMemory(y.GetTensorMemoryInfo())) {
+    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+        TryMudnnConcatFloat(ctx, shapes, out_shape, axis, y)) {
+      return nullptr;
+    }
+
     const int64_t outer =
         axis == 0
             ? 1

@@ -49,5 +49,7 @@ OrtStatus* Expand::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Expand, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", TensorTypesWithBool())),
+    (Ort::KernelDefBuilder()
+        .AddTypeConstraint("T", TensorTypesWithBool())
+        .SetInputMemType(1, OrtMemTypeCPUInput)),
     Expand)

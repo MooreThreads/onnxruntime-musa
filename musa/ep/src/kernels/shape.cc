@@ -20,4 +20,6 @@ OrtStatus* Shape::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Shape, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", TensorTypesWithBool())), Shape)
+    (Ort::KernelDefBuilder()
+        .AddTypeConstraint("T", TensorTypesWithBool())
+        .SetOutputMemType(0, OrtMemTypeCPUOutput)), Shape)

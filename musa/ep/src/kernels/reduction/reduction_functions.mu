@@ -35,9 +35,39 @@ ReduceFromAccum<__mt_bfloat16, float>(float value) {
 }
 
 template <typename AccT>
+__device__ __forceinline__ AccT ReduceLowestValue() {
+  return static_cast<AccT>(0);
+}
+
+template <>
+__device__ __forceinline__ float ReduceLowestValue<float>() {
+  return -INFINITY;
+}
+
+template <>
+__device__ __forceinline__ double ReduceLowestValue<double>() {
+  return -INFINITY;
+}
+
+template <>
+__device__ __forceinline__ int32_t ReduceLowestValue<int32_t>() {
+  return INT32_MIN;
+}
+
+template <>
+__device__ __forceinline__ int64_t ReduceLowestValue<int64_t>() {
+  return INT64_MIN;
+}
+
+template <typename AccT>
 __device__ __forceinline__ AccT ReduceInitValue(MusaReduceOp op) {
-  return op == MusaReduceOp::Prod ? static_cast<AccT>(1)
-                                  : static_cast<AccT>(0);
+  if (op == MusaReduceOp::Prod) {
+    return static_cast<AccT>(1);
+  }
+  if (op == MusaReduceOp::Max) {
+    return ReduceLowestValue<AccT>();
+  }
+  return static_cast<AccT>(0);
 }
 
 template <typename AccT>
@@ -49,6 +79,9 @@ __device__ __forceinline__ AccT ReduceUpdateValue(AccT acc, AccT value,
   if (op == MusaReduceOp::SumSquare) {
     return acc + value * value;
   }
+  if (op == MusaReduceOp::Max) {
+    return acc > value ? acc : value;
+  }
   return acc + value;
 }
 
@@ -57,6 +90,9 @@ __device__ __forceinline__ AccT ReduceCombineValue(AccT lhs, AccT rhs,
                                                    MusaReduceOp op) {
   if (op == MusaReduceOp::Prod) {
     return lhs * rhs;
+  }
+  if (op == MusaReduceOp::Max) {
+    return lhs > rhs ? lhs : rhs;
   }
   return lhs + rhs;
 }

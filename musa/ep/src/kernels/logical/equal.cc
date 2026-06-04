@@ -58,6 +58,12 @@ class Equal : public OpKernelBase<Equal> {
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
 };
 
+class EqualString : public OpKernelBase<EqualString> {
+ public:
+  EqualString(const OrtKernelInfo* /*info*/, void* /*state*/) {}
+  OrtStatus* Compute(Ort::KernelContext& ctx) const;
+};
+
 OrtStatus* Equal::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto elem_type = info.GetElementType();
@@ -69,9 +75,55 @@ OrtStatus* Equal::Compute(Ort::KernelContext& ctx) const {
   return CompareDeviceCompute(ctx, shape0, shape1, elem_type,
                               MusaCompareOp::Equal, "Equal");
 }
+
+OrtStatus* EqualString::Compute(Ort::KernelContext& ctx) const {
+  Ort::ConstValue lhs = ctx.GetInput(0);
+  Ort::ConstValue rhs = ctx.GetInput(1);
+  auto lhs_info = lhs.GetTensorTypeAndShapeInfo();
+  auto rhs_info = rhs.GetTensorTypeAndShapeInfo();
+  if (lhs_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING ||
+      rhs_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "EqualString requires string inputs");
+  }
+
+  const std::vector<int64_t> lhs_shape = lhs_info.GetShape();
+  const std::vector<int64_t> rhs_shape = rhs_info.GetShape();
+  const std::vector<int64_t> out_shape = BroadcastShape(lhs_shape, rhs_shape);
+  Ort::UnownedValue output = ctx.GetOutput(0, out_shape);
+  if (IsGpuMemory(lhs.GetTensorMemoryInfo()) ||
+      IsGpuMemory(rhs.GetTensorMemoryInfo()) ||
+      !IsGpuMemory(output.GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "EqualString requires CPU string inputs and MUSA bool output");
+  }
+
+  const int64_t total = NumElements(out_shape);
+  const std::vector<int64_t> lhs_strides = Strides(lhs_shape);
+  const std::vector<int64_t> rhs_strides = Strides(rhs_shape);
+  std::vector<uint8_t> out(static_cast<size_t>(total));
+  for (int64_t i = 0; i < total; ++i) {
+    const std::vector<int64_t> coord = Coordinates(i, out_shape);
+    const int64_t lhs_offset = BroadcastOffset(coord, lhs_shape, lhs_strides);
+    const int64_t rhs_offset = BroadcastOffset(coord, rhs_shape, rhs_strides);
+    out[static_cast<size_t>(i)] =
+        lhs.GetStringTensorElement(static_cast<size_t>(lhs_offset)) ==
+        rhs.GetStringTensorElement(static_cast<size_t>(rhs_offset));
+  }
+  return CopyFromHost(output, out.data(), out.size());
+}
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Equal, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", EqualTensorTypes())),
     Equal)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Equal, kOnnxDomain, 19, 19,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", StringTensorTypes())
+         .SetInputMemType(0, OrtMemTypeCPUInput)
+         .SetInputMemType(1, OrtMemTypeCPUInput)),
+    EqualString)

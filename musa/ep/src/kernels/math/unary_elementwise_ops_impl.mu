@@ -25,6 +25,16 @@ __device__ __forceinline__ float UnaryValue(float x, MusaUnaryOp op, float alpha
       return fabsf(x);
     case MusaUnaryOp::Erf:
       return erff(x);
+    case MusaUnaryOp::Exp:
+      return expf(x);
+    case MusaUnaryOp::Sign:
+      return (x > 0.0f) - (x < 0.0f);
+    case MusaUnaryOp::IsNaN:
+      return isnan(x) ? 1.0f : 0.0f;
+    case MusaUnaryOp::Round:
+      return nearbyintf(x);
+    case MusaUnaryOp::Softplus:
+      return log1pf(expf(-fabsf(x))) + fmaxf(x, 0.0f);
   }
   return x;
 }
@@ -55,6 +65,19 @@ __device__ __forceinline__ T UnaryValueTyped(T x, MusaUnaryOp op, float alpha) {
       return x < static_cast<T>(0) ? static_cast<T>(-x) : x;
     case MusaUnaryOp::Erf:
       return static_cast<T>(erf(static_cast<double>(x)));
+    case MusaUnaryOp::Exp:
+      return static_cast<T>(exp(static_cast<double>(x)));
+    case MusaUnaryOp::Sign:
+      return static_cast<T>((x > static_cast<T>(0)) -
+                            (x < static_cast<T>(0)));
+    case MusaUnaryOp::IsNaN:
+      return static_cast<T>(isnan(static_cast<double>(x)) ? 1 : 0);
+    case MusaUnaryOp::Round:
+      return static_cast<T>(nearbyint(static_cast<double>(x)));
+    case MusaUnaryOp::Softplus: {
+      const double value = static_cast<double>(x);
+      return static_cast<T>(log1p(exp(-fabs(value))) + fmax(value, 0.0));
+    }
   }
   return x;
 }
@@ -95,6 +118,17 @@ __global__ void UnaryFloatLikeKernel(const T* input,
   for (int64_t index = thread_id; index < count; index += total_threads) {
     const float value = MusaScalarToFloat(input[index]);
     output[index] = MusaScalarFromFloat<T>(UnaryValue(value, op, alpha));
+  }
+}
+
+template <typename T>
+__global__ void IsNaNKernel(const T* input,
+                            uint8_t* output,
+                            int64_t count) {
+  const int64_t thread_id = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t total_threads = static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t index = thread_id; index < count; index += total_threads) {
+    output[index] = static_cast<uint8_t>(isnan(MusaScalarToDouble(input[index])));
   }
 }
 
@@ -179,4 +213,36 @@ musaError_t LaunchMusaUnaryFloatKernel(const float* input,
                                        musaStream_t stream) {
   return LaunchMusaUnaryKernel(input, output, count, op, alpha,
                                MusaElementType::Float, stream);
+}
+
+template <typename T>
+musaError_t LaunchIsNaNTyped(const void* input,
+                             uint8_t* output,
+                             int64_t count,
+                             musaStream_t stream) {
+  if (count == 0) {
+    return musaSuccess;
+  }
+  IsNaNKernel<T><<<BlocksForCount(count), kThreadsPerBlock, 0, stream>>>(
+      reinterpret_cast<const T*>(input), output, count);
+  return musaGetLastError();
+}
+
+musaError_t LaunchMusaIsNaNKernel(const void* input,
+                                  uint8_t* output,
+                                  int64_t count,
+                                  MusaElementType elem_type,
+                                  musaStream_t stream) {
+  switch (elem_type) {
+    case MusaElementType::Float:
+      return LaunchIsNaNTyped<float>(input, output, count, stream);
+    case MusaElementType::Double:
+      return LaunchIsNaNTyped<double>(input, output, count, stream);
+    case MusaElementType::Float16:
+      return LaunchIsNaNTyped<__half>(input, output, count, stream);
+    case MusaElementType::BFloat16:
+      return LaunchIsNaNTyped<__mt_bfloat16>(input, output, count, stream);
+    default:
+      return musaErrorNotSupported;
+  }
 }

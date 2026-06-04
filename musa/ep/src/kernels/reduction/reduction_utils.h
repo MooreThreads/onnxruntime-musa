@@ -6,12 +6,13 @@
 #include "reduction/reduction_functions.h"
 #include "shared_inc/op_kernel_common.h"
 
-enum class ReduceMode { kProd, kSum, kMean, kSumSquare };
+enum class ReduceMode { kProd, kSum, kMean, kSumSquare, kMax };
 
 inline MusaReduceOp ToMusaReduceOp(ReduceMode mode) {
   if (mode == ReduceMode::kSum) return MusaReduceOp::Sum;
   if (mode == ReduceMode::kMean) return MusaReduceOp::Mean;
   if (mode == ReduceMode::kSumSquare) return MusaReduceOp::SumSquare;
+  if (mode == ReduceMode::kMax) return MusaReduceOp::Max;
   return MusaReduceOp::Prod;
 }
 

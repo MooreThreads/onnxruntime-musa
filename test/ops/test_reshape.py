@@ -3,8 +3,9 @@
 """End-to-end CPU-vs-MUSA test for the Reshape operator."""
 
 import numpy as np
+from onnx import helper
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import TensorProto, run, run_and_compare
 
 
 def test_reshape_float():
@@ -78,3 +79,23 @@ def test_reshape_float16():
         rtol=2e-2,
         atol=2e-2,
     )
+
+
+def test_reshape_string_opset19_cpu_memory_control_path():
+    x = np.array([["a", "b"]], dtype=object)
+    shape = helper.make_tensor("shape", TensorProto.INT64, [1], [2])
+    node = helper.make_node("Reshape", ["X", "shape"], ["Y"])
+    graph = helper.make_graph(
+        [node],
+        "reshape_string_control_path",
+        [helper.make_tensor_value_info("X", TensorProto.STRING, [1, 2])],
+        [helper.make_tensor_value_info("Y", TensorProto.STRING, [2])],
+        initializer=[shape],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 19)])
+    model.ir_version = min(model.ir_version, 10)
+    model_bytes = model.SerializeToString()
+
+    (expected,) = run(model_bytes, {"X": x}, use_musa=False)
+    (actual,) = run(model_bytes, {"X": x}, use_musa=True)
+    np.testing.assert_array_equal(actual, expected)

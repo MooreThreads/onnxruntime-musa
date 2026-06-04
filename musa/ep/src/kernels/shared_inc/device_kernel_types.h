@@ -27,11 +27,18 @@ enum class MusaUnaryOp : int32_t {
   Sigmoid = 7,
   Abs = 8,
   Erf = 9,
+  Exp = 10,
+  Sign = 11,
+  IsNaN = 12,
+  Round = 13,
+  Softplus = 14,
 };
 
 enum class MusaCompareOp : int32_t {
   Equal = 0,
   Greater = 1,
+  Less = 2,
+  GreaterOrEqual = 3,
 };
 
 enum class MusaElementType : int32_t {
@@ -56,6 +63,7 @@ enum class MusaReduceOp : int32_t {
   Sum = 1,
   Mean = 2,
   SumSquare = 3,
+  Max = 4,
 };
 
 struct MusaBatchNormParams {
@@ -100,4 +108,56 @@ struct MusaTransposeParams {
   int64_t input_strides[kMusaMaxBroadcastRank];
   int64_t output_dims[kMusaMaxBroadcastRank];
   int32_t perm[kMusaMaxBroadcastRank];
+};
+
+struct MusaTileParams {
+  int32_t rank;
+  int64_t total_elements;
+  int64_t input_dims[kMusaMaxBroadcastRank];
+  int64_t input_strides[kMusaMaxBroadcastRank];
+  int64_t output_dims[kMusaMaxBroadcastRank];
+};
+
+struct MusaWhereParams {
+  int32_t rank;
+  int64_t total_elements;
+  int64_t output_strides[kMusaMaxBroadcastRank];
+  int64_t condition_strides[kMusaMaxBroadcastRank];
+  int64_t x_strides[kMusaMaxBroadcastRank];
+  int64_t y_strides[kMusaMaxBroadcastRank];
+};
+
+struct MusaPadParams {
+  int32_t rank;
+  int64_t total_elements;
+  int64_t input_dims[kMusaMaxBroadcastRank];
+  int64_t input_strides[kMusaMaxBroadcastRank];
+  int64_t output_dims[kMusaMaxBroadcastRank];
+  int64_t pads_begin[kMusaMaxBroadcastRank];
+};
+
+struct MusaNonZeroParams {
+  int32_t rank;
+  int64_t total_elements;
+  int64_t nonzero_elements;
+  int64_t input_strides[kMusaMaxBroadcastRank];
+};
+
+struct MusaConv2DParams {
+  int64_t n;
+  int64_t c;
+  int64_t h;
+  int64_t w;
+  int64_t m;
+  int64_t kernel_h;
+  int64_t kernel_w;
+  int64_t out_h;
+  int64_t out_w;
+  int64_t pad_h;
+  int64_t pad_w;
+  int64_t stride_h;
+  int64_t stride_w;
+  int64_t dilation_h;
+  int64_t dilation_w;
+  int64_t total_elements;
 };

@@ -230,6 +230,47 @@ inline std::vector<const OrtDataType*> NegTensorTypes() {
   };
 }
 
+inline std::vector<const OrtDataType*> SignTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+  };
+}
+
+inline std::vector<const OrtDataType*> BitwiseIntegerTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+  };
+}
+
+inline std::vector<const OrtDataType*> ReduceMaxTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+  };
+}
+
 inline std::vector<const OrtDataType*> CompareTensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
@@ -257,6 +298,15 @@ inline std::vector<const OrtDataType*> EqualTensorTypes() {
   };
 }
 
+inline std::vector<const OrtDataType*> FloatBoolTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+  };
+}
+
 inline std::vector<const OrtDataType*> IntTensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
@@ -266,6 +316,21 @@ inline std::vector<const OrtDataType*> IntTensorTypes() {
 
 inline std::vector<const OrtDataType*> BoolTensorTypes() {
   return {GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL)};
+}
+
+inline std::vector<const OrtDataType*> StringTensorTypes() {
+  return {GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING)};
+}
+
+inline std::vector<const OrtDataType*> NonZeroTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+  };
 }
 
 // ---------------------------------------------------------------------------

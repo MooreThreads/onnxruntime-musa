@@ -4,7 +4,14 @@
 
 import numpy as np
 
-from op_test_utils import TensorProto, run_and_compare
+from onnx import helper
+
+from op_test_utils import (
+    TensorProto,
+    build_graph_model,
+    run_and_compare,
+    run_model_and_compare,
+)
 
 
 def test_shape_float():
@@ -30,3 +37,20 @@ def test_shape_int32_scalar():
 def test_shape_uint8():
     x = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
     run_and_compare("Shape", inputs={"X": x}, outputs=[("Y", TensorProto.INT64)])
+
+
+def test_shape_device_output_feeds_cast_gather_indices():
+    x = np.zeros((2, 3, 4), dtype=np.float32)
+    data = np.arange(10, dtype=np.float32)
+    nodes = [
+        helper.make_node("Shape", ["X"], ["shape"]),
+        helper.make_node("Cast", ["shape"], ["indices"], to=TensorProto.INT32),
+        helper.make_node("Gather", ["data", "indices"], ["Y"], axis=0),
+    ]
+    model = build_graph_model(
+        nodes,
+        inputs={"X": x, "data": data},
+        outputs=[("Y", TensorProto.FLOAT)],
+        name="shape_cast_gather_indices",
+    )
+    run_model_and_compare(model, {"X": x, "data": data})

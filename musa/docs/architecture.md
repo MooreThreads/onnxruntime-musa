@@ -29,8 +29,13 @@ musa/
       plugin_ep_utils.h      ABI helper macros (status returns, exception bridge)
       kernels/
         utils.h              KernelDefBuilder helpers + macro that emits a kernel class
-        basic_ops.{h,cc}     Elementwise, reductions, shape ops, activations
-        matmul.{h,cc}        MatMul kernel backed by mublasSgemm
+        math/                Elementwise math, Gemm/MatMul, Softmax and math device impls
+        activation/          Activation-style unary operator entry points
+        tensor/              Cast/Gather/Slice/Transpose/shape transform entry points
+        logical/             Bool/logical operator entry points and device impls
+        reduction/           Reduction entry points, helpers and device impls
+        nn/                  Neural-network kernels such as BatchNormalization
+        shared_inc/          Shared kernel/device helper types
       graph/
         README.md            Reserved for graph-level fusion/capability logic (no sources yet)
       runtime/
@@ -64,7 +69,8 @@ Python:
                               kernel registry  (ep_kernel_registration.cc)
                                   |
                                   v
-                              kernels/{basic_ops, matmul}
+                              kernels/{math, activation, tensor, logical,
+                                       reduction, nn}
                                   |
                                   v
                               musart / mublas (MUSA 5.1.0)

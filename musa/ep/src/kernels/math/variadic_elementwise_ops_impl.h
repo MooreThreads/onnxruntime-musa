@@ -1,0 +1,10 @@
+#pragma once
+
+#include "shared_inc/device_kernel_types.h"
+
+musaError_t LaunchMusaVariadicSumKernel(const void* lhs,
+                                        const void* rhs,
+                                        void* output,
+                                        MusaBroadcastParams params,
+                                        MusaElementType elem_type,
+                                        musaStream_t stream);

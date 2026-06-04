@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-#include "kernels/common/blas_utils.h"
+#include "kernels/shared_inc/blas_utils.h"
 
 /*
  * Linear Fusion Patterns

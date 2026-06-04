@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate musa/docs/supported_ops.md from the kernel registration macros.
 
-Scans `musa/ep/src/kernels/*.cc` for `ONNX_OPERATOR_VERSIONED_KERNEL_EX(name,
+Scans `musa/ep/src/kernels/**/*.cc` for `ONNX_OPERATOR_VERSIONED_KERNEL_EX(name,
 domain, startver, endver, builder, kernel_class)` and extracts every
 `AddTypeConstraint("X", <set>)` from the builder expression. Type-set helper
 functions like `FloatTensorTypes()` / `AllTensorTypes()` are resolved by
@@ -66,10 +66,11 @@ _DTYPE_TOKEN_RE = re.compile(r"ONNX_TENSOR_ELEMENT_DATA_TYPE_(\w+)")
 
 
 def _read_sources() -> list[tuple[Path, str]]:
-    # Kernel implementations live in `*.cc`; shared type-constraint helpers
-    # (AllTensorTypes / FloatTensorTypes / ...) live in `common/*.h`. Both are
-    # scanned: the headers populate the helper table, the sources the macros.
-    paths = sorted(KERNELS_DIR.glob("*.cc")) + sorted(KERNELS_DIR.glob("common/*.h"))
+    # Kernel registrations live in `**/*.cc`; shared type-constraint helpers
+    # (AllTensorTypes / FloatTensorTypes / ...) live under `shared_inc/*.h`.
+    # Both are scanned: the headers populate the helper table, the sources the
+    # macros.
+    paths = sorted(KERNELS_DIR.rglob("*.cc")) + sorted((KERNELS_DIR / "shared_inc").glob("*.h"))
     return [(p, p.read_text()) for p in paths]
 
 
@@ -131,7 +132,7 @@ def collect_ops() -> list[dict]:
                     "since": int(m.group("start")),
                     "until": int(m.group("end")),
                     "kernel_class": m.group("kclass"),
-                    "source": path.name,
+                    "source": str(path.relative_to(KERNELS_DIR)),
                     "types": _format_types(constraints_in_order),
                 }
             )

@@ -21,5 +21,5 @@ per-kernel registry model and will be added as the EP grows:
   experimental flags.
 
 When such logic lands, its `.h`/`.cc` files go here and must be added explicitly to
-[`../../CMakeLists.txt`](../../CMakeLists.txt) (only `src/kernels/*.cc` is
-auto-globbed; sources in this directory are not).
+[`../../CMakeLists.txt`](../../CMakeLists.txt) (`src/kernels/**/*.cc` is
+auto-globbed recursively; sources in this directory are not).

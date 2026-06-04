@@ -14,11 +14,11 @@
 #include <unordered_set>
 #include <vector>
 
-#include "fusion/fusion_node_compute.h"
-#include "fusion/concat_matmul_fusion.h"
-#include "fusion/linear_fusion.h"
 #include "ep_factory.h"
 #include "ep_profiling.h"
+#include "fusion/concat_matmul_fusion.h"
+#include "fusion/fusion_node_compute.h"
+#include "fusion/linear_fusion.h"
 #include "plugin_ep_utils.h"
 
 namespace {
@@ -107,7 +107,8 @@ bool CanFuseConcatMatMul(Ort::ConstNode concat_node, Ort::ConstNode matmul_node,
   }
 
   if (!IsFloatTensorValueInfo(matmul_outputs[0]) ||
-      !IsFloatTensorValueInfo(matmul_inputs[static_cast<size_t>(1 - concat_input_idx)])) {
+      !IsFloatTensorValueInfo(
+          matmul_inputs[static_cast<size_t>(1 - concat_input_idx)])) {
     return false;
   }
 
@@ -239,8 +240,7 @@ bool IsBiasShapeForMatMulN(const std::vector<int64_t>& bias_shape, int64_t n) {
     return true;
   }
   return (bias_shape.size() == 1 && bias_shape[0] == n) ||
-         (bias_shape.size() == 2 && bias_shape[0] == 1 &&
-          bias_shape[1] == n);
+         (bias_shape.size() == 2 && bias_shape[0] == 1 && bias_shape[1] == n);
 }
 
 bool CanFuseMatMulAddActivation(Ort::ConstNode matmul_node,
@@ -376,7 +376,6 @@ std::vector<std::vector<Ort::ConstNode>> FindGemmActivationFusions(
 
   return fusions;
 }
-
 
 std::vector<std::vector<Ort::ConstNode>> FindFusedGemmFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
@@ -537,33 +536,12 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
           fusion_nodes.size(), &node_fusion_options));
     }
 
-    // Collect candidate nodes that this EP may support.
-    std::vector<Ort::ConstNode> candidate_nodes;
-    static const std::unordered_set<std::string> supported_ops = {
-        "MatMul",     "Add",        "Sub",       "Mul",         "Div",
-        "Pow",        "Sum",        "Relu",      "LeakyRelu",   "Sqrt",
-        "Reciprocal", "Neg",        "Log",       "Tanh",        "Sigmoid",
-        "Softmax",    "Gemm",       "FusedGemm", "FusedMatMul", "Shape",
-        "Abs",        "Erf",        "Equal",     "Greater",     "Max",
-        "Min",        "Not",        "Or",        "Cast",        "Reshape",
-        "Squeeze",    "Unsqueeze",  "Expand",    "Concat",      "Transpose",
-        "Gather",     "Slice",      "Split",     "ReduceProd",  "ReduceSum",
-        "ReduceMean", "ReduceSumSquare", "BatchNormalization",
-    };
-
+    // Mark non-fused nodes as supported if we have a registered kernel.
     for (const auto& node : all_nodes) {
       if (fused_node_ids.count(node.GetId()) != 0) {
         continue;
       }
 
-      std::string op_type = node.GetOperatorType();
-      if (supported_ops.count(op_type) != 0) {
-        candidate_nodes.push_back(node);
-      }
-    }
-
-    // Mark candidate nodes as supported if we have a registered kernel.
-    for (const auto& node : candidate_nodes) {
       const OrtKernelDef* kernel_def = nullptr;
       RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_LookUpKernel(
           graph_support_info, node, &kernel_def));

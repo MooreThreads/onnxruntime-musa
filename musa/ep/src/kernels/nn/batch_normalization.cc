@@ -1,10 +1,66 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
 #include "nn/batch_norm_impl.h"
 
 namespace {
+bool TryMudnnBatchNormalization(Ort::KernelContext& ctx,
+                                const std::vector<int64_t>& shape,
+                                ONNXTensorElementDataType elem_type,
+                                float epsilon,
+                                Ort::UnownedValue y) {
+  if (!AllGpuInputs(ctx) || !IsGpuMemory(y.GetTensorMemoryInfo())) {
+    return false;
+  }
+
+  ::musa::dnn::Handle* handle = nullptr;
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  if (handle_status != nullptr) {
+    Ort::GetApi().ReleaseStatus(handle_status);
+    return false;
+  }
+
+  ::musa::dnn::Tensor input_tensor;
+  ::musa::dnn::Tensor output_tensor;
+  ::musa::dnn::Tensor scale_tensor;
+  ::musa::dnn::Tensor bias_tensor;
+  ::musa::dnn::Tensor mean_tensor;
+  ::musa::dnn::Tensor variance_tensor;
+  if (!SetMudnnTensor(input_tensor, ctx.GetInput(0).GetTensorRawData(), shape,
+                      elem_type) ||
+      !SetMudnnTensor(output_tensor, y.GetTensorMutableRawData(), shape,
+                      elem_type) ||
+      !SetMudnnTensor(scale_tensor, ctx.GetInput(1).GetTensorRawData(),
+                      ctx.GetInput(1).GetTensorTypeAndShapeInfo().GetShape(),
+                      elem_type) ||
+      !SetMudnnTensor(bias_tensor, ctx.GetInput(2).GetTensorRawData(),
+                      ctx.GetInput(2).GetTensorTypeAndShapeInfo().GetShape(),
+                      elem_type) ||
+      !SetMudnnTensor(mean_tensor, ctx.GetInput(3).GetTensorRawData(),
+                      ctx.GetInput(3).GetTensorTypeAndShapeInfo().GetShape(),
+                      elem_type) ||
+      !SetMudnnTensor(variance_tensor, ctx.GetInput(4).GetTensorRawData(),
+                      ctx.GetInput(4).GetTensorTypeAndShapeInfo().GetShape(),
+                      elem_type)) {
+    return false;
+  }
+
+  ::musa::dnn::BatchNorm op;
+  if (op.SetEpsilon(static_cast<double>(epsilon)) !=
+          ::musa::dnn::Status::SUCCESS ||
+      op.SetTraining(false) != ::musa::dnn::Status::SUCCESS ||
+      op.SetMode(::musa::dnn::BatchNorm::Mode::PER_CHANNEL) !=
+          ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+
+  return op.RunPure(*handle, output_tensor, input_tensor, mean_tensor,
+                    variance_tensor, scale_tensor, bias_tensor) ==
+         ::musa::dnn::Status::SUCCESS;
+}
+
 class BatchNormalization : public OpKernelBase<BatchNormalization> {
  public:
   BatchNormalization(const OrtKernelInfo* info, void* /*state*/) {
@@ -43,8 +99,7 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
   int64_t spatial_size = 1;
   for (size_t i = 2; i < shape.size(); ++i) spatial_size *= shape[i];
 
-  auto read_param = [&](size_t index, const char* name,
-                        std::vector<float>& out) -> OrtStatus* {
+  auto validate_param = [&](size_t index, const char* name) -> OrtStatus* {
     auto info = ctx.GetInput(index).GetTensorTypeAndShapeInfo();
     if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
       const std::string msg =
@@ -57,18 +112,13 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
           std::string("BatchNormalization invalid ") + name + " shape";
       return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, msg.c_str());
     }
-    out = ReadTyped<float>(ctx.GetInput(index));
     return nullptr;
   };
 
-  std::vector<float> scale;
-  std::vector<float> bias;
-  std::vector<float> mean;
-  std::vector<float> variance;
-  RETURN_IF_ERROR(read_param(1, "scale", scale));
-  RETURN_IF_ERROR(read_param(2, "bias", bias));
-  RETURN_IF_ERROR(read_param(3, "mean", mean));
-  RETURN_IF_ERROR(read_param(4, "variance", variance));
+  RETURN_IF_ERROR(validate_param(1, "scale"));
+  RETURN_IF_ERROR(validate_param(2, "bias"));
+  RETURN_IF_ERROR(validate_param(3, "mean"));
+  RETURN_IF_ERROR(validate_param(4, "variance"));
 
   Ort::UnownedValue y = ctx.GetOutput(0, shape);
   if (IsGpuMemory(ctx.GetInput(0).GetTensorMemoryInfo()) &&
@@ -77,6 +127,11 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
       IsGpuMemory(ctx.GetInput(3).GetTensorMemoryInfo()) &&
       IsGpuMemory(ctx.GetInput(4).GetTensorMemoryInfo()) &&
       IsGpuMemory(y.GetTensorMemoryInfo())) {
+    if (TryMudnnBatchNormalization(ctx, shape,
+                                   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+                                   epsilon_, y)) {
+      return nullptr;
+    }
     MusaBatchNormParams params{NumElements(shape), channels, spatial_size,
                                epsilon_};
     return LaunchStatus(LaunchMusaBatchNormalizationFloatKernel(
@@ -88,17 +143,9 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
         params, nullptr));
   }
 
-  std::vector<float> input = ReadTyped<float>(ctx.GetInput(0));
-  std::vector<float> output(input.size());
-  for (int64_t i = 0; i < NumElements(shape); ++i) {
-    const int64_t c = (i / spatial_size) % channels;
-    output[static_cast<size_t>(i)] =
-        (input[static_cast<size_t>(i)] - mean[static_cast<size_t>(c)]) *
-            scale[static_cast<size_t>(c)] /
-            std::sqrt(variance[static_cast<size_t>(c)] + epsilon_) +
-        bias[static_cast<size_t>(c)];
-  }
-  return WriteTyped<float>(y, output);
+  return Ort::GetApi().CreateStatus(
+      ORT_NOT_IMPLEMENTED,
+      "BatchNormalization requires MUSA device tensors");
 }
 }  // namespace
 

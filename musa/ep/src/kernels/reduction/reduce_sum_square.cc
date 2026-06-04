@@ -23,7 +23,7 @@ class ReduceSumSquare : public OpKernelBase<ReduceSumSquare> {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    ReduceSumSquare, kOnnxDomain, 13, 17,
+    ReduceSumSquare, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
         .AddTypeConstraint("T", AllTensorTypes())
         .SetInputMemType(1, OrtMemTypeCPUInput)),

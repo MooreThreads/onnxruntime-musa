@@ -33,16 +33,16 @@ Total registered kernels: **49**
 | `Pow` | `ai.onnx` | 13–14 | `T`: int32, int64, float16, float32, float64, bfloat16<br>`T1`: int32, int64, float16, float32, float64 | `math/pow.cc` |
 | `Pow` | `ai.onnx` | 15–19 | `T`: int32, int64, float16, float32, float64, bfloat16<br>`T1`: int32, int64, float16, float32, float64, bfloat16 | `math/pow.cc` |
 | `Reciprocal` | `ai.onnx` | 13–19 | `T`: float16, float32, float64 | `activation/reciprocal.cc` |
-| `ReduceMean` | `ai.onnx` | 13–17 | `T`: float32 | `reduction/reduce_mean.cc` |
-| `ReduceProd` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `reduction/reduce_prod.cc` |
-| `ReduceSum` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `reduction/reduce_sum.cc` |
-| `ReduceSumSquare` | `ai.onnx` | 13–17 | `T`: float32, int32, int64 | `reduction/reduce_sum_square.cc` |
+| `ReduceMean` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16 | `reduction/reduce_mean.cc` |
+| `ReduceProd` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16, int32, int64 | `reduction/reduce_prod.cc` |
+| `ReduceSum` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16, int32, int64 | `reduction/reduce_sum.cc` |
+| `ReduceSumSquare` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16, int32, int64 | `reduction/reduce_sum_square.cc` |
 | `Relu` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16 | `activation/relu.cc` |
 | `Reshape` | `ai.onnx` | 13–17 | `T`: float32, int32, int64, bool | `tensor/reshape.cc` |
 | `Shape` | `ai.onnx` | 13–17 | `T`: float32, int32, int64, bool | `tensor/shape.cc` |
 | `Sigmoid` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16 | `activation/sigmoid.cc` |
 | `Slice` | `ai.onnx` | 13–17 | `T`: float32, int32, int64, bool<br>`Tind`: int32, int64 | `tensor/slice.cc` |
-| `Softmax` | `ai.onnx` | 13–17 | `T`: float32 | `math/softmax.cc` |
+| `Softmax` | `ai.onnx` | 13–17 | `T`: float16, float32, float64, bfloat16 | `math/softmax.cc` |
 | `Split` | `ai.onnx` | 13–17 | `T`: float32, int32, int64, bool | `tensor/split.cc` |
 | `Sqrt` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16 | `activation/sqrt.cc` |
 | `Squeeze` | `ai.onnx` | 13–17 | `T`: float32, int32, int64, bool | `tensor/squeeze.cc` |

@@ -94,13 +94,13 @@ static const BuildKernelCreateInfoFn build_kernel_create_info_funcs[] = {
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Split)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, ReduceProd)>,
+        kOnnxDomain, 13, 19, ReduceProd)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, ReduceSum)>,
+        kOnnxDomain, 13, 19, ReduceSum)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, ReduceMean)>,
+        kOnnxDomain, 13, 19, ReduceMean)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, ReduceSumSquare)>,
+        kOnnxDomain, 13, 19, ReduceSumSquare)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 15, 17, BatchNormalization)>,
 };

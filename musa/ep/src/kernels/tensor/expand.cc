@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 #include "shared_inc/op_kernel_common.h"
-#include "tensor/cast_op_impl.h"
+#include "tensor/expand_impl.h"
 
 namespace {
 class Expand : public OpKernelBase<Expand> {
@@ -53,9 +53,9 @@ OrtStatus* Expand::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Expand, kOnnxDomain, 13, 17,
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Expand, kOnnxDomain, 13, 19,
                                   (Ort::KernelDefBuilder()
                                        .AddTypeConstraint("T",
-                                                          TensorTypesWithBool())
+                                                          AllFixedSizeTensorTypes())
                                        .SetInputMemType(1, OrtMemTypeCPUInput)),
                                   Expand)

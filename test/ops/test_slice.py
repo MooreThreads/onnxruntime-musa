@@ -67,3 +67,28 @@ def test_slice_empty_result():
         inputs={"data": data, "starts": starts, "ends": ends, "axes": axes},
         outputs=[("Y", TensorProto.INT64)],
     )
+
+
+def test_slice_float16_3d_step():
+    data = np.random.default_rng(2).standard_normal((2, 4, 6)).astype(np.float16)
+    starts = np.array([0, 1], dtype=np.int64)
+    ends = np.array([2, 6], dtype=np.int64)
+    axes = np.array([0, 2], dtype=np.int64)
+    steps = np.array([1, 2], dtype=np.int64)
+    run_and_compare(
+        "Slice",
+        inputs={"data": data, "starts": starts, "ends": ends, "axes": axes, "steps": steps},
+        outputs=[("Y", TensorProto.FLOAT16)],
+    )
+
+
+def test_slice_uint16_axis1():
+    data = np.arange(5 * 6, dtype=np.uint16).reshape(5, 6)
+    starts = np.array([1], dtype=np.int64)
+    ends = np.array([5], dtype=np.int64)
+    axes = np.array([1], dtype=np.int64)
+    run_and_compare(
+        "Slice",
+        inputs={"data": data, "starts": starts, "ends": ends, "axes": axes},
+        outputs=[("Y", TensorProto.UINT16)],
+    )

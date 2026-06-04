@@ -50,8 +50,8 @@ OrtStatus* Cast::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Cast, kOnnxDomain, 13, 17,
+    Cast, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
-         .AddTypeConstraint("T1", TensorTypesWithBool())
-         .AddTypeConstraint("T2", TensorTypesWithBool())),
+         .AddTypeConstraint("T1", AllFixedSizeTensorTypes())
+         .AddTypeConstraint("T2", AllFixedSizeTensorTypes())),
     Cast)

@@ -13,6 +13,13 @@ def test_min_float_binary_broadcast():
     run_and_compare("Min", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
 
 
+def test_min_float_variadic():
+    a = np.random.default_rng(2).standard_normal((8, 4)).astype(np.float32)
+    b = np.random.default_rng(3).standard_normal((8, 4)).astype(np.float32)
+    c = np.random.default_rng(4).standard_normal((8, 4)).astype(np.float32)
+    run_and_compare("Min", inputs={"A": a, "B": b, "C": c}, outputs=[("Y", TensorProto.FLOAT)])
+
+
 def test_min_int32_variadic():
     a = np.arange(32, dtype=np.int32).reshape(8, 4)
     b = np.full((8, 4), 7, dtype=np.int32)

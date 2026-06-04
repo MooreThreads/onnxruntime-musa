@@ -8,17 +8,27 @@ static const BuildKernelCreateInfoFn build_kernel_create_info_funcs[] = {
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, MatMul)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Add)>,
+        kOnnxDomain, 13, 13, Add)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Sub)>,
+        kOnnxDomain, 14, 19, Add)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Mul)>,
+        kOnnxDomain, 13, 13, Sub)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Div)>,
+        kOnnxDomain, 14, 19, Sub)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Pow)>,
+        kOnnxDomain, 13, 13, Mul)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Sum)>,
+        kOnnxDomain, 14, 19, Mul)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 13, Div)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 14, 19, Div)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 14, Pow)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 15, 19, Pow)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 19, Sum)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Gemm)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
@@ -26,39 +36,41 @@ static const BuildKernelCreateInfoFn build_kernel_create_info_funcs[] = {
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kMSDomain, 1, 1, FusedMatMul)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Relu)>,
+        kOnnxDomain, 13, 19, Relu)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, LeakyRelu)>,
+        kOnnxDomain, 13, 15, LeakyRelu)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Sqrt)>,
+        kOnnxDomain, 16, 19, LeakyRelu)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Reciprocal)>,
+        kOnnxDomain, 13, 19, Sqrt)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 13, 19, Reciprocal)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Neg)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Log)>,
+        kOnnxDomain, 13, 19, Log)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Tanh)>,
+        kOnnxDomain, 13, 19, Tanh)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Sigmoid)>,
+        kOnnxDomain, 13, 19, Sigmoid)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Softmax)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Abs)>,
+        kOnnxDomain, 13, 19, Abs)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Erf)>,
+        kOnnxDomain, 13, 19, Erf)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Equal)>,
+        kOnnxDomain, 13, 19, Equal)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Greater)>,
+        kOnnxDomain, 13, 19, Greater)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Max)>,
+        kOnnxDomain, 13, 19, Max)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Min)>,
+        kOnnxDomain, 13, 19, Min)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 1, 17, Not)>,
+        kOnnxDomain, 1, 19, Not)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 7, 17, Or)>,
+        kOnnxDomain, 7, 19, Or)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Shape)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(

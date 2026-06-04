@@ -1,8 +1,9 @@
 set(MUSA_PLUGIN_TARGET onnxruntime_providers_musa_plugin)
 
 # Core EP sources are listed explicitly; kernel implementations under
-# src/kernels/*.cc are auto-discovered so adding a new operator only requires
-# dropping a new .cc file (CONFIGURE_DEPENDS re-globs on the next build).
+# src/kernels/**/*.cc and device implementations under src/kernels/**/*.mu are
+# auto-discovered so adding a new operator follows the CUDA EP-style directory
+# layout without touching this file.
 set(MUSA_PLUGIN_SOURCES
   src/ep_lib_entry.cc
   src/ep_factory.cc
@@ -13,13 +14,13 @@ set(MUSA_PLUGIN_SOURCES
   src/ep_stream.cc
 )
 
-file(GLOB MUSA_PLUGIN_KERNEL_SOURCES CONFIGURE_DEPENDS
+file(GLOB_RECURSE MUSA_PLUGIN_KERNEL_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cc")
+file(GLOB_RECURSE MUSA_PLUGIN_KERNEL_MU_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.mu")
 list(APPEND MUSA_PLUGIN_SOURCES
   ${MUSA_PLUGIN_KERNEL_SOURCES}
-  src/kernels/basic_kernels.mu
-  src/kernels/gemm_post_kernels.mu
-  src/kernels/matmul_batched_kernels.mu
+  ${MUSA_PLUGIN_KERNEL_MU_SOURCES}
 )
 
 file(GLOB MUSA_PLUGIN_FUSION_SOURCES CONFIGURE_DEPENDS
@@ -32,9 +33,7 @@ find_package(MUSA REQUIRED)
 list(APPEND MUSA_MCC_FLAGS -std=c++17)
 
 set_source_files_properties(
-  src/kernels/basic_kernels.mu
-  src/kernels/gemm_post_kernels.mu
-  src/kernels/matmul_batched_kernels.mu
+  ${MUSA_PLUGIN_KERNEL_MU_SOURCES}
   PROPERTIES
     MUSA_SOURCE_PROPERTY_FORMAT OBJ
 )

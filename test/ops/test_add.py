@@ -23,3 +23,9 @@ def test_add_broadcast():
     a = np.random.default_rng(2).standard_normal((32, 1, 16)).astype(np.float32)
     b = np.random.default_rng(3).standard_normal((1, 32, 16)).astype(np.float32)
     run_and_compare("Add", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+
+
+def test_add_float_5d_broadcast():
+    a = np.random.default_rng(4).standard_normal((2, 1, 3, 1, 4)).astype(np.float32)
+    b = np.random.default_rng(5).standard_normal((1, 5, 1, 6, 4)).astype(np.float32)
+    run_and_compare("Add", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])

@@ -104,6 +104,44 @@ def build_model(
     return model.SerializeToString()
 
 
+def build_model_with_input_types(
+    op_type: str,
+    inputs: Mapping[str, np.ndarray],
+    input_types: Mapping[str, int],
+    outputs: Sequence[tuple[str, int]],
+    attrs: Mapping[str, object] | None = None,
+    domain: str = "",
+    opset: int = 17,
+) -> bytes:
+    """Serialize a single-node ONNX model with explicit input ONNX dtypes."""
+    input_vis = [
+        helper.make_tensor_value_info(
+            name,
+            input_types.get(name, helper.np_dtype_to_tensor_dtype(arr.dtype)),
+            list(arr.shape),
+        )
+        for name, arr in inputs.items()
+    ]
+    output_vis = [helper.make_tensor_value_info(name, etype, None) for name, etype in outputs]
+
+    node = helper.make_node(
+        op_type,
+        list(inputs.keys()),
+        [name for name, _ in outputs],
+        domain=domain,
+        **(attrs or {}),
+    )
+
+    graph = helper.make_graph([node], f"{op_type}_graph", input_vis, output_vis)
+    opset_imports = [helper.make_opsetid("", opset)]
+    if domain:
+        opset_imports.append(helper.make_opsetid(domain, 1))
+
+    model = helper.make_model(graph, opset_imports=opset_imports)
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
+
+
 def build_graph_model(
     nodes: Sequence[onnx.NodeProto],
     inputs: Mapping[str, np.ndarray],
@@ -165,6 +203,62 @@ def run(model_bytes: bytes, feeds: Mapping[str, np.ndarray], use_musa: bool) -> 
     """Create a session on the chosen EP and run it, returning the outputs."""
     session = _make_session(model_bytes, use_musa)
     return session.run(None, dict(feeds))
+
+
+_ONNX_STORAGE_DTYPES = {
+    TensorProto.BFLOAT16: np.uint16,
+    TensorProto.BOOL: np.bool_,
+    TensorProto.DOUBLE: np.float64,
+    TensorProto.FLOAT: np.float32,
+    TensorProto.FLOAT16: np.float16,
+    TensorProto.INT8: np.int8,
+    TensorProto.INT16: np.int16,
+    TensorProto.INT32: np.int32,
+    TensorProto.INT64: np.int64,
+    TensorProto.UINT8: np.uint8,
+    TensorProto.UINT16: np.uint16,
+    TensorProto.UINT32: np.uint32,
+    TensorProto.UINT64: np.uint64,
+}
+
+
+def float32_to_bfloat16_bits(values: np.ndarray) -> np.ndarray:
+    """Round float32 values to BF16 and return the raw uint16 payload."""
+    bits = np.asarray(values, dtype=np.float32).view(np.uint32)
+    rounded = bits + np.uint32(0x7FFF) + ((bits >> np.uint32(16)) & np.uint32(1))
+    return (rounded >> np.uint32(16)).astype(np.uint16)
+
+
+def bfloat16_bits_to_float32(values: np.ndarray) -> np.ndarray:
+    """Convert raw BF16 uint16 payloads to float32 values."""
+    bits = np.asarray(values, dtype=np.uint16).astype(np.uint32) << np.uint32(16)
+    return bits.view(np.float32)
+
+
+def run_with_iobinding(
+    model_bytes: bytes,
+    feeds: Mapping[str, np.ndarray],
+    feed_types: Mapping[str, int],
+    outputs: Sequence[tuple[str, int, Sequence[int]]],
+    *,
+    use_musa: bool,
+) -> list[np.ndarray]:
+    """Run a model using raw buffers for ONNX dtypes without numpy dtypes."""
+    session = _make_session(model_bytes, use_musa)
+    io_binding = session.io_binding()
+    for name, arr in feeds.items():
+        elem_type = feed_types.get(name, helper.np_dtype_to_tensor_dtype(arr.dtype))
+        io_binding.bind_input(name, "cpu", 0, elem_type, arr.shape, arr.ctypes.data)
+
+    output_buffers = []
+    for name, elem_type, shape in outputs:
+        dtype = _ONNX_STORAGE_DTYPES[elem_type]
+        output = np.empty(tuple(shape), dtype=dtype)
+        io_binding.bind_output(name, "cpu", 0, elem_type, output.shape, output.ctypes.data)
+        output_buffers.append(output)
+
+    session.run_with_iobinding(io_binding)
+    return output_buffers
 
 
 def run_and_compare(
@@ -237,11 +331,15 @@ def run_model_and_compare(
 
 __all__ = [
     "TensorProto",
+    "bfloat16_bits_to_float32",
     "build_graph_model",
     "build_model",
+    "build_model_with_input_types",
+    "float32_to_bfloat16_bits",
     "musa_available",
     "musa_devices",
     "run",
     "run_and_compare",
+    "run_with_iobinding",
     "run_model_and_compare",
 ]

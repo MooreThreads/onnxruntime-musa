@@ -7,6 +7,13 @@ import numpy as np
 from op_test_utils import TensorProto, run_and_compare
 
 
+def test_sum_two_inputs_same_shape():
+    rng = np.random.default_rng(42)
+    a = rng.standard_normal((16, 32)).astype(np.float32)
+    b = rng.standard_normal((16, 32)).astype(np.float32)
+    run_and_compare("Sum", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+
+
 def test_sum_three_inputs():
     rng = np.random.default_rng(0)
     a = rng.standard_normal((16, 32)).astype(np.float32)
@@ -15,8 +22,33 @@ def test_sum_three_inputs():
     run_and_compare("Sum", inputs={"A": a, "B": b, "C": c}, outputs=[("Y", TensorProto.FLOAT)])
 
 
+def test_sum_many_inputs_same_shape():
+    rng = np.random.default_rng(3)
+    inputs = {
+        f"X{i}": rng.standard_normal((8, 16)).astype(np.float32)
+        for i in range(10)
+    }
+    run_and_compare("Sum", inputs=inputs, outputs=[("Y", TensorProto.FLOAT)])
+
+
 def test_sum_broadcast():
     rng = np.random.default_rng(1)
     a = rng.standard_normal((16, 32)).astype(np.float32)
     b = rng.standard_normal((32,)).astype(np.float32)
     run_and_compare("Sum", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+
+
+def test_sum_three_inputs_broadcast():
+    rng = np.random.default_rng(2)
+    a = rng.standard_normal((16, 1)).astype(np.float32)
+    b = rng.standard_normal((1, 32)).astype(np.float32)
+    c = rng.standard_normal((16, 32)).astype(np.float32)
+    run_and_compare("Sum", inputs={"A": a, "B": b, "C": c}, outputs=[("Y", TensorProto.FLOAT)])
+
+
+def test_sum_three_inputs_broadcast_no_output_shape_input():
+    rng = np.random.default_rng(4)
+    a = rng.standard_normal((16, 1, 1)).astype(np.float32)
+    b = rng.standard_normal((1, 32, 1)).astype(np.float32)
+    c = rng.standard_normal((1, 1, 8)).astype(np.float32)
+    run_and_compare("Sum", inputs={"A": a, "B": b, "C": c}, outputs=[("Y", TensorProto.FLOAT)])

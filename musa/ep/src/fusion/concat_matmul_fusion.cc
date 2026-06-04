@@ -15,8 +15,8 @@
 #include <unordered_map>
 #include <utility>
 
-#include "kernels/common/blas_utils.h"
-#include "kernels/matmul.h"
+#include "kernels/shared_inc/blas_utils.h"
+#include "kernels/math/matmul.h"
 
 /*
  * ConcatMatMul Fusion Pattern

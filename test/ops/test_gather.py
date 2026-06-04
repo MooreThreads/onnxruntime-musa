@@ -27,3 +27,36 @@ def test_gather_axis1():
         outputs=[("Y", TensorProto.FLOAT)],
         attrs={"axis": 1},
     )
+
+
+def test_gather_int32_indices_negative_axis():
+    data = np.arange(2 * 3 * 4, dtype=np.int32).reshape(2, 3, 4)
+    indices = np.array([[3, 1], [0, 2]], dtype=np.int32)
+    run_and_compare(
+        "Gather",
+        inputs={"data": data, "indices": indices},
+        outputs=[("Y", TensorProto.INT32)],
+        attrs={"axis": -1},
+    )
+
+
+def test_gather_negative_indices():
+    data = np.arange(3 * 4 * 2, dtype=np.int64).reshape(3, 4, 2)
+    indices = np.array([-1, 0, -3], dtype=np.int64)
+    run_and_compare(
+        "Gather",
+        inputs={"data": data, "indices": indices},
+        outputs=[("Y", TensorProto.INT64)],
+        attrs={"axis": 1},
+    )
+
+
+def test_gather_bool_scalar_index():
+    data = np.array([[True, False, True], [False, True, False]], dtype=np.bool_)
+    indices = np.array(1, dtype=np.int64)
+    run_and_compare(
+        "Gather",
+        inputs={"data": data, "indices": indices},
+        outputs=[("Y", TensorProto.BOOL)],
+        attrs={"axis": 0},
+    )

@@ -39,3 +39,40 @@ def test_fused_gemm_transb():
         attrs={"alpha": 1.0, "beta": 1.0, "transA": 0, "transB": 1, "activation": "Relu"},
         domain="com.microsoft",
     )
+
+
+def test_fused_gemm_leaky_relu():
+    rng = np.random.default_rng(2)
+    a = rng.standard_normal((8, 16)).astype(np.float32)
+    b = rng.standard_normal((16, 12)).astype(np.float32)
+    c = rng.standard_normal((12,)).astype(np.float32)
+    run_and_compare(
+        "FusedGemm",
+        inputs={"A": a, "B": b, "C": c},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={
+            "alpha": 1.0,
+            "beta": 1.0,
+            "transA": 0,
+            "transB": 0,
+            "activation": "LeakyRelu",
+            "activation_alpha": 0.2,
+        },
+        domain="com.microsoft",
+    )
+
+
+def test_fused_gemm_tanh_scaled():
+    rng = np.random.default_rng(3)
+    a = rng.standard_normal((8, 16)).astype(np.float32)
+    b = rng.standard_normal((16, 12)).astype(np.float32)
+    c = rng.standard_normal((8, 12)).astype(np.float32)
+    run_and_compare(
+        "FusedGemm",
+        inputs={"A": a, "B": b, "C": c},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"alpha": 0.5, "beta": 0.25, "activation": "Tanh"},
+        domain="com.microsoft",
+        rtol=2e-3,
+        atol=2e-4,
+    )

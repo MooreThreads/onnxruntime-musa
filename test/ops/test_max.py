@@ -25,3 +25,16 @@ def test_max_int64_variadic():
     b = np.full((8, 4), 7, dtype=np.int64)
     c = np.arange(31, -1, -1, dtype=np.int64).reshape(8, 4)
     run_and_compare("Max", inputs={"A": a, "B": b, "C": c}, outputs=[("Y", TensorProto.INT64)])
+
+
+def test_max_int32_binary_broadcast():
+    a = np.arange(12, dtype=np.int32).reshape(3, 4)
+    b = np.array([2, 20, 4, 40], dtype=np.int32)
+    run_and_compare("Max", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.INT32)])
+
+
+def test_max_float_three_inputs_broadcast():
+    a = np.random.default_rng(2).standard_normal((2, 3, 1)).astype(np.float32)
+    b = np.random.default_rng(3).standard_normal((1, 3, 4)).astype(np.float32)
+    c = np.random.default_rng(4).standard_normal((2, 1, 4)).astype(np.float32)
+    run_and_compare("Max", inputs={"A": a, "B": b, "C": c}, outputs=[("Y", TensorProto.FLOAT)])

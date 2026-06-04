@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#include "shared_inc/op_kernel_common.h"
 #include "shared_inc/blas_utils.h"
+#include "shared_inc/op_kernel_common.h"
 
 namespace {
 ::musa::dnn::Tensor::Format MudnnFormatForShape(
@@ -117,10 +117,9 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
     }
 
     const int64_t outer =
-        axis == 0
-            ? 1
-            : std::accumulate(out_shape.begin(), out_shape.begin() + axis,
-                              int64_t{1}, std::multiplies<int64_t>());
+        axis == 0 ? 1
+                  : std::accumulate(out_shape.begin(), out_shape.begin() + axis,
+                                    int64_t{1}, std::multiplies<int64_t>());
     const int64_t inner =
         axis + 1 == static_cast<int64_t>(out_shape.size())
             ? 1
@@ -132,11 +131,14 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
     for (size_t input_idx = 0; input_idx < shapes.size(); ++input_idx) {
       Ort::ConstValue v = ctx.GetInput(input_idx);
       const int64_t input_axis = shapes[input_idx][static_cast<size_t>(axis)];
-      const size_t width_bytes = static_cast<size_t>(input_axis * inner) * elem_size;
+      const size_t width_bytes =
+          static_cast<size_t>(input_axis * inner) * elem_size;
       const size_t src_pitch = width_bytes;
-      const size_t dst_pitch = static_cast<size_t>(output_axis * inner) * elem_size;
+      const size_t dst_pitch =
+          static_cast<size_t>(output_axis * inner) * elem_size;
       const auto* src = static_cast<const uint8_t*>(v.GetTensorRawData());
-      auto* dst = dst_base + static_cast<size_t>(dst_axis_offset * inner) * elem_size;
+      auto* dst =
+          dst_base + static_cast<size_t>(dst_axis_offset * inner) * elem_size;
       RETURN_IF_ERROR(DeviceMemcpy2D(dst, dst_pitch, src, src_pitch,
                                      width_bytes, static_cast<size_t>(outer)));
       dst_axis_offset += input_axis;
@@ -144,38 +146,12 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
     return nullptr;
   }
 
-  std::vector<std::vector<uint8_t>> inputs;
-  inputs.reserve(shapes.size());
-  for (size_t i = 0; i < ctx.GetInputCount(); ++i) {
-    inputs.emplace_back();
-    RETURN_IF_ERROR(CopyToHost(ctx.GetInput(i), inputs.back()));
-  }
-  std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
-                           elem_size);
-  auto out_strides = Strides(out_shape);
-  std::vector<int64_t> axis_offsets;
-  int64_t acc = 0;
-  for (const auto& s : shapes) {
-    axis_offsets.push_back(acc);
-    acc += s[static_cast<size_t>(axis)];
-  }
-  for (size_t input_idx = 0; input_idx < inputs.size(); ++input_idx) {
-    int64_t total = NumElements(shapes[input_idx]);
-    for (int64_t i = 0; i < total; ++i) {
-      auto coord = Coordinates(i, shapes[input_idx]);
-      auto out_coord = coord;
-      out_coord[static_cast<size_t>(axis)] += axis_offsets[input_idx];
-      std::memcpy(
-          out.data() +
-              static_cast<size_t>(Offset(out_coord, out_strides)) * elem_size,
-          inputs[input_idx].data() + static_cast<size_t>(i) * elem_size,
-          elem_size);
-    }
-  }
-  return CopyFromHost(y, out.data(), out.size());
+  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                    "Concat requires MUSA inputs and output");
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Concat, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", TensorTypesWithBool())), Concat)
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", TensorTypesWithBool())),
+    Concat)

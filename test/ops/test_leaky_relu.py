@@ -20,3 +20,13 @@ def test_leaky_relu_custom_alpha():
         outputs=[("Y", TensorProto.FLOAT)],
         attrs={"alpha": 0.2},
     )
+
+
+def test_leaky_relu_scalar_input():
+    x = np.array(-4.0, dtype=np.float32)
+    run_and_compare(
+        "LeakyRelu",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"alpha": 0.25},
+    )

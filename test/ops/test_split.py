@@ -27,3 +27,29 @@ def test_split_uneven_axis1():
         outputs=[("Y0", TensorProto.FLOAT), ("Y1", TensorProto.FLOAT)],
         attrs={"axis": 1},
     )
+
+
+def test_split_negative_axis_int32():
+    x = np.arange(2 * 3 * 5, dtype=np.int32).reshape(2, 3, 5)
+    split = np.array([2, 3], dtype=np.int64)
+    run_and_compare(
+        "Split",
+        inputs={"X": x, "split": split},
+        outputs=[("Y0", TensorProto.INT32), ("Y1", TensorProto.INT32)],
+        attrs={"axis": -1},
+    )
+
+
+def test_split_bool_three_outputs():
+    x = np.array([[True, False, True, False, True, False]], dtype=np.bool_)
+    split = np.array([1, 2, 3], dtype=np.int64)
+    run_and_compare(
+        "Split",
+        inputs={"X": x, "split": split},
+        outputs=[
+            ("Y0", TensorProto.BOOL),
+            ("Y1", TensorProto.BOOL),
+            ("Y2", TensorProto.BOOL),
+        ],
+        attrs={"axis": 1},
+    )

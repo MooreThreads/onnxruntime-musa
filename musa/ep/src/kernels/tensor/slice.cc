@@ -59,12 +59,11 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
   if (full_slice) {
     const bool src_gpu = IsGpuMemory(input0.GetTensorMemoryInfo());
     const bool dst_gpu = IsGpuMemory(y.GetTensorMemoryInfo());
-    if (!src_gpu && dst_gpu) {
-      return LaunchStatus(musaMemcpyAsync(
-          y.GetTensorMutableRawData(), input0.GetTensorRawData(),
-          input0.GetTensorSizeInBytes(), musaMemcpyHostToDevice, nullptr));
+    if (src_gpu && dst_gpu) {
+      return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes());
     }
-    return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes());
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Slice requires MUSA input and output");
   }
 
   if (shape0.size() == 2 && norm_steps[0] == 1 && norm_steps[1] == 1) {
@@ -82,21 +81,10 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
           elem_size;
       const bool src_gpu = IsGpuMemory(input0.GetTensorMemoryInfo());
       const bool dst_gpu = IsGpuMemory(y.GetTensorMemoryInfo());
-      if (!src_gpu && dst_gpu) {
-        musaError_t status = musaMemcpy2DAsync(
-            dst_base, dst_pitch, src_base + src_offset, src_pitch,
-            width_bytes, static_cast<size_t>(height), musaMemcpyHostToDevice,
-            nullptr);
-        return LaunchStatus(status);
-      }
-      if (!src_gpu && !dst_gpu) {
-        for (int64_t row = 0; row < height; ++row) {
-          std::memcpy(dst_base + static_cast<size_t>(row) * dst_pitch,
-                      src_base + src_offset +
-                          static_cast<size_t>(row) * src_pitch,
-                      width_bytes);
-        }
-        return nullptr;
+      if (src_gpu && dst_gpu) {
+        return DeviceMemcpy2D(dst_base, dst_pitch, src_base + src_offset,
+                              src_pitch, width_bytes,
+                              static_cast<size_t>(height));
       }
     }
   }
@@ -119,33 +107,18 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
         static_cast<int32_t>(elem_size), params, nullptr));
   }
 
-
-  std::vector<uint8_t> in;
-  RETURN_IF_ERROR(CopyToHost(input0, in));
-  std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
-                           elem_size);
-  auto in_strides = Strides(shape0);
-  for (int64_t i = 0; i < NumElements(out_shape); ++i) {
-    auto oc = Coordinates(i, out_shape);
-    auto ic = oc;
-    for (size_t d = 0; d < ic.size(); ++d)
-      ic[d] = norm_starts[d] + oc[d] * norm_steps[d];
-    std::memcpy(
-        out.data() + static_cast<size_t>(i) * elem_size,
-        in.data() + static_cast<size_t>(Offset(ic, in_strides)) * elem_size,
-        elem_size);
-  }
-  return CopyFromHost(y, out.data(), out.size());
+  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                    "Slice requires MUSA input and output");
 }
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Slice, kOnnxDomain, 13, 17,
-                                  (Ort::KernelDefBuilder()
-                                       .AddTypeConstraint("T", TensorTypesWithBool())
-                                       .AddTypeConstraint("Tind",
-                                                          IntTensorTypes())
-                                       .SetInputMemType(1, OrtMemTypeCPUInput)
-                                       .SetInputMemType(2, OrtMemTypeCPUInput)
-                                       .SetInputMemType(3, OrtMemTypeCPUInput)
-                                       .SetInputMemType(4, OrtMemTypeCPUInput)),
-                                  Slice)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Slice, kOnnxDomain, 13, 17,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", TensorTypesWithBool())
+         .AddTypeConstraint("Tind", IntTensorTypes())
+         .SetInputMemType(1, OrtMemTypeCPUInput)
+         .SetInputMemType(2, OrtMemTypeCPUInput)
+         .SetInputMemType(3, OrtMemTypeCPUInput)
+         .SetInputMemType(4, OrtMemTypeCPUInput)),
+    Slice)

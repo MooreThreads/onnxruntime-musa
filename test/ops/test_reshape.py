@@ -35,3 +35,34 @@ def test_reshape_int64():
         inputs={"X": x, "shape": shape},
         outputs=[("Y", TensorProto.INT64)],
     )
+
+
+def test_reshape_zero_copies_input_dim():
+    x = np.random.default_rng(2).standard_normal((2, 3, 4)).astype(np.float32)
+    shape = np.array([0, -1], dtype=np.int64)
+    run_and_compare(
+        "Reshape",
+        inputs={"X": x, "shape": shape},
+        outputs=[("Y", TensorProto.FLOAT)],
+    )
+
+
+def test_reshape_bool_to_vector():
+    x = np.array([[True, False], [False, True]], dtype=np.bool_)
+    shape = np.array([4], dtype=np.int64)
+    run_and_compare(
+        "Reshape",
+        inputs={"X": x, "shape": shape},
+        outputs=[("Y", TensorProto.BOOL)],
+    )
+
+
+def test_reshape_int32_with_allowzero():
+    x = np.arange(0, dtype=np.int32).reshape(0, 3)
+    shape = np.array([0, 3], dtype=np.int64)
+    run_and_compare(
+        "Reshape",
+        inputs={"X": x, "shape": shape},
+        outputs=[("Y", TensorProto.INT32)],
+        attrs={"allowzero": 1},
+    )

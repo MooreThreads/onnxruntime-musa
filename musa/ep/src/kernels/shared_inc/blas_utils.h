@@ -9,8 +9,8 @@
 #include <cstdlib>
 #include <memory>
 
-#include "shared_inc/op_kernel_common.h"
 #include "math/gemm_post_kernels.h"
+#include "shared_inc/op_kernel_common.h"
 
 // Shared GEMM implementation used by Gemm and FusedGemm. MatMul keeps its
 // own implementation because it also handles batched MatMul shapes.
@@ -119,8 +119,7 @@ inline bool TryMudnnGemm(float* y_data, const float* a_data,
                          const std::vector<int64_t>& b_shape,
                          const std::vector<int64_t>& c_shape,
                          const std::vector<int64_t>& out_shape, bool trans_a,
-                         bool trans_b, float alpha, float beta,
-                         bool has_bias) {
+                         bool trans_b, float alpha, float beta, bool has_bias) {
   ::musa::dnn::Handle* handle = nullptr;
   OrtStatus* handle_status = EnsureMudnnHandle(&handle);
   if (handle_status != nullptr) {
@@ -165,8 +164,8 @@ inline bool TryMudnnGemm(float* y_data, const float* a_data,
         ::musa::dnn::Status::SUCCESS)
       return false;
     return matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor,
-                                 y_tensor, c_tensor) ==
-           ::musa::dnn::Status::SUCCESS;
+                                 y_tensor,
+                                 c_tensor) == ::musa::dnn::Status::SUCCESS;
   }
 
   if (c_shape.size() == 2 && c_shape[0] == 1 && c_shape[1] == n) {
@@ -176,8 +175,8 @@ inline bool TryMudnnGemm(float* y_data, const float* a_data,
         ::musa::dnn::Status::SUCCESS)
       return false;
     return matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor,
-                                 y_tensor, c_tensor) ==
-           ::musa::dnn::Status::SUCCESS;
+                                 y_tensor,
+                                 c_tensor) == ::musa::dnn::Status::SUCCESS;
   }
 
   if (c_shape.size() == 2 && c_shape[0] == m && c_shape[1] == n) {
@@ -186,30 +185,11 @@ inline bool TryMudnnGemm(float* y_data, const float* a_data,
         ::musa::dnn::Status::SUCCESS)
       return false;
     return matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor,
-                                 c_tensor, empty_tensor) ==
-           ::musa::dnn::Status::SUCCESS;
+                                 c_tensor,
+                                 empty_tensor) == ::musa::dnn::Status::SUCCESS;
   }
 
   return false;
-}
-
-inline void ApplyActivation(std::vector<float>& values,
-                            const std::string& activation,
-                            float activation_alpha) {
-  if (activation.empty()) {
-    return;
-  }
-  if (activation == "Relu") {
-    for (float& v : values) v = std::max(0.0f, v);
-    return;
-  }
-  if (activation == "LeakyRelu") {
-    for (float& v : values) v = v >= 0.0f ? v : activation_alpha * v;
-    return;
-  }
-  if (activation == "Tanh") {
-    for (float& v : values) v = std::tanh(v);
-  }
 }
 
 inline bool TryMapActivation(const std::string& activation, MusaUnaryOp& op) {
@@ -292,10 +272,9 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
         bias_is_gpu = IsGpuMemory(c_value.GetTensorMemoryInfo());
       }
 
-      if (bias_is_gpu &&
-          TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape, b_shape,
-                       c_shape, out_shape, trans_a, trans_b, alpha, beta,
-                       has_bias)) {
+      if (bias_is_gpu && TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape,
+                                      b_shape, c_shape, out_shape, trans_a,
+                                      trans_b, alpha, beta, has_bias)) {
         if (activation.empty()) {
           return nullptr;
         }
@@ -309,16 +288,9 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
               activation_alpha, nullptr));
         }
 
-        std::vector<float> out(static_cast<size_t>(m * n));
-        musaError_t sync_status =
-            musaMemcpy(out.data(), y_data, out.size() * sizeof(float),
-                       musaMemcpyDeviceToHost);
-        if (sync_status != musaSuccess) {
-          return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                            MusaErrorString(sync_status));
-        }
-        ApplyActivation(out, activation, activation_alpha);
-        return WriteTyped<float>(y, out);
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "unsupported FusedGemm activation for MUSA post kernel");
       }
 
       mublasHandle_t handle = nullptr;
@@ -355,82 +327,21 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
         }
       }
 
-      std::vector<float> out(static_cast<size_t>(m * n));
-      musaError_t sync_status =
-          musaMemcpy(out.data(), y_data, out.size() * sizeof(float),
-                     musaMemcpyDeviceToHost);
-      if (sync_status != musaSuccess) {
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                          MusaErrorString(sync_status));
+      if (has_bias && !bias_is_gpu) {
+        return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                          "Gemm bias requires MUSA input");
       }
-      if (ctx.GetInputCount() > 2) {
-        auto c_value = ctx.GetInput(2);
-        auto c_info = c_value.GetTensorTypeAndShapeInfo();
-        if (c_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-          return Ort::GetApi().CreateStatus(
-              ORT_NOT_IMPLEMENTED, "Gemm bias only supports float tensors");
-        }
-        std::vector<int64_t> c_shape = c_info.GetShape();
-        std::vector<float> c = ReadTyped<float>(c_value);
-        std::vector<int64_t> broadcast_shape =
-            BroadcastShape(c_shape, out_shape);
-        if (broadcast_shape != out_shape) {
-          return Ort::GetApi().CreateStatus(
-              ORT_INVALID_ARGUMENT, "Gemm bias broadcast shape mismatch");
-        }
-        auto c_strides = Strides(c_shape);
-        for (int64_t i = 0; i < NumElements(out_shape); ++i) {
-          auto coord = Coordinates(i, out_shape);
-          int64_t c_off = BroadcastOffset(coord, c_shape, c_strides);
-          out[static_cast<size_t>(i)] += beta * c[static_cast<size_t>(c_off)];
-        }
+      if (!activation_supported) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "unsupported FusedGemm activation for MUSA post kernel");
       }
-      ApplyActivation(out, activation, activation_alpha);
-      return WriteTyped<float>(y, out);
+      return Ort::GetApi().CreateStatus(
+          ORT_NOT_IMPLEMENTED,
+          "Gemm bias broadcast rank exceeds MUSA kernel limit");
     }
   }
 
-  std::vector<float> a = ReadTyped<float>(ctx.GetInput(0));
-  std::vector<float> b = ReadTyped<float>(ctx.GetInput(1));
-  std::vector<float> out(static_cast<size_t>(m * n), 0.0f);
-  for (int64_t row = 0; row < m; ++row) {
-    for (int64_t col = 0; col < n; ++col) {
-      float sum = 0.0f;
-      for (int64_t kk = 0; kk < k; ++kk) {
-        int64_t a_off =
-            trans_a ? kk * a_shape[1] + row : row * a_shape[1] + kk;
-        int64_t b_off =
-            trans_b ? col * b_shape[1] + kk : kk * b_shape[1] + col;
-        sum += a[static_cast<size_t>(a_off)] *
-               b[static_cast<size_t>(b_off)];
-      }
-      out[static_cast<size_t>(row * n + col)] = alpha * sum;
-    }
-  }
-
-  if (ctx.GetInputCount() > 2) {
-    auto c_value = ctx.GetInput(2);
-    auto c_info = c_value.GetTensorTypeAndShapeInfo();
-    if (c_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                        "Gemm bias only supports float tensors");
-    }
-    std::vector<int64_t> c_shape = c_info.GetShape();
-    std::vector<float> c = ReadTyped<float>(c_value);
-    std::vector<int64_t> broadcast_shape = BroadcastShape(c_shape, out_shape);
-    if (broadcast_shape != out_shape) {
-      return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
-                                        "Gemm bias broadcast shape mismatch");
-    }
-    auto c_strides = Strides(c_shape);
-    for (int64_t i = 0; i < NumElements(out_shape); ++i) {
-      auto coord = Coordinates(i, out_shape);
-      int64_t c_off = BroadcastOffset(coord, c_shape, c_strides);
-      out[static_cast<size_t>(i)] += beta * c[static_cast<size_t>(c_off)];
-    }
-  }
-
-  ApplyActivation(out, activation, activation_alpha);
-  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-  return WriteTyped<float>(y, out);
+  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                    "Gemm requires MUSA inputs and output");
 }

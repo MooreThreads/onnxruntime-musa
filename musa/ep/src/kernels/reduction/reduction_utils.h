@@ -3,127 +3,106 @@
 
 #pragma once
 
-#include "shared_inc/op_kernel_common.h"
 #include "reduction/reduction_functions.h"
+#include "shared_inc/op_kernel_common.h"
 
 enum class ReduceMode { kProd, kSum, kMean, kSumSquare };
 
-// Shared host-side reduction used by ReduceProd / ReduceSum / ReduceMean /
-// ReduceSumSquare.
+inline MusaReduceOp ToMusaReduceOp(ReduceMode mode) {
+  if (mode == ReduceMode::kSum) return MusaReduceOp::Sum;
+  if (mode == ReduceMode::kMean) return MusaReduceOp::Mean;
+  if (mode == ReduceMode::kSumSquare) return MusaReduceOp::SumSquare;
+  return MusaReduceOp::Prod;
+}
+
+inline MusaReduceParams MakeReduceParams(
+    const std::vector<int64_t>& input_shape,
+    const std::vector<int64_t>& output_shape, const std::set<int64_t>& axes_set,
+    bool keepdims) {
+  auto input_strides = Strides(input_shape);
+  auto output_strides = Strides(output_shape);
+  MusaReduceParams params{};
+  params.rank = static_cast<int32_t>(input_shape.size());
+  params.reduce_axis = static_cast<int32_t>(*axes_set.begin());
+  params.output_elements = NumElements(output_shape);
+  params.reduce_dim = input_shape[static_cast<size_t>(params.reduce_axis)];
+  params.reduction_elements = 1;
+
+  size_t out_dim = 0;
+  for (size_t dim = 0; dim < input_shape.size(); ++dim) {
+    const bool is_reduce_axis = axes_set.count(static_cast<int64_t>(dim)) != 0;
+    params.input_dims[dim] = input_shape[dim];
+    params.input_strides[dim] = input_strides[dim];
+    params.reduce_axes[dim] = is_reduce_axis ? 1 : 0;
+    if (is_reduce_axis) {
+      params.reduction_elements *= input_shape[dim];
+      params.output_strides[dim] = 0;
+    } else {
+      params.output_strides[dim] =
+          keepdims ? output_strides[dim] : output_strides[out_dim++];
+    }
+  }
+  return params;
+}
+
 inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
                                 std::vector<int64_t> axes, bool keepdims,
                                 ReduceMode mode) {
   Ort::ConstValue input0 = ctx.GetInput(0);
-  auto in0_info = input0.GetTensorTypeAndShapeInfo();
-  auto elem_type = in0_info.GetElementType();
-  auto shape0 = in0_info.GetShape();
+  auto input_info = input0.GetTensorTypeAndShapeInfo();
+  auto elem_type = input_info.GetElementType();
+  auto input_shape = input_info.GetShape();
   if (ctx.GetInputCount() > 1) axes = ReadIntTensor(ctx, 1);
-  auto axes_set = AxesSet(axes, shape0.size());
+  auto axes_set = AxesSet(axes, input_shape.size());
 
-  std::vector<int64_t> out_shape;
-  for (size_t i = 0; i < shape0.size(); ++i) {
+  std::vector<int64_t> output_shape;
+  for (size_t i = 0; i < input_shape.size(); ++i) {
     if (axes_set.count(static_cast<int64_t>(i))) {
-      if (keepdims) out_shape.push_back(1);
+      if (keepdims) output_shape.push_back(1);
     } else {
-      out_shape.push_back(shape0[i]);
+      output_shape.push_back(input_shape[i]);
     }
   }
-  if (out_shape.empty()) out_shape.push_back(1);
-  auto out_strides = Strides(out_shape);
+  if (output_shape.empty()) output_shape.push_back(1);
 
-  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-    std::vector<int64_t> x = ReadTyped<int64_t>(input0);
-    std::vector<int64_t> out(static_cast<size_t>(NumElements(out_shape)),
-                             mode == ReduceMode::kProd ? 1 : 0);
-    for (int64_t i = 0; i < NumElements(shape0); ++i) {
-      auto ic = Coordinates(i, shape0);
-      std::vector<int64_t> oc;
-      for (size_t d = 0; d < shape0.size(); ++d) {
-        if (axes_set.count(static_cast<int64_t>(d))) {
-          if (keepdims) oc.push_back(0);
-        } else {
-          oc.push_back(ic[d]);
-        }
-      }
-      if (oc.empty()) oc.push_back(0);
-      int64_t oo = Offset(oc, out_strides);
-      if (mode == ReduceMode::kProd)
-        out[static_cast<size_t>(oo)] *= x[static_cast<size_t>(i)];
-      else if (mode == ReduceMode::kSumSquare)
-        out[static_cast<size_t>(oo)] +=
-            x[static_cast<size_t>(i)] * x[static_cast<size_t>(i)];
-      else
-        out[static_cast<size_t>(oo)] += x[static_cast<size_t>(i)];
-    }
-    Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-    return WriteTyped<int64_t>(y, out);
+  if (input_shape.size() > kMusaMaxBroadcastRank) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "reduce rank exceeds MUSA kernel limit");
   }
+  if (!IsGpuMemory(input0.GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "reduce requires MUSA input");
+  }
+
+  Ort::UnownedValue y = ctx.GetOutput(0, output_shape);
+  if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "reduce requires MUSA output");
+  }
+
+  MusaReduceParams params =
+      MakeReduceParams(input_shape, output_shape, axes_set, keepdims);
+  MusaReduceOp reduce_op = ToMusaReduceOp(mode);
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    if (axes_set.size() == 1 &&
-        shape0.size() <= kMusaMaxBroadcastRank &&
-        IsGpuMemory(input0.GetTensorMemoryInfo())) {
-      Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-      if (IsGpuMemory(y.GetTensorMemoryInfo())) {
-        const int64_t reduce_axis = *axes_set.begin();
-        auto in_strides = Strides(shape0);
-        auto output_strides = Strides(out_shape);
-        MusaReduceParams params{};
-        params.rank = static_cast<int32_t>(shape0.size());
-        params.reduce_axis = static_cast<int32_t>(reduce_axis);
-        params.output_elements = NumElements(out_shape);
-        params.reduce_dim = shape0[static_cast<size_t>(reduce_axis)];
-        size_t out_dim = 0;
-        for (size_t dim = 0; dim < shape0.size(); ++dim) {
-          params.input_strides[dim] = in_strides[dim];
-          if (static_cast<int64_t>(dim) == reduce_axis) {
-            params.output_strides[dim] = 0;
-          } else {
-            params.output_strides[dim] =
-                keepdims ? output_strides[dim] : output_strides[out_dim++];
-          }
-        }
-        MusaReduceOp reduce_op = MusaReduceOp::Prod;
-        if (mode == ReduceMode::kSum) reduce_op = MusaReduceOp::Sum;
-        else if (mode == ReduceMode::kMean) reduce_op = MusaReduceOp::Mean;
-        else if (mode == ReduceMode::kSumSquare) reduce_op = MusaReduceOp::SumSquare;
-        return LaunchStatus(LaunchMusaReduceFloatKernel(
-            input0.GetTensorData<float>(), y.GetTensorMutableData<float>(),
-            params, reduce_op, nullptr));
-      }
-    }
-
-    std::vector<float> x = ReadTyped<float>(input0);
-    std::vector<float> out(static_cast<size_t>(NumElements(out_shape)),
-                           mode == ReduceMode::kProd ? 1.0f : 0.0f);
-    std::vector<int64_t> counts(out.size(), 0);
-    for (int64_t i = 0; i < NumElements(shape0); ++i) {
-      auto ic = Coordinates(i, shape0);
-      std::vector<int64_t> oc;
-      for (size_t d = 0; d < shape0.size(); ++d) {
-        if (axes_set.count(static_cast<int64_t>(d))) {
-          if (keepdims) oc.push_back(0);
-        } else {
-          oc.push_back(ic[d]);
-        }
-      }
-      if (oc.empty()) oc.push_back(0);
-      int64_t oo = Offset(oc, out_strides);
-      if (mode == ReduceMode::kProd)
-        out[static_cast<size_t>(oo)] *= x[static_cast<size_t>(i)];
-      else if (mode == ReduceMode::kSumSquare)
-        out[static_cast<size_t>(oo)] +=
-            x[static_cast<size_t>(i)] * x[static_cast<size_t>(i)];
-      else
-        out[static_cast<size_t>(oo)] += x[static_cast<size_t>(i)];
-      counts[static_cast<size_t>(oo)]++;
-    }
-    if (mode == ReduceMode::kMean) {
-      for (size_t i = 0; i < out.size(); ++i)
-        out[i] /= static_cast<float>(counts[i]);
-    }
-    Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-    return WriteTyped<float>(y, out);
+    return LaunchStatus(LaunchMusaReduceFloatKernel(
+        input0.GetTensorData<float>(), y.GetTensorMutableData<float>(), params,
+        reduce_op, nullptr));
   }
-  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                    "unsupported reduce dtype");
+  if (mode == ReduceMode::kMean) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "integer ReduceMean is not supported");
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    return LaunchStatus(LaunchMusaReduceInt32Kernel(
+        input0.GetTensorData<int32_t>(), y.GetTensorMutableData<int32_t>(),
+        params, reduce_op, nullptr));
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+    return LaunchStatus(LaunchMusaReduceInt64Kernel(
+        input0.GetTensorData<int64_t>(), y.GetTensorMutableData<int64_t>(),
+        params, reduce_op, nullptr));
+  }
+  std::string message = "unsupported reduce dtype: " +
+                        std::to_string(static_cast<int>(elem_type));
+  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, message.c_str());
 }

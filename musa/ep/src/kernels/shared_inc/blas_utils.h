@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "math/gemm_post_kernels.h"
+#include "math/matmul.h"
 #include "shared_inc/op_kernel_common.h"
 
 // Shared GEMM implementation used by Gemm and FusedGemm. MatMul keeps its
@@ -113,13 +114,112 @@ inline bool SetMudnnFloatTensor(::musa::dnn::Tensor& tensor, const void* data,
                         ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
 }
 
-inline bool TryMudnnGemm(float* y_data, const float* a_data,
-                         const float* b_data, const float* c_data,
+inline bool MublasDataType(ONNXTensorElementDataType elem_type,
+                           musaDataType_t& data_type,
+                           mublasComputeType_t& compute_type) {
+  switch (elem_type) {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+      data_type = MUSA_R_32F;
+      compute_type = MUBLAS_COMPUTE_32F;
+      return true;
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE:
+      data_type = MUSA_R_64F;
+      compute_type = MUBLAS_COMPUTE_64F;
+      return true;
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+      data_type = MUSA_R_16F;
+      compute_type = MUBLAS_COMPUTE_32F;
+      return true;
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16:
+      data_type = MUSA_R_16BF;
+      compute_type = MUBLAS_COMPUTE_32F;
+      return true;
+    default:
+      return false;
+  }
+}
+
+inline mublasStatus MublasGemmEx(mublasHandle_t handle,
+                                 mublasOperation_t trans_a,
+                                 mublasOperation_t trans_b,
+                                 int m, int n, int k,
+                                 double alpha,
+                                 const void* a,
+                                 int lda,
+                                 const void* b,
+                                 int ldb,
+                                 double beta,
+                                 void* c,
+                                 int ldc,
+                                 ONNXTensorElementDataType elem_type) {
+  musaDataType_t data_type;
+  mublasComputeType_t compute_type;
+  if (!MublasDataType(elem_type, data_type, compute_type)) {
+    return MUBLAS_STATUS_NOT_SUPPORTED;
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) {
+    const double alpha64 = alpha;
+    const double beta64 = beta;
+    return mublasGemmEx(handle, trans_a, trans_b, m, n, k, &alpha64, a,
+                        data_type, lda, b, data_type, ldb, &beta64, c,
+                        data_type, ldc, compute_type, MUBLAS_GEMM_DEFAULT);
+  }
+  const float alpha32 = static_cast<float>(alpha);
+  const float beta32 = static_cast<float>(beta);
+  return mublasGemmEx(handle, trans_a, trans_b, m, n, k, &alpha32, a,
+                      data_type, lda, b, data_type, ldb, &beta32, c,
+                      data_type, ldc, compute_type, MUBLAS_GEMM_DEFAULT);
+}
+
+inline mublasStatus MublasGemmStridedBatchedEx(
+    mublasHandle_t handle,
+    mublasOperation_t trans_a,
+    mublasOperation_t trans_b,
+    int m,
+    int n,
+    int k,
+    double alpha,
+    const void* a,
+    int lda,
+    long long int stride_a,
+    const void* b,
+    int ldb,
+    long long int stride_b,
+    double beta,
+    void* c,
+    int ldc,
+    long long int stride_c,
+    int batch_count,
+    ONNXTensorElementDataType elem_type) {
+  musaDataType_t data_type;
+  mublasComputeType_t compute_type;
+  if (!MublasDataType(elem_type, data_type, compute_type)) {
+    return MUBLAS_STATUS_NOT_SUPPORTED;
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) {
+    const double alpha64 = alpha;
+    const double beta64 = beta;
+    return mublasGemmStridedBatchedEx(
+        handle, trans_a, trans_b, m, n, k, &alpha64, a, data_type, lda,
+        stride_a, b, data_type, ldb, stride_b, &beta64, c, data_type, ldc,
+        stride_c, batch_count, compute_type, MUBLAS_GEMM_DEFAULT);
+  }
+  const float alpha32 = static_cast<float>(alpha);
+  const float beta32 = static_cast<float>(beta);
+  return mublasGemmStridedBatchedEx(
+      handle, trans_a, trans_b, m, n, k, &alpha32, a, data_type, lda, stride_a,
+      b, data_type, ldb, stride_b, &beta32, c, data_type, ldc, stride_c,
+      batch_count, compute_type, MUBLAS_GEMM_DEFAULT);
+}
+
+inline bool TryMudnnGemm(void* y_data, const void* a_data,
+                         const void* b_data, const void* c_data,
                          const std::vector<int64_t>& a_shape,
                          const std::vector<int64_t>& b_shape,
                          const std::vector<int64_t>& c_shape,
                          const std::vector<int64_t>& out_shape, bool trans_a,
-                         bool trans_b, float alpha, float beta, bool has_bias) {
+                         bool trans_b, float alpha, float beta, bool has_bias,
+                         ONNXTensorElementDataType elem_type) {
   ::musa::dnn::Handle* handle = nullptr;
   OrtStatus* handle_status = EnsureMudnnHandle(&handle);
   if (handle_status != nullptr) {
@@ -130,9 +230,9 @@ inline bool TryMudnnGemm(float* y_data, const float* a_data,
   ::musa::dnn::Tensor a_tensor;
   ::musa::dnn::Tensor b_tensor;
   ::musa::dnn::Tensor y_tensor;
-  if (!SetMudnnFloatTensor(a_tensor, a_data, a_shape) ||
-      !SetMudnnFloatTensor(b_tensor, b_data, b_shape) ||
-      !SetMudnnFloatTensor(y_tensor, y_data, out_shape)) {
+  if (!SetMudnnTensor(a_tensor, a_data, a_shape, elem_type) ||
+      !SetMudnnTensor(b_tensor, b_data, b_shape, elem_type) ||
+      !SetMudnnTensor(y_tensor, y_data, out_shape, elem_type)) {
     return false;
   }
 
@@ -159,7 +259,7 @@ inline bool TryMudnnGemm(float* y_data, const float* a_data,
   ::musa::dnn::Tensor empty_tensor;
 
   if (c_shape.size() == 1 && c_shape[0] == n) {
-    if (!SetMudnnFloatTensor(c_tensor, c_data, c_shape)) return false;
+    if (!SetMudnnTensor(c_tensor, c_data, c_shape, elem_type)) return false;
     if (matmul.SetGamma(static_cast<double>(beta)) !=
         ::musa::dnn::Status::SUCCESS)
       return false;
@@ -170,7 +270,7 @@ inline bool TryMudnnGemm(float* y_data, const float* a_data,
 
   if (c_shape.size() == 2 && c_shape[0] == 1 && c_shape[1] == n) {
     std::vector<int64_t> bias_shape = {n};
-    if (!SetMudnnFloatTensor(c_tensor, c_data, bias_shape)) return false;
+    if (!SetMudnnTensor(c_tensor, c_data, bias_shape, elem_type)) return false;
     if (matmul.SetGamma(static_cast<double>(beta)) !=
         ::musa::dnn::Status::SUCCESS)
       return false;
@@ -180,7 +280,7 @@ inline bool TryMudnnGemm(float* y_data, const float* a_data,
   }
 
   if (c_shape.size() == 2 && c_shape[0] == m && c_shape[1] == n) {
-    if (!SetMudnnFloatTensor(c_tensor, c_data, c_shape)) return false;
+    if (!SetMudnnTensor(c_tensor, c_data, c_shape, elem_type)) return false;
     if (matmul.SetBeta(static_cast<double>(beta)) !=
         ::musa::dnn::Status::SUCCESS)
       return false;
@@ -214,10 +314,16 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
                               float activation_alpha) {
   auto a_info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto b_info = ctx.GetInput(1).GetTensorTypeAndShapeInfo();
-  if (a_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-      b_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+  const auto elem_type = a_info.GetElementType();
+  musaDataType_t unused_data_type;
+  mublasComputeType_t unused_compute_type;
+  if (!MublasDataType(elem_type, unused_data_type, unused_compute_type)) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "Gemm only supports float tensors");
+                                      "unsupported Gemm dtype");
+  }
+  if (b_info.GetElementType() != elem_type) {
+    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                      "Gemm input dtypes must match");
   }
 
   std::vector<int64_t> a_shape = a_info.GetShape();
@@ -237,111 +343,112 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
   }
 
   std::vector<int64_t> out_shape = {m, n};
-  bool can_use_mublas = IsGpuMemory(ctx.GetInput(0).GetTensorMemoryInfo()) &&
-                        IsGpuMemory(ctx.GetInput(1).GetTensorMemoryInfo());
-  if (can_use_mublas) {
-    Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-    can_use_mublas = IsGpuMemory(y.GetTensorMemoryInfo());
-    if (can_use_mublas) {
-      if (m > INT32_MAX || k > INT32_MAX || n > INT32_MAX) {
-        return Ort::GetApi().CreateStatus(
-            ORT_INVALID_ARGUMENT, "Gemm dimensions exceed int32 mublas limits");
-      }
-      const float* a_data = ctx.GetInput(0).GetTensorData<float>();
-      const float* b_data = ctx.GetInput(1).GetTensorData<float>();
-      float* y_data = y.GetTensorMutableData<float>();
-      std::vector<int64_t> c_shape = {1};
-      const float* c_data = nullptr;
-      const bool has_bias = ctx.GetInputCount() > 2;
-      bool bias_is_gpu = true;
-      if (has_bias) {
-        auto c_value = ctx.GetInput(2);
-        auto c_info = c_value.GetTensorTypeAndShapeInfo();
-        if (c_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-          return Ort::GetApi().CreateStatus(
-              ORT_NOT_IMPLEMENTED, "Gemm bias only supports float tensors");
-        }
-        c_shape = c_info.GetShape();
-        std::vector<int64_t> broadcast_shape =
-            BroadcastShape(c_shape, out_shape);
-        if (broadcast_shape != out_shape) {
-          return Ort::GetApi().CreateStatus(
-              ORT_INVALID_ARGUMENT, "Gemm bias broadcast shape mismatch");
-        }
-        c_data = c_value.GetTensorData<float>();
-        bias_is_gpu = IsGpuMemory(c_value.GetTensorMemoryInfo());
-      }
-
-      if (bias_is_gpu && TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape,
-                                      b_shape, c_shape, out_shape, trans_a,
-                                      trans_b, alpha, beta, has_bias)) {
-        if (activation.empty()) {
-          return nullptr;
-        }
-
-        MusaUnaryOp activation_op = MusaUnaryOp::Relu;
-        if (TryMapActivation(activation, activation_op)) {
-          MusaBroadcastParams params =
-              MakeBroadcastParams(out_shape, out_shape, {1});
-          return LaunchStatus(LaunchMusaGemmPostFloatKernel(
-              y_data, nullptr, params, false, 0.0f, activation_op, true,
-              activation_alpha, nullptr));
-        }
-
-        return Ort::GetApi().CreateStatus(
-            ORT_NOT_IMPLEMENTED,
-            "unsupported FusedGemm activation for MUSA post kernel");
-      }
-
-      mublasHandle_t handle = nullptr;
-      RETURN_IF_ERROR(EnsureMublasHandle(&handle));
-      mublasOperation_t op_a = trans_a ? MUBLAS_OP_T : MUBLAS_OP_N;
-      mublasOperation_t op_b = trans_b ? MUBLAS_OP_T : MUBLAS_OP_N;
-      int lda = static_cast<int>(a_shape[1]);
-      int ldb = static_cast<int>(b_shape[1]);
-      int mi = static_cast<int>(m);
-      int ki = static_cast<int>(k);
-      int ni = static_cast<int>(n);
-      float zero = 0.0f;
-      mublasStatus status =
-          mublasSgemm(handle, op_b, op_a, ni, mi, ki, &alpha, b_data, ldb,
-                      a_data, lda, &zero, y_data, ni);
-      if (status != MUBLAS_STATUS_SUCCESS) {
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSgemm failed");
-      }
-      if (ctx.GetInputCount() <= 2 && activation.empty()) {
-        return nullptr;
-      }
-
-      MusaUnaryOp activation_op = MusaUnaryOp::Relu;
-      const bool has_activation = !activation.empty();
-      const bool activation_supported =
-          !has_activation || TryMapActivation(activation, activation_op);
-      if (activation_supported && (!has_bias || bias_is_gpu)) {
-        if (CanUseBroadcastKernel(out_shape, out_shape, c_shape)) {
-          MusaBroadcastParams params =
-              MakeBroadcastParams(out_shape, out_shape, c_shape);
-          return LaunchStatus(LaunchMusaGemmPostFloatKernel(
-              y_data, c_data, params, has_bias, beta, activation_op,
-              has_activation, activation_alpha, nullptr));
-        }
-      }
-
-      if (has_bias && !bias_is_gpu) {
-        return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                          "Gemm bias requires MUSA input");
-      }
-      if (!activation_supported) {
-        return Ort::GetApi().CreateStatus(
-            ORT_NOT_IMPLEMENTED,
-            "unsupported FusedGemm activation for MUSA post kernel");
-      }
-      return Ort::GetApi().CreateStatus(
-          ORT_NOT_IMPLEMENTED,
-          "Gemm bias broadcast rank exceeds MUSA kernel limit");
-    }
+  if (!IsGpuMemory(ctx.GetInput(0).GetTensorMemoryInfo()) ||
+      !IsGpuMemory(ctx.GetInput(1).GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Gemm requires MUSA inputs");
   }
 
-  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                    "Gemm requires MUSA inputs and output");
+  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+  if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Gemm requires MUSA output");
+  }
+
+  std::vector<int64_t> c_shape = {1};
+  const void* c_data = nullptr;
+  const bool has_bias = ctx.GetInputCount() > 2;
+  bool bias_is_gpu = true;
+  if (has_bias) {
+    auto c_value = ctx.GetInput(2);
+    auto c_info = c_value.GetTensorTypeAndShapeInfo();
+    if (c_info.GetElementType() != elem_type) {
+      return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                        "Gemm bias dtype must match inputs");
+    }
+    c_shape = c_info.GetShape();
+    std::vector<int64_t> broadcast_shape = BroadcastShape(c_shape, out_shape);
+    if (broadcast_shape != out_shape) {
+      return Ort::GetApi().CreateStatus(
+          ORT_INVALID_ARGUMENT, "Gemm bias broadcast shape mismatch");
+    }
+    c_data = c_value.GetTensorRawData();
+    bias_is_gpu = IsGpuMemory(c_value.GetTensorMemoryInfo());
+  }
+
+  if (has_bias && !bias_is_gpu) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Gemm bias requires MUSA input");
+  }
+
+  MusaUnaryOp activation_op = MusaUnaryOp::Relu;
+  const bool has_activation = !activation.empty();
+  if (has_activation && !TryMapActivation(activation, activation_op)) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "unsupported FusedGemm activation for MUSA post kernel");
+  }
+
+  const void* a_data = ctx.GetInput(0).GetTensorRawData();
+  const void* b_data = ctx.GetInput(1).GetTensorRawData();
+  void* y_data = y.GetTensorMutableRawData();
+
+  if (bias_is_gpu && TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape,
+                                  b_shape, c_shape, out_shape, trans_a,
+                                  trans_b, alpha, beta, has_bias,
+                                  elem_type)) {
+    if (!has_activation) {
+      return nullptr;
+    }
+    MusaElementType musa_elem_type;
+    if (!ToMusaElementType(elem_type, musa_elem_type)) {
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "unsupported Gemm dtype");
+    }
+    MusaBroadcastParams params = MakeBroadcastParams(out_shape, out_shape, {1});
+    return LaunchStatus(LaunchMusaGemmPostKernel(
+        y_data, nullptr, params, false, 0.0f, activation_op, true,
+        activation_alpha, musa_elem_type, nullptr));
+  }
+
+  bool gemm_done = false;
+  if (m <= INT32_MAX && k <= INT32_MAX && n <= INT32_MAX) {
+    mublasHandle_t handle = nullptr;
+    RETURN_IF_ERROR(EnsureMublasHandle(&handle));
+    mublasOperation_t op_a = trans_a ? MUBLAS_OP_T : MUBLAS_OP_N;
+    mublasOperation_t op_b = trans_b ? MUBLAS_OP_T : MUBLAS_OP_N;
+    int lda = static_cast<int>(a_shape[1]);
+    int ldb = static_cast<int>(b_shape[1]);
+    int mi = static_cast<int>(m);
+    int ki = static_cast<int>(k);
+    int ni = static_cast<int>(n);
+    mublasStatus status =
+        MublasGemmEx(handle, op_b, op_a, ni, mi, ki, alpha, b_data, ldb,
+                     a_data, lda, 0.0, y_data, ni, elem_type);
+    gemm_done = status == MUBLAS_STATUS_SUCCESS;
+  }
+  if (!gemm_done) {
+    RETURN_IF_ERROR(ComputeMusaMatMulDevice(
+        a_data, b_data, y_data, elem_type, a_shape, b_shape, out_shape,
+        trans_a, trans_b, false, false, alpha));
+  }
+
+  if (!has_bias && !has_activation) {
+    return nullptr;
+  }
+
+  if (!CanUseBroadcastKernel(out_shape, out_shape, c_shape)) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "Gemm bias broadcast rank exceeds MUSA kernel limit");
+  }
+  MusaElementType musa_elem_type;
+  if (!ToMusaElementType(elem_type, musa_elem_type)) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "unsupported Gemm dtype");
+  }
+  MusaBroadcastParams params = MakeBroadcastParams(out_shape, out_shape, c_shape);
+  return LaunchStatus(LaunchMusaGemmPostKernel(
+      y_data, c_data, params, has_bias, beta, activation_op, has_activation,
+      activation_alpha, musa_elem_type, nullptr));
 }

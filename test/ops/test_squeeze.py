@@ -29,3 +29,9 @@ def test_squeeze_bool_all_singleton_axes():
     x = np.array([[[True, False, True]]], dtype=np.bool_)
     axes = np.array([0, 1], dtype=np.int64)
     run_and_compare("Squeeze", inputs={"X": x, "axes": axes}, outputs=[("Y", TensorProto.BOOL)])
+
+
+def test_squeeze_uint8():
+    x = np.arange(6, dtype=np.uint8).reshape(1, 2, 3)
+    axes = np.array([0], dtype=np.int64)
+    run_and_compare("Squeeze", inputs={"X": x, "axes": axes}, outputs=[("Y", TensorProto.UINT8)])

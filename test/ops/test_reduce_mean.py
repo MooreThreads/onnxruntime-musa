@@ -123,3 +123,13 @@ def test_reduce_mean_bfloat16_axis1_no_keepdims():
         rtol=2e-2,
         atol=2e-2,
     )
+
+
+def test_reduce_mean_int32_axis1_no_keepdims():
+    x = np.array([[1, 2, 4], [5, 7, 9]], dtype=np.int32)
+    run_and_compare(
+        "ReduceMean",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.INT32)],
+        attrs={"axes": [1], "keepdims": 0},
+    )

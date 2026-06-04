@@ -32,8 +32,8 @@ OrtStatus* Squeeze::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Squeeze, kOnnxDomain, 13, 17,
+    Squeeze, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
-         .AddTypeConstraint("T", TensorTypesWithBool())
+         .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .SetInputMemType(1, OrtMemTypeCPUInput)
          .AddInputOutputAlias(0, 0)), Squeeze)

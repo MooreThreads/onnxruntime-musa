@@ -182,6 +182,16 @@ inline std::vector<const OrtDataType*> FloatTensorTypes() {
   return {GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)};
 }
 
+inline std::vector<const OrtDataType*> ReduceMeanTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+  };
+}
+
 inline std::vector<const OrtDataType*> HfdTensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
@@ -196,6 +206,19 @@ inline std::vector<const OrtDataType*> AbsTensorTypes() {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+  };
+}
+
+inline std::vector<const OrtDataType*> NegTensorTypes() {
+  return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),

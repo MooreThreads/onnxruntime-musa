@@ -5,6 +5,27 @@
 #include <cstdint>
 #include <vector>
 
+OrtStatus* ComputeMusaMatMulOutputShape(
+    const std::vector<int64_t>& a_shape,
+    const std::vector<int64_t>& b_shape,
+    bool trans_a,
+    bool trans_b,
+    bool trans_batch_a,
+    bool trans_batch_b,
+    std::vector<int64_t>& y_shape);
+
+OrtStatus* ComputeMusaMatMulDevice(const void* a_data, const void* b_data,
+                                   void* y_data,
+                                   ONNXTensorElementDataType elem_type,
+                                   const std::vector<int64_t>& a_shape,
+                                   const std::vector<int64_t>& b_shape,
+                                   const std::vector<int64_t>& y_shape,
+                                   bool trans_a = false,
+                                   bool trans_b = false,
+                                   bool trans_batch_a = false,
+                                   bool trans_batch_b = false,
+                                   float alpha = 1.0f);
+
 OrtStatus* ComputeMusaMatMulDevice(const float* a_data, const float* b_data,
                                    float* y_data,
                                    const std::vector<int64_t>& a_shape,

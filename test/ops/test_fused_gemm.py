@@ -8,7 +8,7 @@ ORT build that registers it for CPU. Both providers are compared the same way.
 
 import numpy as np
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import TensorProto, build_model_with_input_types, run_and_compare, run_with_iobinding
 
 
 def test_fused_gemm_relu():
@@ -76,3 +76,27 @@ def test_fused_gemm_tanh_scaled():
         rtol=2e-3,
         atol=2e-4,
     )
+
+
+def test_fused_gemm_double_relu():
+    rng = np.random.default_rng(4)
+    a = rng.standard_normal((4, 8)).astype(np.float64)
+    b = rng.standard_normal((8, 5)).astype(np.float64)
+    c = rng.standard_normal((5,)).astype(np.float64)
+    expected = np.maximum(a @ b + c, 0.0)
+    model = build_model_with_input_types(
+        "FusedGemm",
+        inputs={"A": a, "B": b, "C": c},
+        input_types={"A": TensorProto.DOUBLE, "B": TensorProto.DOUBLE, "C": TensorProto.DOUBLE},
+        outputs=[("Y", TensorProto.DOUBLE)],
+        attrs={"alpha": 1.0, "beta": 1.0, "activation": "Relu"},
+        domain="com.microsoft",
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        {"A": a, "B": b, "C": c},
+        {"A": TensorProto.DOUBLE, "B": TensorProto.DOUBLE, "C": TensorProto.DOUBLE},
+        [("Y", TensorProto.DOUBLE, expected.shape)],
+        use_musa=True,
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-10)

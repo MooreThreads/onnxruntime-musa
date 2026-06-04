@@ -4,7 +4,12 @@
 
 import numpy as np
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import (
+    TensorProto,
+    build_model_with_input_types,
+    run_and_compare,
+    run_with_iobinding,
+)
 
 
 def test_gemm_no_trans_with_bias():
@@ -69,3 +74,53 @@ def test_gemm_column_bias_broadcast():
         outputs=[("Y", TensorProto.FLOAT)],
         attrs={"alpha": 1.0, "beta": -0.5, "transA": 0, "transB": 0},
     )
+
+
+def test_gemm_double_with_bias():
+    rng = np.random.default_rng(5)
+    a = rng.standard_normal((4, 8)).astype(np.float64)
+    b = rng.standard_normal((8, 5)).astype(np.float64)
+    c = rng.standard_normal((5,)).astype(np.float64)
+    run_and_compare(
+        "Gemm",
+        inputs={"A": a, "B": b, "C": c},
+        outputs=[("Y", TensorProto.DOUBLE)],
+        attrs={"alpha": 1.25, "beta": -0.5},
+        rtol=1e-9,
+        atol=1e-10,
+    )
+
+
+def test_gemm_float16_with_bias():
+    rng = np.random.default_rng(6)
+    a = rng.standard_normal((4, 8)).astype(np.float16)
+    b = rng.standard_normal((8, 5)).astype(np.float16)
+    c = rng.standard_normal((5,)).astype(np.float16)
+    attrs = {"alpha": 0.5, "beta": 0.25}
+    expected = (
+        attrs["alpha"] * (a.astype(np.float32) @ b.astype(np.float32))
+        + attrs["beta"] * c.astype(np.float32)
+    ).astype(np.float16)
+    model = build_model_with_input_types(
+        "Gemm",
+        inputs={"A": a, "B": b, "C": c},
+        input_types={
+            "A": TensorProto.FLOAT16,
+            "B": TensorProto.FLOAT16,
+            "C": TensorProto.FLOAT16,
+        },
+        outputs=[("Y", TensorProto.FLOAT16)],
+        attrs=attrs,
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        {"A": a, "B": b, "C": c},
+        {
+            "A": TensorProto.FLOAT16,
+            "B": TensorProto.FLOAT16,
+            "C": TensorProto.FLOAT16,
+        },
+        [("Y", TensorProto.FLOAT16, expected.shape)],
+        use_musa=True,
+    )
+    np.testing.assert_allclose(actual, expected, rtol=2e-2, atol=2e-2)

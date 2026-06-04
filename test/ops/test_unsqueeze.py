@@ -29,3 +29,15 @@ def test_unsqueeze_bool_unsorted_axes():
     x = np.array([True, False, True], dtype=np.bool_)
     axes = np.array([2, 0], dtype=np.int64)
     run_and_compare("Unsqueeze", inputs={"X": x, "axes": axes}, outputs=[("Y", TensorProto.BOOL)])
+
+
+def test_unsqueeze_float16():
+    x = np.random.default_rng(2).standard_normal((2, 3)).astype(np.float16)
+    axes = np.array([1], dtype=np.int64)
+    run_and_compare(
+        "Unsqueeze",
+        inputs={"X": x, "axes": axes},
+        outputs=[("Y", TensorProto.FLOAT16)],
+        rtol=2e-2,
+        atol=2e-2,
+    )

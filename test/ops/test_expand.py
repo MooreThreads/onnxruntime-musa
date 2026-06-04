@@ -29,3 +29,15 @@ def test_expand_int64_middle_broadcast():
     x = np.arange(6, dtype=np.int64).reshape(1, 2, 3)
     shape = np.array([4, 2, 3], dtype=np.int64)
     run_and_compare("Expand", inputs={"X": x, "shape": shape}, outputs=[("Y", TensorProto.INT64)])
+
+
+def test_expand_float16():
+    x = np.random.default_rng(4).standard_normal((1, 4)).astype(np.float16)
+    shape = np.array([3, 4], dtype=np.int64)
+    run_and_compare("Expand", inputs={"X": x, "shape": shape}, outputs=[("Y", TensorProto.FLOAT16)])
+
+
+def test_expand_uint16_leading_dims():
+    x = np.array([1, 2, 3], dtype=np.uint16)
+    shape = np.array([2, 1, 3], dtype=np.int64)
+    run_and_compare("Expand", inputs={"X": x, "shape": shape}, outputs=[("Y", TensorProto.UINT16)])

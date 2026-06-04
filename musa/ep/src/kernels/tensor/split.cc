@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 #include "shared_inc/op_kernel_common.h"
+#include "tensor/split_impl.h"
 
 namespace {
 class Split : public OpKernelBase<Split> {
@@ -46,38 +47,37 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
           : std::accumulate(shape0.begin() + axis + 1, shape0.end(), int64_t{1},
                             std::multiplies<int64_t>());
   const bool gpu_input = IsGpuMemory(input0.GetTensorMemoryInfo());
+  if (!gpu_input) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Split requires MUSA input and outputs");
+  }
+  std::vector<void*> output_data(splits.size());
   for (size_t out_idx = 0; out_idx < splits.size(); ++out_idx) {
     std::vector<int64_t> out_shape = shape0;
     out_shape[static_cast<size_t>(axis)] = splits[out_idx];
     Ort::UnownedValue y = ctx.GetOutput(out_idx, out_shape);
-    if (gpu_input && IsGpuMemory(y.GetTensorMemoryInfo())) {
-      const auto* src_base =
-          static_cast<const uint8_t*>(input0.GetTensorRawData());
-      auto* dst_base = static_cast<uint8_t*>(y.GetTensorMutableRawData());
-      const size_t width_bytes =
-          static_cast<size_t>(splits[out_idx] * inner) * elem_size;
-      const size_t src_pitch =
-          static_cast<size_t>(shape0[static_cast<size_t>(axis)] * inner) *
-          elem_size;
-      const size_t dst_pitch = width_bytes;
-      const size_t src_offset =
-          static_cast<size_t>(axis_start * inner) * elem_size;
-      RETURN_IF_ERROR(DeviceMemcpy2D(dst_base, dst_pitch, src_base + src_offset,
-                                     src_pitch, width_bytes,
-                                     static_cast<size_t>(outer)));
-      axis_start += splits[out_idx];
-      continue;
+    if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "Split requires MUSA input and outputs");
     }
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "Split requires MUSA input and outputs");
+    output_data[out_idx] = y.GetTensorMutableRawData();
+    axis_start += splits[out_idx];
   }
-  return nullptr;
+  if (axis_start != shape0[static_cast<size_t>(axis)]) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Split sizes do not match input axis");
+  }
+  return LaunchStatus(LaunchMusaSplitCopies(
+      input0.GetTensorRawData(), output_data.data(), splits.data(),
+      static_cast<int64_t>(output_data.size()), outer, inner,
+      shape0[static_cast<size_t>(axis)], static_cast<int32_t>(elem_size),
+      nullptr));
 }
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Split, kOnnxDomain, 13, 17,
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Split, kOnnxDomain, 13, 19,
                                   (Ort::KernelDefBuilder()
                                        .AddTypeConstraint("T",
-                                                          TensorTypesWithBool())
+                                                          AllFixedSizeTensorTypes())
                                        .SetInputMemType(1, OrtMemTypeCPUInput)),
                                   Split)

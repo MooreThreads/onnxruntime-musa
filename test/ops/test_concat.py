@@ -61,3 +61,25 @@ def test_concat_bool_negative_axis():
         outputs=[("Y", TensorProto.BOOL)],
         attrs={"axis": -1},
     )
+
+
+def test_concat_float16_axis1():
+    a = np.random.default_rng(4).standard_normal((4, 2)).astype(np.float16)
+    b = np.random.default_rng(5).standard_normal((4, 3)).astype(np.float16)
+    run_and_compare(
+        "Concat",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.FLOAT16)],
+        attrs={"axis": 1},
+    )
+
+
+def test_concat_uint8_axis0():
+    a = np.arange(12, dtype=np.uint8).reshape(3, 4)
+    b = np.arange(100, 108, dtype=np.uint8).reshape(2, 4)
+    run_and_compare(
+        "Concat",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.UINT8)],
+        attrs={"axis": 0},
+    )

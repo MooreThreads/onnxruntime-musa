@@ -3,6 +3,7 @@
 
 #include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
+#include "tensor/concat_impl.h"
 
 namespace {
 ::musa::dnn::Tensor::Format MudnnFormatForShape(
@@ -125,25 +126,19 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
             ? 1
             : std::accumulate(out_shape.begin() + axis + 1, out_shape.end(),
                               int64_t{1}, std::multiplies<int64_t>());
-    const int64_t output_axis = out_shape[static_cast<size_t>(axis)];
-    auto* dst_base = static_cast<uint8_t*>(y.GetTensorMutableRawData());
-    int64_t dst_axis_offset = 0;
+    std::vector<const void*> input_data(shapes.size());
+    std::vector<int64_t> input_axis_dims(shapes.size());
     for (size_t input_idx = 0; input_idx < shapes.size(); ++input_idx) {
       Ort::ConstValue v = ctx.GetInput(input_idx);
-      const int64_t input_axis = shapes[input_idx][static_cast<size_t>(axis)];
-      const size_t width_bytes =
-          static_cast<size_t>(input_axis * inner) * elem_size;
-      const size_t src_pitch = width_bytes;
-      const size_t dst_pitch =
-          static_cast<size_t>(output_axis * inner) * elem_size;
-      const auto* src = static_cast<const uint8_t*>(v.GetTensorRawData());
-      auto* dst =
-          dst_base + static_cast<size_t>(dst_axis_offset * inner) * elem_size;
-      RETURN_IF_ERROR(DeviceMemcpy2D(dst, dst_pitch, src, src_pitch,
-                                     width_bytes, static_cast<size_t>(outer)));
-      dst_axis_offset += input_axis;
+      input_data[input_idx] = v.GetTensorRawData();
+      input_axis_dims[input_idx] =
+          shapes[input_idx][static_cast<size_t>(axis)];
     }
-    return nullptr;
+    return LaunchStatus(LaunchMusaConcatCopies(
+        y.GetTensorMutableRawData(), input_data.data(), input_axis_dims.data(),
+        static_cast<int64_t>(input_data.size()), outer, inner,
+        out_shape[static_cast<size_t>(axis)], static_cast<int32_t>(elem_size),
+        nullptr));
   }
 
   return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
@@ -152,6 +147,6 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Concat, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", TensorTypesWithBool())),
+    Concat, kOnnxDomain, 13, 19,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllFixedSizeTensorTypes())),
     Concat)

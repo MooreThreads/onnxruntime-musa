@@ -74,7 +74,7 @@ static const BuildKernelCreateInfoFn build_kernel_create_info_funcs[] = {
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Shape)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Cast)>,
+        kOnnxDomain, 13, 19, Cast)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Reshape)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
@@ -82,17 +82,17 @@ static const BuildKernelCreateInfoFn build_kernel_create_info_funcs[] = {
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 17, Unsqueeze)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Expand)>,
+        kOnnxDomain, 13, 19, Expand)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Concat)>,
+        kOnnxDomain, 13, 19, Concat)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Transpose)>,
+        kOnnxDomain, 13, 19, Transpose)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Gather)>,
+        kOnnxDomain, 13, 19, Gather)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Slice)>,
+        kOnnxDomain, 13, 19, Slice)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
-        kOnnxDomain, 13, 17, Split)>,
+        kOnnxDomain, 13, 19, Split)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 13, 19, ReduceProd)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(

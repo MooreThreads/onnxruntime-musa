@@ -60,3 +60,25 @@ def test_gather_bool_scalar_index():
         outputs=[("Y", TensorProto.BOOL)],
         attrs={"axis": 0},
     )
+
+
+def test_gather_float16_axis1():
+    data = np.random.default_rng(2).standard_normal((4, 8)).astype(np.float16)
+    indices = np.array([1, 5, 7], dtype=np.int64)
+    run_and_compare(
+        "Gather",
+        inputs={"data": data, "indices": indices},
+        outputs=[("Y", TensorProto.FLOAT16)],
+        attrs={"axis": 1},
+    )
+
+
+def test_gather_uint16_int32_indices():
+    data = np.arange(3 * 4, dtype=np.uint16).reshape(3, 4)
+    indices = np.array([[0, 2], [3, 1]], dtype=np.int32)
+    run_and_compare(
+        "Gather",
+        inputs={"data": data, "indices": indices},
+        outputs=[("Y", TensorProto.UINT16)],
+        attrs={"axis": 1},
+    )

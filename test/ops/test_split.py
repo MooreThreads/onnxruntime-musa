@@ -53,3 +53,29 @@ def test_split_bool_three_outputs():
         ],
         attrs={"axis": 1},
     )
+
+
+def test_split_float16_axis0():
+    x = np.random.default_rng(2).standard_normal((6, 4)).astype(np.float16)
+    split = np.array([2, 4], dtype=np.int64)
+    run_and_compare(
+        "Split",
+        inputs={"X": x, "split": split},
+        outputs=[("Y0", TensorProto.FLOAT16), ("Y1", TensorProto.FLOAT16)],
+        attrs={"axis": 0},
+    )
+
+
+def test_split_uint8_three_outputs():
+    x = np.arange(2 * 6, dtype=np.uint8).reshape(2, 6)
+    split = np.array([1, 2, 3], dtype=np.int64)
+    run_and_compare(
+        "Split",
+        inputs={"X": x, "split": split},
+        outputs=[
+            ("Y0", TensorProto.UINT8),
+            ("Y1", TensorProto.UINT8),
+            ("Y2", TensorProto.UINT8),
+        ],
+        attrs={"axis": 1},
+    )

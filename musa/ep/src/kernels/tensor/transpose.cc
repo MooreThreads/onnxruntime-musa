@@ -57,6 +57,6 @@ OrtStatus* Transpose::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Transpose, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", TensorTypesWithBool())),
+    Transpose, kOnnxDomain, 13, 19,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllFixedSizeTensorTypes())),
     Transpose)

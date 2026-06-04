@@ -113,9 +113,9 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Slice, kOnnxDomain, 13, 17,
+    Slice, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
-         .AddTypeConstraint("T", TensorTypesWithBool())
+         .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .AddTypeConstraint("Tind", IntTensorTypes())
          .SetInputMemType(1, OrtMemTypeCPUInput)
          .SetInputMemType(2, OrtMemTypeCPUInput)

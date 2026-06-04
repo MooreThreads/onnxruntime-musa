@@ -34,8 +34,15 @@ OrtStatus* Gather::Compute(Ort::KernelContext& ctx) const {
   if (elem_size == 0)
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Gather unsupported dtype");
+  size_t index_elem_size = ElementSize(indices_info.GetElementType());
+  if (index_elem_size != sizeof(int32_t) &&
+      index_elem_size != sizeof(int64_t)) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Gather unsupported index dtype");
+  }
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
   if (IsGpuMemory(input0.GetTensorMemoryInfo()) &&
+      IsGpuMemory(indices_value.GetTensorMemoryInfo()) &&
       IsGpuMemory(y.GetTensorMemoryInfo())) {
     int64_t block_size = 1;
     for (size_t dim = static_cast<size_t>(axis) + 1; dim < shape0.size(); ++dim)
@@ -47,60 +54,22 @@ OrtStatus* Gather::Compute(Ort::KernelContext& ctx) const {
       prefix_count *= shape0[static_cast<size_t>(dim)];
     int64_t input_block_size = indices_max * block_size;
     int64_t output_block_size = indices_count * block_size;
-    if (IsGpuMemory(indices_value.GetTensorMemoryInfo())) {
-      return Ort::GetApi().CreateStatus(
-          ORT_NOT_IMPLEMENTED,
-          "Gather with MUSA indices requires device-side bounds validation");
-    }
-
-    std::vector<int64_t> indices = ReadIntTensor(ctx, 1);
-    for (int64_t index : indices) {
-      int64_t normalized_index = index;
-      if (normalized_index < 0) normalized_index += indices_max;
-      if (normalized_index < 0 || normalized_index >= indices_max) {
-        return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
-                                          "Gather index is out of bounds");
-      }
-    }
-    const auto* input_bytes =
-        static_cast<const uint8_t*>(input0.GetTensorRawData());
-    auto* output_bytes = static_cast<uint8_t*>(y.GetTensorMutableRawData());
-    const size_t copy_bytes = static_cast<size_t>(block_size) * elem_size;
-    for (int64_t prefix = 0; prefix < prefix_count; ++prefix) {
-      for (int64_t idx_offset = 0; idx_offset < indices_count; ++idx_offset) {
-        int64_t gather_idx = indices[static_cast<size_t>(idx_offset)];
-        if (gather_idx < 0) gather_idx += indices_max;
-        size_t dst_offset = static_cast<size_t>(prefix * output_block_size +
-                                                idx_offset * block_size) *
-                            elem_size;
-        if (gather_idx < 0 || gather_idx >= indices_max) {
-          musaError_t memset_status = musaMemsetAsync(output_bytes + dst_offset,
-                                                      0, copy_bytes, nullptr);
-          if (memset_status != musaSuccess) {
-            return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                              MusaErrorString(memset_status));
-          }
-          continue;
-        }
-        size_t src_offset = static_cast<size_t>(prefix * input_block_size +
-                                                gather_idx * block_size) *
-                            elem_size;
-        RETURN_IF_ERROR(DeviceMemcpy(output_bytes + dst_offset,
-                                     input_bytes + src_offset, copy_bytes));
-      }
-    }
-    return nullptr;
+    return LaunchStatus(LaunchMusaGatherKernel(
+        input0.GetTensorRawData(), indices_value.GetTensorRawData(),
+        y.GetTensorMutableRawData(), static_cast<int32_t>(elem_size),
+        static_cast<int32_t>(index_elem_size), input_block_size, indices_max,
+        output_block_size, block_size, prefix_count * output_block_size,
+        nullptr));
   }
 
   return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                    "Gather requires MUSA input and output");
+                                    "Gather requires MUSA input, indices, and output");
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Gather, kOnnxDomain, 13, 17,
+    Gather, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
-         .AddTypeConstraint("T", TensorTypesWithBool())
-         .AddTypeConstraint("Tind", IntTensorTypes())
-         .SetInputMemType(1, OrtMemTypeCPUInput)),
+         .AddTypeConstraint("T", AllFixedSizeTensorTypes())
+         .AddTypeConstraint("Tind", IntTensorTypes())),
     Gather)

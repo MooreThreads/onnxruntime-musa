@@ -69,7 +69,10 @@ class OpKernelBase : public OrtKernelImpl {
 // ---------------------------------------------------------------------------
 inline std::vector<const OrtDataType*> AllTensorTypes() {
   return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
   };

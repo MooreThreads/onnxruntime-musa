@@ -15,17 +15,24 @@ inline MusaReduceOp ToMusaReduceOp(ReduceMode mode) {
   return MusaReduceOp::Prod;
 }
 
+inline OrtStatus* UnsupportedReduceStatus(const char* message) {
+  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, message);
+}
+
 inline MusaReduceParams MakeReduceParams(
     const std::vector<int64_t>& input_shape,
-    const std::vector<int64_t>& output_shape, const std::set<int64_t>& axes_set,
+    const std::vector<int64_t>& output_shape,
+    const std::set<int64_t>& axes_set,
     bool keepdims) {
   auto input_strides = Strides(input_shape);
   auto output_strides = Strides(output_shape);
   MusaReduceParams params{};
   params.rank = static_cast<int32_t>(input_shape.size());
-  params.reduce_axis = static_cast<int32_t>(*axes_set.begin());
+  params.reduce_axis =
+      axes_set.empty() ? 0 : static_cast<int32_t>(*axes_set.begin());
   params.output_elements = NumElements(output_shape);
-  params.reduce_dim = input_shape[static_cast<size_t>(params.reduce_axis)];
+  params.reduce_dim =
+      input_shape.empty() ? 1 : input_shape[static_cast<size_t>(params.reduce_axis)];
   params.reduction_elements = 1;
 
   size_t out_dim = 0;
@@ -45,8 +52,11 @@ inline MusaReduceParams MakeReduceParams(
   return params;
 }
 
+// Shared device-side reduction used by ReduceProd / ReduceSum / ReduceMean /
+// ReduceSumSquare.
 inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
-                                std::vector<int64_t> axes, bool keepdims,
+                                std::vector<int64_t> axes,
+                                bool keepdims,
                                 ReduceMode mode) {
   Ort::ConstValue input0 = ctx.GetInput(0);
   auto input_info = input0.GetTensorTypeAndShapeInfo();
@@ -66,43 +76,31 @@ inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
   if (output_shape.empty()) output_shape.push_back(1);
 
   if (input_shape.size() > kMusaMaxBroadcastRank) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "reduce rank exceeds MUSA kernel limit");
+    return UnsupportedReduceStatus("Reduce rank exceeds MUSA device limit");
   }
-  if (!IsGpuMemory(input0.GetTensorMemoryInfo())) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "reduce requires MUSA input");
+
+  MusaElementType musa_elem_type;
+  if (!ToMusaElementType(elem_type, musa_elem_type)) {
+    return UnsupportedReduceStatus("unsupported reduce dtype");
   }
 
   Ort::UnownedValue y = ctx.GetOutput(0, output_shape);
-  if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "reduce requires MUSA output");
+  if (!IsGpuMemory(input0.GetTensorMemoryInfo()) ||
+      !IsGpuMemory(y.GetTensorMemoryInfo())) {
+    return UnsupportedReduceStatus("Reduce requires MUSA device tensors");
+  }
+
+  if (mode == ReduceMode::kMean &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
+    return UnsupportedReduceStatus("integer ReduceMean is not supported");
   }
 
   MusaReduceParams params =
       MakeReduceParams(input_shape, output_shape, axes_set, keepdims);
-  MusaReduceOp reduce_op = ToMusaReduceOp(mode);
-  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    return LaunchStatus(LaunchMusaReduceFloatKernel(
-        input0.GetTensorData<float>(), y.GetTensorMutableData<float>(), params,
-        reduce_op, nullptr));
-  }
-  if (mode == ReduceMode::kMean) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "integer ReduceMean is not supported");
-  }
-  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
-    return LaunchStatus(LaunchMusaReduceInt32Kernel(
-        input0.GetTensorData<int32_t>(), y.GetTensorMutableData<int32_t>(),
-        params, reduce_op, nullptr));
-  }
-  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-    return LaunchStatus(LaunchMusaReduceInt64Kernel(
-        input0.GetTensorData<int64_t>(), y.GetTensorMutableData<int64_t>(),
-        params, reduce_op, nullptr));
-  }
-  std::string message = "unsupported reduce dtype: " +
-                        std::to_string(static_cast<int>(elem_type));
-  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, message.c_str());
+  return LaunchStatus(LaunchMusaReduceKernel(
+      input0.GetTensorRawData(), y.GetTensorMutableRawData(), params,
+      ToMusaReduceOp(mode), musa_elem_type, nullptr));
 }

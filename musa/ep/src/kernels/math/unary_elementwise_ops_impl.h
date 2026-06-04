@@ -16,3 +16,9 @@ musaError_t LaunchMusaUnaryKernel(const void* input,
                                   float alpha,
                                   MusaElementType elem_type,
                                   musaStream_t stream);
+
+musaError_t LaunchMusaIsNaNKernel(const void* input,
+                                  uint8_t* output,
+                                  int64_t count,
+                                  MusaElementType elem_type,
+                                  musaStream_t stream);

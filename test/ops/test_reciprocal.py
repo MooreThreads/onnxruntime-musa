@@ -10,3 +10,8 @@ from op_test_utils import TensorProto, run_and_compare
 def test_reciprocal_float():
     x = np.random.default_rng(0).uniform(0.5, 5.0, (16, 32)).astype(np.float32)
     run_and_compare("Reciprocal", inputs={"X": x}, outputs=[("Y", TensorProto.FLOAT)])
+
+
+def test_reciprocal_float_matrix():
+    x = np.random.default_rng(2).uniform(0.25, 4.0, (3, 4)).astype(np.float32)
+    run_and_compare("Reciprocal", inputs={"X": x}, outputs=[("Y", TensorProto.FLOAT)])

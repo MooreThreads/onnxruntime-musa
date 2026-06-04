@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 #include "shared_inc/op_kernel_common.h"
+#include "tensor/cast_op_impl.h"
 
 namespace {
 class Expand : public OpKernelBase<Expand> {
@@ -17,7 +18,8 @@ OrtStatus* Expand::Compute(Ort::KernelContext& ctx) const {
   auto input_shape = info.GetShape();
   std::vector<int64_t> target_shape = ReadIntTensor(ctx, 1);
   if (target_shape.size() < input_shape.size()) {
-    target_shape.insert(target_shape.begin(), input_shape.size() - target_shape.size(), 1);
+    target_shape.insert(target_shape.begin(),
+                        input_shape.size() - target_shape.size(), 1);
   }
   const size_t offset = target_shape.size() - input_shape.size();
   for (size_t i = 0; i < target_shape.size(); ++i) {
@@ -31,25 +33,29 @@ OrtStatus* Expand::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Expand unsupported dtype");
   }
-  std::vector<uint8_t> input_bytes;
-  RETURN_IF_ERROR(CopyToHost(input, input_bytes));
-  std::vector<uint8_t> output(static_cast<size_t>(NumElements(out_shape)) * elem_size);
-  auto input_strides = Strides(input_shape);
-  for (int64_t i = 0; i < NumElements(out_shape); ++i) {
-    auto coord = Coordinates(i, out_shape);
-    int64_t input_offset = BroadcastOffset(coord, input_shape, input_strides);
-    std::memcpy(output.data() + static_cast<size_t>(i) * elem_size,
-                input_bytes.data() + static_cast<size_t>(input_offset) * elem_size,
-                elem_size);
+  if (!IsGpuMemory(input.GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Expand requires MUSA input");
+  }
+  if (!CanUseBroadcastKernel(out_shape, input_shape, out_shape)) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Expand rank exceeds MUSA kernel limit");
   }
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-  return CopyFromHost(y, output.data(), output.size());
+  if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Expand requires MUSA output");
+  }
+  return LaunchStatus(LaunchMusaExpandKernel(
+      input.GetTensorRawData(), y.GetTensorMutableRawData(),
+      static_cast<int32_t>(elem_size),
+      MakeBroadcastParams(out_shape, input_shape, out_shape), nullptr));
 }
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Expand, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder()
-        .AddTypeConstraint("T", TensorTypesWithBool())
-        .SetInputMemType(1, OrtMemTypeCPUInput)),
-    Expand)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Expand, kOnnxDomain, 13, 17,
+                                  (Ort::KernelDefBuilder()
+                                       .AddTypeConstraint("T",
+                                                          TensorTypesWithBool())
+                                       .SetInputMemType(1, OrtMemTypeCPUInput)),
+                                  Expand)

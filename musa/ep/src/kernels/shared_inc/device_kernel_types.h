@@ -1,8 +1,8 @@
 #pragma once
 
-#include <cstdint>
-
 #include <musa_runtime.h>
+
+#include <cstdint>
 
 constexpr int kMusaMaxBroadcastRank = 8;
 
@@ -87,8 +87,11 @@ struct MusaReduceParams {
   int32_t reduce_axis;
   int64_t output_elements;
   int64_t reduce_dim;
+  int64_t reduction_elements;
+  int64_t input_dims[kMusaMaxBroadcastRank];
   int64_t input_strides[kMusaMaxBroadcastRank];
   int64_t output_strides[kMusaMaxBroadcastRank];
+  int32_t reduce_axes[kMusaMaxBroadcastRank];
 };
 
 struct MusaTransposeParams {

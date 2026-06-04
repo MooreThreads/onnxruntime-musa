@@ -38,3 +38,26 @@ def test_concat_int64_negative_axis():
         outputs=[("Y", TensorProto.INT64)],
         attrs={"axis": -1},
     )
+
+
+def test_concat_int32_three_inputs_axis2():
+    a = np.arange(2 * 3 * 1, dtype=np.int32).reshape(2, 3, 1)
+    b = np.arange(100, 100 + 2 * 3 * 2, dtype=np.int32).reshape(2, 3, 2)
+    c = np.arange(200, 200 + 2 * 3 * 3, dtype=np.int32).reshape(2, 3, 3)
+    run_and_compare(
+        "Concat",
+        inputs={"A": a, "B": b, "C": c},
+        outputs=[("Y", TensorProto.INT32)],
+        attrs={"axis": 2},
+    )
+
+
+def test_concat_bool_negative_axis():
+    a = np.array([[[True], [False]], [[False], [True]]], dtype=np.bool_)
+    b = np.array([[[False, True], [True, False]], [[True, True], [False, False]]], dtype=np.bool_)
+    run_and_compare(
+        "Concat",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.BOOL)],
+        attrs={"axis": -1},
+    )

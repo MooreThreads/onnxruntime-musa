@@ -29,3 +29,27 @@ def test_fused_matmul_alpha_transb():
         attrs={"alpha": 0.5, "transA": 0, "transB": 1},
         domain="com.microsoft",
     )
+
+
+def test_fused_matmul_transa():
+    a = np.random.default_rng(4).standard_normal((32, 16)).astype(np.float32)
+    b = np.random.default_rng(5).standard_normal((32, 24)).astype(np.float32)
+    run_and_compare(
+        "FusedMatMul",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"alpha": 1.0, "transA": 1, "transB": 0},
+        domain="com.microsoft",
+    )
+
+
+def test_fused_matmul_batched_no_transpose():
+    a = np.random.default_rng(6).standard_normal((2, 8, 16)).astype(np.float32)
+    b = np.random.default_rng(7).standard_normal((2, 16, 12)).astype(np.float32)
+    run_and_compare(
+        "FusedMatMul",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"alpha": 1.0},
+        domain="com.microsoft",
+    )

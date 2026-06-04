@@ -23,3 +23,15 @@ def test_sub_broadcast():
     a = np.random.default_rng(2).standard_normal((16, 32, 16)).astype(np.float32)
     b = np.random.default_rng(3).standard_normal((16,)).astype(np.float32)
     run_and_compare("Sub", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+
+
+def test_sub_int32_scalar_broadcast():
+    a = np.arange(12, dtype=np.int32).reshape(3, 4)
+    b = np.array(7, dtype=np.int32)
+    run_and_compare("Sub", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.INT32)])
+
+
+def test_sub_float_multidirectional_broadcast():
+    a = np.random.default_rng(2).standard_normal((2, 3, 1)).astype(np.float32)
+    b = np.random.default_rng(3).standard_normal((1, 1, 4)).astype(np.float32)
+    run_and_compare("Sub", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])

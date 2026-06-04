@@ -23,3 +23,15 @@ def test_mul_broadcast():
     a = np.random.default_rng(2).standard_normal((32, 16, 1)).astype(np.float32)
     b = np.random.default_rng(3).standard_normal((1, 1, 32)).astype(np.float32)
     run_and_compare("Mul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+
+
+def test_mul_int32_scalar_broadcast():
+    a = np.arange(-6, 6, dtype=np.int32).reshape(3, 4)
+    b = np.array(-3, dtype=np.int32)
+    run_and_compare("Mul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.INT32)])
+
+
+def test_mul_int64_multidirectional_broadcast():
+    a = np.arange(2 * 3 * 1, dtype=np.int64).reshape(2, 3, 1)
+    b = np.array([-1, 2, -3, 4], dtype=np.int64).reshape(1, 1, 4)
+    run_and_compare("Mul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.INT64)])

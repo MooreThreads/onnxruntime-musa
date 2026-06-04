@@ -50,22 +50,9 @@ OrtStatus* Transpose::Compute(Ort::KernelContext& ctx) const {
         input0.GetTensorRawData(), y.GetTensorMutableRawData(),
         static_cast<int32_t>(elem_size), params, nullptr));
   }
-  std::vector<uint8_t> in;
-  RETURN_IF_ERROR(CopyToHost(input0, in));
-  std::vector<uint8_t> out(static_cast<size_t>(NumElements(out_shape)) *
-                           elem_size);
-  auto in_strides = Strides(shape0);
-  for (int64_t i = 0; i < NumElements(out_shape); ++i) {
-    auto out_coord = Coordinates(i, out_shape);
-    std::vector<int64_t> in_coord(shape0.size());
-    for (size_t j = 0; j < perm.size(); ++j)
-      in_coord[static_cast<size_t>(perm[j])] = out_coord[j];
-    std::memcpy(out.data() + static_cast<size_t>(i) * elem_size,
-                in.data() + static_cast<size_t>(Offset(in_coord, in_strides)) *
-                                elem_size,
-                elem_size);
-  }
-  return CopyFromHost(y, out.data(), out.size());
+  return Ort::GetApi().CreateStatus(
+      ORT_NOT_IMPLEMENTED,
+      "Transpose requires MUSA input/output and supported rank");
 }
 }  // namespace
 

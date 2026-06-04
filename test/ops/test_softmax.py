@@ -25,3 +25,18 @@ def test_softmax_axis0():
         outputs=[("Y", TensorProto.FLOAT)],
         attrs={"axis": 0},
     )
+
+
+def test_softmax_3d_middle_axis():
+    x = np.random.default_rng(2).standard_normal((2, 5, 4)).astype(np.float32)
+    run_and_compare(
+        "Softmax",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"axis": 1},
+    )
+
+
+def test_softmax_vector_default_axis():
+    x = np.random.default_rng(3).standard_normal((32,)).astype(np.float32)
+    run_and_compare("Softmax", inputs={"X": x}, outputs=[("Y", TensorProto.FLOAT)])

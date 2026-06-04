@@ -35,3 +35,33 @@ def test_cast_float_to_int32():
         outputs=[("Y", TensorProto.INT32)],
         attrs={"to": TensorProto.INT32},
     )
+
+
+def test_cast_int32_to_bool():
+    x = np.array([[0, 1, -2], [3, 0, 4]], dtype=np.int32)
+    run_and_compare(
+        "Cast",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.BOOL)],
+        attrs={"to": TensorProto.BOOL},
+    )
+
+
+def test_cast_bool_to_int64():
+    x = np.array([[True, False], [False, True]], dtype=np.bool_)
+    run_and_compare(
+        "Cast",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.INT64)],
+        attrs={"to": TensorProto.INT64},
+    )
+
+
+def test_cast_int64_to_int32():
+    x = np.arange(-12, 12, dtype=np.int64).reshape(4, 6)
+    run_and_compare(
+        "Cast",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.INT32)],
+        attrs={"to": TensorProto.INT32},
+    )

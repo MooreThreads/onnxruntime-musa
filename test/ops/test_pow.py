@@ -17,3 +17,9 @@ def test_pow_broadcast():
     base = np.random.default_rng(2).uniform(0.5, 2.0, (16, 32, 16)).astype(np.float32)
     exp = np.array([2.0], dtype=np.float32)
     run_and_compare("Pow", inputs={"X": base, "Y": exp}, outputs=[("Z", TensorProto.FLOAT)])
+
+
+def test_pow_integer_exponents():
+    base = np.array([[2.0, 3.0, 4.0], [0.5, 1.5, 2.5]], dtype=np.float32)
+    exp = np.array([0.0, 1.0, 3.0], dtype=np.float32)
+    run_and_compare("Pow", inputs={"X": base, "Y": exp}, outputs=[("Z", TensorProto.FLOAT)])

@@ -24,3 +24,15 @@ def test_div_broadcast():
     a = np.random.default_rng(2).standard_normal((16, 32, 16)).astype(np.float32)
     b = np.random.default_rng(3).uniform(1.0, 2.0, (16,)).astype(np.float32)
     run_and_compare("Div", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+
+
+def test_div_int32_scalar_broadcast():
+    a = np.arange(12, 24, dtype=np.int32).reshape(3, 4)
+    b = np.array(3, dtype=np.int32)
+    run_and_compare("Div", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.INT32)])
+
+
+def test_div_float_multidirectional_broadcast():
+    a = np.random.default_rng(2).uniform(1.0, 5.0, (2, 3, 1)).astype(np.float32)
+    b = np.random.default_rng(3).uniform(0.5, 2.0, (1, 1, 4)).astype(np.float32)
+    run_and_compare("Div", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])

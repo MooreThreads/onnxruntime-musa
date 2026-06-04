@@ -42,3 +42,36 @@ def test_reduce_sum_int64():
         outputs=[("Y", TensorProto.INT64)],
         attrs={"keepdims": 1},
     )
+
+
+def test_reduce_sum_int32_negative_axis_no_keepdims():
+    x = np.arange(2 * 3 * 4, dtype=np.int32).reshape(2, 3, 4)
+    axes = np.array([-1], dtype=np.int64)
+    run_and_compare(
+        "ReduceSum",
+        inputs={"X": x, "axes": axes},
+        outputs=[("Y", TensorProto.INT32)],
+        attrs={"keepdims": 0},
+    )
+
+
+def test_reduce_sum_float_axis0_keepdims_3d():
+    x = np.random.default_rng(2).standard_normal((2, 3, 4)).astype(np.float32)
+    axes = np.array([0], dtype=np.int64)
+    run_and_compare(
+        "ReduceSum",
+        inputs={"X": x, "axes": axes},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"keepdims": 1},
+    )
+
+
+def test_reduce_sum_multi_axis_int32_no_keepdims():
+    x = np.arange(2 * 3 * 4, dtype=np.int32).reshape(2, 3, 4)
+    axes = np.array([0, 2], dtype=np.int64)
+    run_and_compare(
+        "ReduceSum",
+        inputs={"X": x, "axes": axes},
+        outputs=[("Y", TensorProto.INT32)],
+        attrs={"keepdims": 0},
+    )

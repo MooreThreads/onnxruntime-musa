@@ -86,9 +86,12 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
         "BatchNormalization only supports inference mode");
   }
   auto input_info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
-  if (input_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+  const auto elem_type = input_info.GetElementType();
+  if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "BatchNormalization only supports float");
+                                      "unsupported BatchNormalization dtype");
   }
   std::vector<int64_t> shape = input_info.GetShape();
   if (shape.size() < 2) {
@@ -101,10 +104,11 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
 
   auto validate_param = [&](size_t index, const char* name) -> OrtStatus* {
     auto info = ctx.GetInput(index).GetTensorTypeAndShapeInfo();
-    if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    if (info.GetElementType() != elem_type) {
       const std::string msg =
-          std::string("BatchNormalization ") + name + " only supports float";
-      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, msg.c_str());
+          std::string("BatchNormalization ") + name +
+          " dtype must match input";
+      return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, msg.c_str());
     }
     auto param_shape = info.GetShape();
     if (param_shape.size() != 1 || param_shape[0] != channels) {
@@ -127,20 +131,21 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
       IsGpuMemory(ctx.GetInput(3).GetTensorMemoryInfo()) &&
       IsGpuMemory(ctx.GetInput(4).GetTensorMemoryInfo()) &&
       IsGpuMemory(y.GetTensorMemoryInfo())) {
-    if (TryMudnnBatchNormalization(ctx, shape,
-                                   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
-                                   epsilon_, y)) {
+    if (TryMudnnBatchNormalization(ctx, shape, elem_type, epsilon_, y)) {
       return nullptr;
     }
     MusaBatchNormParams params{NumElements(shape), channels, spatial_size,
                                epsilon_};
-    return LaunchStatus(LaunchMusaBatchNormalizationFloatKernel(
-        ctx.GetInput(0).GetTensorData<float>(),
-        ctx.GetInput(1).GetTensorData<float>(),
-        ctx.GetInput(2).GetTensorData<float>(),
-        ctx.GetInput(3).GetTensorData<float>(),
-        ctx.GetInput(4).GetTensorData<float>(), y.GetTensorMutableData<float>(),
-        params, nullptr));
+    MusaElementType musa_elem_type;
+    if (!ToMusaElementType(elem_type, musa_elem_type)) {
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "unsupported BatchNormalization dtype");
+    }
+    return LaunchStatus(LaunchMusaBatchNormalizationKernel(
+        ctx.GetInput(0).GetTensorRawData(), ctx.GetInput(1).GetTensorRawData(),
+        ctx.GetInput(2).GetTensorRawData(), ctx.GetInput(3).GetTensorRawData(),
+        ctx.GetInput(4).GetTensorRawData(), y.GetTensorMutableRawData(), params,
+        musa_elem_type, nullptr));
   }
 
   return Ort::GetApi().CreateStatus(
@@ -150,9 +155,9 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    BatchNormalization, kOnnxDomain, 15, 17,
+    BatchNormalization, kOnnxDomain, 15, 19,
     (Ort::KernelDefBuilder()
-         .AddTypeConstraint("T", FloatTensorTypes())
-         .AddTypeConstraint("T1", FloatTensorTypes())
-         .AddTypeConstraint("T2", FloatTensorTypes())),
+         .AddTypeConstraint("T", HfdTensorTypes())
+         .AddTypeConstraint("T1", HfdTensorTypes())
+         .AddTypeConstraint("T2", HfdTensorTypes())),
     BatchNormalization)

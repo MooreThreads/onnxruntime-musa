@@ -201,7 +201,10 @@ musaError_t LaunchMusaReduceKernel(const void* input,
       return LaunchMusaReduceTyped<double, double>(input, output, params, op,
                                                    stream);
     case MusaElementType::Int32:
-      if (op == MusaReduceOp::Mean) return musaErrorNotSupported;
+      if (op == MusaReduceOp::Mean) {
+        return LaunchMusaReduceTyped<int32_t, int64_t>(input, output, params,
+                                                       op, stream);
+      }
       return LaunchMusaReduceTyped<int32_t, int32_t>(input, output, params, op,
                                                      stream);
     case MusaElementType::Int64:

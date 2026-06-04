@@ -23,16 +23,12 @@ class Gemm : public OpKernelBase<Gemm> {
 };
 
 OrtStatus* Gemm::Compute(Ort::KernelContext& ctx) const {
-  if (ctx.GetInput(0).GetTensorTypeAndShapeInfo().GetElementType() !=
-      ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "Gemm only supports float tensors");
-  }
   return GemmCompute(ctx, trans_a_ != 0, trans_b_ != 0, alpha_, beta_,
                      std::string{}, 0.0f);
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Gemm, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), Gemm)
+    Gemm, kOnnxDomain, 13, 19,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
+    Gemm)

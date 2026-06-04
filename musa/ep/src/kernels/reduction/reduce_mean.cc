@@ -24,6 +24,6 @@ class ReduceMean : public OpKernelBase<ReduceMean> {
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     ReduceMean, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
-        .AddTypeConstraint("T", FloatLikeTensorTypes())
+        .AddTypeConstraint("T", ReduceMeanTensorTypes())
         .SetInputMemType(1, OrtMemTypeCPUInput)),
     ReduceMean)

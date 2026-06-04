@@ -28,11 +28,6 @@ class FusedGemm : public OpKernelBase<FusedGemm> {
 };
 
 OrtStatus* FusedGemm::Compute(Ort::KernelContext& ctx) const {
-  if (ctx.GetInput(0).GetTensorTypeAndShapeInfo().GetElementType() !=
-      ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "Gemm only supports float tensors");
-  }
   return GemmCompute(ctx, trans_a_ != 0, trans_b_ != 0, alpha_, beta_,
                      activation_, activation_alpha_);
 }
@@ -40,5 +35,5 @@ OrtStatus* FusedGemm::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     FusedGemm, kMSDomain, 1, 1,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
     FusedGemm)

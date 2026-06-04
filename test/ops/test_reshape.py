@@ -66,3 +66,15 @@ def test_reshape_int32_with_allowzero():
         outputs=[("Y", TensorProto.INT32)],
         attrs={"allowzero": 1},
     )
+
+
+def test_reshape_float16():
+    x = np.random.default_rng(3).standard_normal((2, 3, 4)).astype(np.float16)
+    shape = np.array([4, 6], dtype=np.int64)
+    run_and_compare(
+        "Reshape",
+        inputs={"X": x, "shape": shape},
+        outputs=[("Y", TensorProto.FLOAT16)],
+        rtol=2e-2,
+        atol=2e-2,
+    )

@@ -53,3 +53,73 @@ def test_fused_matmul_batched_no_transpose():
         attrs={"alpha": 1.0},
         domain="com.microsoft",
     )
+
+
+def test_fused_matmul_batched_broadcast_left_batch():
+    a = np.random.default_rng(8).standard_normal((1, 8, 16)).astype(np.float32)
+    b = np.random.default_rng(9).standard_normal((4, 16, 12)).astype(np.float32)
+    run_and_compare(
+        "FusedMatMul",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"alpha": 0.75},
+        domain="com.microsoft",
+        rtol=2e-3,
+        atol=2e-4,
+    )
+
+
+def test_fused_matmul_batched_transb():
+    a = np.random.default_rng(10).standard_normal((2, 3, 8, 16)).astype(np.float32)
+    b = np.random.default_rng(11).standard_normal((1, 3, 12, 16)).astype(np.float32)
+    run_and_compare(
+        "FusedMatMul",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"alpha": 0.5, "transB": 1},
+        domain="com.microsoft",
+        rtol=2e-3,
+        atol=2e-4,
+    )
+
+
+def test_fused_matmul_double_alpha():
+    a = np.random.default_rng(12).standard_normal((4, 8)).astype(np.float64)
+    b = np.random.default_rng(13).standard_normal((8, 5)).astype(np.float64)
+    run_and_compare(
+        "FusedMatMul",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.DOUBLE)],
+        attrs={"alpha": 0.25},
+        domain="com.microsoft",
+        rtol=1e-9,
+        atol=1e-10,
+    )
+
+
+def test_fused_matmul_trans_batch_a():
+    a = np.random.default_rng(14).standard_normal((5, 2, 3)).astype(np.float32)
+    b = np.random.default_rng(15).standard_normal((2, 3, 4)).astype(np.float32)
+    run_and_compare(
+        "FusedMatMul",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"transBatchA": 1},
+        domain="com.microsoft",
+        rtol=2e-3,
+        atol=2e-4,
+    )
+
+
+def test_fused_matmul_trans_batch_b():
+    a = np.random.default_rng(16).standard_normal((2, 5, 3)).astype(np.float32)
+    b = np.random.default_rng(17).standard_normal((3, 2, 4)).astype(np.float32)
+    run_and_compare(
+        "FusedMatMul",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"transBatchB": 1},
+        domain="com.microsoft",
+        rtol=2e-3,
+        atol=2e-4,
+    )

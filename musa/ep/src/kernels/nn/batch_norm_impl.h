@@ -10,3 +10,13 @@ musaError_t LaunchMusaBatchNormalizationFloatKernel(const float* input,
                                                     float* output,
                                                     MusaBatchNormParams params,
                                                     musaStream_t stream);
+
+musaError_t LaunchMusaBatchNormalizationKernel(const void* input,
+                                               const void* scale,
+                                               const void* bias,
+                                               const void* mean,
+                                               const void* variance,
+                                               void* output,
+                                               MusaBatchNormParams params,
+                                               MusaElementType elem_type,
+                                               musaStream_t stream);

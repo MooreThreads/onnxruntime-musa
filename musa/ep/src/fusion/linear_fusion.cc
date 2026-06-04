@@ -160,7 +160,8 @@ OrtStatus* RunDeviceFusedGemm(float* y_data, const float* a_data,
   }
 
   if (TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape, b_shape, c_shape,
-                   y_shape, trans_a, trans_b, alpha, beta, has_bias)) {
+                   y_shape, trans_a, trans_b, alpha, beta, has_bias,
+                   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)) {
     if (activation.empty()) {
       return nullptr;
     }

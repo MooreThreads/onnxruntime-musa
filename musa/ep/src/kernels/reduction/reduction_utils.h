@@ -94,8 +94,9 @@ inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE &&
       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
-      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
-    return UnsupportedReduceStatus("integer ReduceMean is not supported");
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    return UnsupportedReduceStatus("unsupported ReduceMean dtype");
   }
 
   MusaReduceParams params =

@@ -25,3 +25,8 @@ def test_shape_bool_empty_dim():
 def test_shape_int32_scalar():
     x = np.array(7, dtype=np.int32)
     run_and_compare("Shape", inputs={"X": x}, outputs=[("Y", TensorProto.INT64)])
+
+
+def test_shape_uint8():
+    x = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
+    run_and_compare("Shape", inputs={"X": x}, outputs=[("Y", TensorProto.INT64)])

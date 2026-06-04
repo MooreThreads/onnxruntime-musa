@@ -12,15 +12,11 @@ class Neg : public OpKernelBase<Neg> {
 
 OrtStatus* Neg::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
-  if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "unsupported unary op dtype");
-  }
   return UnaryDeviceCompute(ctx, info.GetShape(), info.GetElementType(),
                             MusaUnaryOp::Neg, "Neg");
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Neg, kOnnxDomain, 13, 17,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), Neg)
+    Neg, kOnnxDomain, 13, 19,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", NegTensorTypes())), Neg)

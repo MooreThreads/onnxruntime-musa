@@ -743,7 +743,7 @@ inline std::vector<int64_t> BroadcastShape(const std::vector<int64_t>& a,
     if (da != db && da != 1 && db != 1) {
       throw std::runtime_error("broadcast shape mismatch");
     }
-    out[i] = std::max(da, db);
+    out[i] = da == 0 || db == 0 ? 0 : std::max(da, db);
   }
   return out;
 }

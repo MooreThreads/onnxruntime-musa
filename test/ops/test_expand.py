@@ -41,3 +41,13 @@ def test_expand_uint16_leading_dims():
     x = np.array([1, 2, 3], dtype=np.uint16)
     shape = np.array([2, 1, 3], dtype=np.int64)
     run_and_compare("Expand", inputs={"X": x, "shape": shape}, outputs=[("Y", TensorProto.UINT16)])
+
+
+def test_expand_scalar_to_zero_dim_shape():
+    x = np.array(1.0, dtype=np.float32)
+    shape = np.array([4, 0], dtype=np.int64)
+    run_and_compare(
+        "Expand",
+        inputs={"X": x, "shape": shape},
+        outputs=[("Y", TensorProto.FLOAT)],
+    )

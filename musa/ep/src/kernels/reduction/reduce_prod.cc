@@ -21,7 +21,8 @@ class ReduceProd : public OpKernelBase<ReduceProd> {
 };
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    ReduceProd, kOnnxDomain, 13, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllTensorTypes())),
-    ReduceProd)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(ReduceProd, kOnnxDomain, 13, 19,
+                                  (Ort::KernelDefBuilder()
+                                       .AddTypeConstraint("T", AllTensorTypes())
+                                       .SetInputMemType(1, OrtMemTypeCPUInput)),
+                                  ReduceProd)

@@ -100,6 +100,14 @@ OrtStatus* Where::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Where, kOnnxDomain, 9, 15,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint(
+             "B", GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL))
+         .AddTypeConstraint("T", WhereOpset9TensorTypes())),
+    Where)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Where, kOnnxDomain, 16, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint(

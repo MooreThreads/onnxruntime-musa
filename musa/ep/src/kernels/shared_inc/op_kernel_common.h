@@ -20,9 +20,9 @@
 #include <type_traits>
 #include <vector>
 
-#include "runtime/ep_musa_utils.h"
 #include "math/binary_elementwise_ops_impl.h"
 #include "math/unary_elementwise_ops_impl.h"
+#include "runtime/ep_musa_utils.h"
 #include "utils.h"
 
 // CRTP base shared by every elementary kernel. Derived classes only need to
@@ -105,6 +105,23 @@ inline std::vector<const OrtDataType*> AllFixedSizeTensorTypes() {
   };
 }
 
+inline std::vector<const OrtDataType*> AllFixedSizeTensorTypesNoBFloat16() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL),
+  };
+}
+
 inline std::vector<const OrtDataType*> BinaryNumericOpset13TensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
@@ -182,12 +199,43 @@ inline std::vector<const OrtDataType*> FloatTensorTypes() {
   return {GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)};
 }
 
+inline std::vector<const OrtDataType*> ClipTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+  };
+}
+
+inline std::vector<const OrtDataType*> RangeTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+  };
+}
+
 inline std::vector<const OrtDataType*> ReduceMeanTensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+  };
+}
+
+inline std::vector<const OrtDataType*> ReduceL2Opset13TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
   };
 }
@@ -347,6 +395,17 @@ inline std::vector<const OrtDataType*> NonZeroTensorTypes() {
   };
 }
 
+inline std::vector<const OrtDataType*> WhereOpset9TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Attribute helpers.
 // ---------------------------------------------------------------------------
@@ -377,6 +436,53 @@ inline bool IsGpuMemory(const OrtMemoryInfo* memory_info) {
   return Ort::GetEpApi().MemoryDevice_GetDeviceType(device) ==
          OrtMemoryInfoDeviceType_GPU;
 }
+
+class DeviceInputBuffer {
+ public:
+  DeviceInputBuffer() = default;
+  ~DeviceInputBuffer() {
+    if (ptr_ != nullptr) {
+      (void)musaDeviceSynchronize();
+      (void)musaFree(ptr_);
+    }
+  }
+
+  DeviceInputBuffer(const DeviceInputBuffer&) = delete;
+  DeviceInputBuffer& operator=(const DeviceInputBuffer&) = delete;
+
+  OrtStatus* Bind(Ort::ConstValue value) {
+    if (IsGpuMemory(value.GetTensorMemoryInfo())) {
+      data_ = value.GetTensorRawData();
+      return nullptr;
+    }
+
+    bytes_ = value.GetTensorSizeInBytes();
+    if (bytes_ == 0) {
+      data_ = value.GetTensorRawData();
+      return nullptr;
+    }
+
+    musaError_t alloc_status = musaMalloc(&ptr_, bytes_);
+    if (alloc_status != musaSuccess) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                        MusaErrorString(alloc_status));
+    }
+    musaError_t status = musaMemcpy(ptr_, value.GetTensorRawData(), bytes_,
+                                    musaMemcpyHostToDevice);
+    if (status != musaSuccess) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    }
+    data_ = ptr_;
+    return nullptr;
+  }
+
+  const void* data() const { return data_; }
+
+ private:
+  void* ptr_ = nullptr;
+  const void* data_ = nullptr;
+  size_t bytes_ = 0;
+};
 
 inline OrtStatus* CopyToHost(Ort::ConstValue value,
                              std::vector<uint8_t>& bytes) {
@@ -421,8 +527,7 @@ inline OrtStatus* CopyFromHost(Ort::UnownedValue value, const void* src,
 }
 
 inline OrtStatus* CopyRawTensor(Ort::ConstValue src_value,
-                                Ort::UnownedValue dst_value,
-                                size_t num_bytes) {
+                                Ort::UnownedValue dst_value, size_t num_bytes) {
   if (num_bytes == 0) {
     return nullptr;
   }
@@ -441,12 +546,14 @@ inline OrtStatus* CopyRawTensor(Ort::ConstValue src_value,
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }
   } else if (src_gpu) {
-    musaError_t status = musaMemcpy(dst, src, num_bytes, musaMemcpyDeviceToHost);
+    musaError_t status =
+        musaMemcpy(dst, src, num_bytes, musaMemcpyDeviceToHost);
     if (status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }
   } else if (dst_gpu) {
-    musaError_t status = musaMemcpy(dst, src, num_bytes, musaMemcpyHostToDevice);
+    musaError_t status =
+        musaMemcpy(dst, src, num_bytes, musaMemcpyHostToDevice);
     if (status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }
@@ -474,9 +581,9 @@ inline OrtStatus* DeviceMemcpy2D(void* dst, size_t dst_pitch, const void* src,
   if (width_bytes == 0 || height == 0) {
     return nullptr;
   }
-  musaError_t status = musaMemcpy2DAsync(
-      dst, dst_pitch, src, src_pitch, width_bytes, height,
-      musaMemcpyDeviceToDevice, nullptr);
+  musaError_t status =
+      musaMemcpy2DAsync(dst, dst_pitch, src, src_pitch, width_bytes, height,
+                        musaMemcpyDeviceToDevice, nullptr);
   if (status != musaSuccess) {
     return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
   }
@@ -881,10 +988,11 @@ inline OrtStatus* BinaryDeviceCompute(Ort::KernelContext& ctx,
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
 
-  musaError_t status = LaunchMusaBinaryKernel(
-      lhs.GetTensorRawData(), rhs.GetTensorRawData(),
-      y.GetTensorMutableRawData(), MakeBroadcastParams(out_shape, shape0, shape1),
-      device_op, musa_elem_type, nullptr);
+  musaError_t status =
+      LaunchMusaBinaryKernel(lhs.GetTensorRawData(), rhs.GetTensorRawData(),
+                             y.GetTensorMutableRawData(),
+                             MakeBroadcastParams(out_shape, shape0, shape1),
+                             device_op, musa_elem_type, nullptr);
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
@@ -894,8 +1002,7 @@ inline OrtStatus* BinaryDeviceCompute(Ort::KernelContext& ctx,
 inline OrtStatus* UnaryDeviceCompute(Ort::KernelContext& ctx,
                                      const std::vector<int64_t>& shape,
                                      ONNXTensorElementDataType elem_type,
-                                     MusaUnaryOp device_op,
-                                     const char* op_name,
+                                     MusaUnaryOp device_op, const char* op_name,
                                      float alpha = 0.0f) {
   Ort::ConstValue input = ctx.GetInput(0);
   MusaElementType musa_elem_type;
@@ -909,10 +1016,9 @@ inline OrtStatus* UnaryDeviceCompute(Ort::KernelContext& ctx,
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
 
-  musaError_t status =
-      LaunchMusaUnaryKernel(input.GetTensorRawData(),
-                            y.GetTensorMutableRawData(), NumElements(shape),
-                            device_op, alpha, musa_elem_type, nullptr);
+  musaError_t status = LaunchMusaUnaryKernel(
+      input.GetTensorRawData(), y.GetTensorMutableRawData(), NumElements(shape),
+      device_op, alpha, musa_elem_type, nullptr);
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
@@ -941,11 +1047,11 @@ inline OrtStatus* CompareDeviceCompute(Ort::KernelContext& ctx,
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
 
-  musaError_t status = LaunchMusaCompareKernel(
-      lhs.GetTensorRawData(), rhs.GetTensorRawData(),
-      y.GetTensorMutableData<uint8_t>(),
-      MakeBroadcastParams(out_shape, shape0, shape1), device_op,
-      musa_elem_type, nullptr);
+  musaError_t status =
+      LaunchMusaCompareKernel(lhs.GetTensorRawData(), rhs.GetTensorRawData(),
+                              y.GetTensorMutableData<uint8_t>(),
+                              MakeBroadcastParams(out_shape, shape0, shape1),
+                              device_op, musa_elem_type, nullptr);
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }

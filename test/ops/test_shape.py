@@ -3,15 +3,45 @@
 """End-to-end CPU-vs-MUSA test for the Shape operator."""
 
 import numpy as np
+import pytest
 
 from onnx import helper
 
 from op_test_utils import (
     TensorProto,
     build_graph_model,
+    build_model_with_input_types,
+    float32_to_bfloat16_bits,
     run_and_compare,
     run_model_and_compare,
+    run_with_iobinding,
 )
+
+
+_FIXED_DTYPES_NO_BFLOAT16 = [
+    (np.uint8, TensorProto.UINT8),
+    (np.uint16, TensorProto.UINT16),
+    (np.uint32, TensorProto.UINT32),
+    (np.uint64, TensorProto.UINT64),
+    (np.int8, TensorProto.INT8),
+    (np.int16, TensorProto.INT16),
+    (np.int32, TensorProto.INT32),
+    (np.int64, TensorProto.INT64),
+    (np.float16, TensorProto.FLOAT16),
+    (np.float32, TensorProto.FLOAT),
+    (np.float64, TensorProto.DOUBLE),
+    (np.bool_, TensorProto.BOOL),
+]
+
+
+def _values(dtype):
+    if dtype == np.bool_:
+        return np.zeros((2, 3, 4), dtype=np.bool_)
+    if np.issubdtype(dtype, np.unsignedinteger):
+        return np.arange(24, dtype=dtype).reshape(2, 3, 4)
+    if np.issubdtype(dtype, np.integer):
+        return (np.arange(24).reshape(2, 3, 4) - 12).astype(dtype)
+    return np.linspace(-1.5, 1.5, 24, dtype=dtype).reshape(2, 3, 4)
 
 
 def test_shape_float():
@@ -37,6 +67,32 @@ def test_shape_int32_scalar():
 def test_shape_uint8():
     x = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
     run_and_compare("Shape", inputs={"X": x}, outputs=[("Y", TensorProto.INT64)])
+
+
+@pytest.mark.parametrize(("np_dtype", "tensor_type"), _FIXED_DTYPES_NO_BFLOAT16)
+def test_shape_fixed_size_dtypes(np_dtype, tensor_type):
+    x = _values(np_dtype)
+    run_and_compare("Shape", inputs={"X": x}, outputs=[("Y", TensorProto.INT64)])
+
+
+def test_shape_bfloat16():
+    x = float32_to_bfloat16_bits(
+        np.linspace(-1.5, 1.5, 24, dtype=np.float32).reshape(2, 3, 4)
+    )
+    model = build_model_with_input_types(
+        "Shape",
+        inputs={"X": x},
+        input_types={"X": TensorProto.BFLOAT16},
+        outputs=[("Y", TensorProto.INT64)],
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        {"X": x},
+        {"X": TensorProto.BFLOAT16},
+        [("Y", TensorProto.INT64, (3,))],
+        use_musa=True,
+    )
+    np.testing.assert_array_equal(actual, np.array([2, 3, 4], dtype=np.int64))
 
 
 def test_shape_device_output_feeds_cast_gather_indices():

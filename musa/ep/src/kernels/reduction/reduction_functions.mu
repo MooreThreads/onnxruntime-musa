@@ -76,7 +76,7 @@ __device__ __forceinline__ AccT ReduceUpdateValue(AccT acc, AccT value,
   if (op == MusaReduceOp::Prod) {
     return acc * value;
   }
-  if (op == MusaReduceOp::SumSquare) {
+  if (op == MusaReduceOp::SumSquare || op == MusaReduceOp::L2) {
     return acc + value * value;
   }
   if (op == MusaReduceOp::Max) {
@@ -153,6 +153,9 @@ __global__ void ReduceKernel(const T* input,
     if (op == MusaReduceOp::Mean) {
       acc /= static_cast<AccT>(params.reduction_elements);
     }
+    if (op == MusaReduceOp::L2) {
+      acc = sqrt(acc);
+    }
     output[output_index] = ReduceFromAccum<T, AccT>(acc);
   }
 }
@@ -192,6 +195,9 @@ __global__ void ReduceBlockKernel(const T* input,
     AccT value = shared[0];
     if (op == MusaReduceOp::Mean) {
       value /= static_cast<AccT>(params.reduction_elements);
+    }
+    if (op == MusaReduceOp::L2) {
+      value = sqrt(value);
     }
     output[output_index] = ReduceFromAccum<T, AccT>(value);
   }

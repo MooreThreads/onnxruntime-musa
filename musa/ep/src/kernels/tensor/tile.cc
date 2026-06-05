@@ -91,7 +91,5 @@ OrtStatus* Tile::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Tile, kOnnxDomain, 13, 19,
-    (Ort::KernelDefBuilder()
-         .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .SetInputMemType(1, OrtMemTypeCPUInput)),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllFixedSizeTensorTypes())),
     Tile)

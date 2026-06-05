@@ -32,6 +32,7 @@ enum class MusaUnaryOp : int32_t {
   IsNaN = 12,
   Round = 13,
   Softplus = 14,
+  Ceil = 15,
 };
 
 enum class MusaCompareOp : int32_t {
@@ -64,6 +65,7 @@ enum class MusaReduceOp : int32_t {
   Mean = 2,
   SumSquare = 3,
   Max = 4,
+  L2 = 5,
 };
 
 struct MusaBatchNormParams {
@@ -77,6 +79,24 @@ struct MusaGlobalAveragePoolParams {
   int64_t output_elements;
   int64_t channels;
   int64_t spatial_elements;
+};
+
+struct MusaRangeParams {
+  int64_t count;
+};
+
+struct MusaClipParams {
+  int64_t count;
+  const void* min_data;
+  const void* max_data;
+  int32_t has_min;
+  int32_t has_max;
+};
+
+struct MusaLayerNormParams {
+  int64_t rows;
+  int64_t norm_size;
+  int32_t has_bias;
 };
 
 struct MusaBroadcastParams {

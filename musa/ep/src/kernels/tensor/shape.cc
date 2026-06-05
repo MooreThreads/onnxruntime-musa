@@ -22,6 +22,7 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Shape, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .AddTypeConstraint(
-             "T1", GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))),
+         .AddTypeConstraint("T1",
+                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))
+         .SetOutputMemType(0, OrtMemTypeCPUOutput)),
     Shape)

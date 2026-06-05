@@ -23,8 +23,7 @@ inline OrtStatus* UnsupportedReduceStatus(const char* message) {
 
 inline MusaReduceParams MakeReduceParams(
     const std::vector<int64_t>& input_shape,
-    const std::vector<int64_t>& output_shape,
-    const std::set<int64_t>& axes_set,
+    const std::vector<int64_t>& output_shape, const std::set<int64_t>& axes_set,
     bool keepdims) {
   auto input_strides = Strides(input_shape);
   auto output_strides = Strides(output_shape);
@@ -32,10 +31,18 @@ inline MusaReduceParams MakeReduceParams(
   params.rank = static_cast<int32_t>(input_shape.size());
   params.reduce_axis =
       axes_set.empty() ? 0 : static_cast<int32_t>(*axes_set.begin());
+  params.reduce_axes_count = static_cast<int32_t>(axes_set.size());
   params.output_elements = NumElements(output_shape);
   params.reduce_dim =
-      input_shape.empty() ? 1 : input_shape[static_cast<size_t>(params.reduce_axis)];
+      input_shape.empty()
+          ? 1
+          : input_shape[static_cast<size_t>(params.reduce_axis)];
   params.reduction_elements = 1;
+  params.inner_size = 1;
+  for (size_t dim = static_cast<size_t>(params.reduce_axis) + 1;
+       dim < input_shape.size(); ++dim) {
+    params.inner_size *= input_shape[dim];
+  }
 
   size_t out_dim = 0;
   for (size_t dim = 0; dim < input_shape.size(); ++dim) {
@@ -57,8 +64,7 @@ inline MusaReduceParams MakeReduceParams(
 // Shared device-side reduction used by ReduceProd / ReduceSum / ReduceMean /
 // ReduceSumSquare.
 inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
-                                std::vector<int64_t> axes,
-                                bool keepdims,
+                                std::vector<int64_t> axes, bool keepdims,
                                 ReduceMode mode) {
   Ort::ConstValue input0 = ctx.GetInput(0);
   auto input_info = input0.GetTensorTypeAndShapeInfo();

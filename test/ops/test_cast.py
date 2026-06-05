@@ -3,12 +3,15 @@
 """End-to-end CPU-vs-MUSA test for the Cast operator."""
 
 import numpy as np
+from onnx import helper
 
 from op_test_utils import (
     TensorProto,
     bfloat16_bits_to_float32,
+    build_graph_model,
     build_model_with_input_types,
     float32_to_bfloat16_bits,
+    run_model_and_compare,
     run_and_compare,
     run_with_iobinding,
 )
@@ -162,3 +165,22 @@ def test_cast_float_to_bfloat16():
         use_musa=True,
     )
     np.testing.assert_array_equal(actual, expected)
+
+
+def test_cast_shape_metadata_int64_to_int32():
+    x = np.zeros((2, 3, 4), dtype=np.float32)
+    nodes = [
+        helper.make_node("Shape", ["X"], ["shape_i64"]),
+        helper.make_node(
+            "Cast", ["shape_i64"], ["shape_i32"], to=TensorProto.INT32
+        ),
+    ]
+    model = build_graph_model(
+        nodes,
+        inputs={"X": x},
+        outputs=[("shape_i32", TensorProto.INT32)],
+        opset=17,
+        name="cast_shape_metadata_graph",
+    )
+    (actual,) = run_model_and_compare(model, {"X": x})
+    np.testing.assert_array_equal(actual, np.array([2, 3, 4], dtype=np.int32))

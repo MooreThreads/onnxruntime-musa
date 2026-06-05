@@ -123,6 +123,38 @@ bool CanFuseConcatMatMul(Ort::ConstNode concat_node, Ort::ConstNode matmul_node,
     return false;
   }
 
+  // Dynamic dimensions are common for model batch inputs, but rank information
+  // is still enough to reject MatMul shapes this fusion cannot execute. The
+  // unfused Concat + MatMul kernels can handle ONNX MatMul rank broadcasting
+  // such as [B, M, K] x [K, N], while ConcatMatMul currently requires equal
+  // ranks, so do not claim those nodes as a fused region.
+  auto first_concat_type_shape = GetTensorShape(concat_inputs[0]);
+  if (first_concat_type_shape.has_value()) {
+    if (first_concat_type_shape->size() < 2) {
+      return false;
+    }
+
+    int64_t axis = 0;
+    if (!NormalizeAxis(*axis_attr, first_concat_type_shape->size(), axis)) {
+      return false;
+    }
+
+    for (Ort::ConstValueInfo input : concat_inputs) {
+      auto shape = GetTensorShape(input);
+      if (shape.has_value() &&
+          shape->size() != first_concat_type_shape->size()) {
+        return false;
+      }
+    }
+
+    auto other_type_shape =
+        GetTensorShape(matmul_inputs[static_cast<size_t>(1 - concat_input_idx)]);
+    if (other_type_shape.has_value() &&
+        other_type_shape->size() != first_concat_type_shape->size()) {
+      return false;
+    }
+  }
+
   // Plugin EP ValueInfo frequently has type but no static shape for internal
   // tensors. Defer the detailed shape validation to Compile/Compute when ORT
   // provides the runtime tensors, and only reject here if available static

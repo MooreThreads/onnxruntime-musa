@@ -48,3 +48,42 @@ def test_concat_matmul_fusion_concat_on_rhs():
     )
 
     run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
+
+
+def test_dynamic_concat_matmul_rank_broadcast_not_fused():
+    rng = np.random.default_rng(2)
+    x0 = rng.standard_normal((5, 3, 4)).astype(np.float32)
+    x1 = rng.standard_normal((5, 3, 5)).astype(np.float32)
+    b = rng.standard_normal((9, 6)).astype(np.float32)
+
+    nodes = [
+        helper.make_node("Concat", ["X0", "X1"], ["C"], axis=-1),
+        helper.make_node("MatMul", ["C", "B"], ["Y"]),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "dynamic_concat_matmul_rank_broadcast_graph",
+        [
+            helper.make_tensor_value_info(
+                "X0", TensorProto.FLOAT, ["batch", 3, 4]
+            ),
+            helper.make_tensor_value_info(
+                "X1", TensorProto.FLOAT, ["batch", 3, 5]
+            ),
+            helper.make_tensor_value_info("B", TensorProto.FLOAT, [9, 6]),
+        ],
+        [
+            helper.make_tensor_value_info(
+                "Y", TensorProto.FLOAT, ["batch", 3, 6]
+            )
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+
+    run_model_and_compare(
+        model.SerializeToString(),
+        {"X0": x0, "X1": x1, "B": b},
+        rtol=1e-3,
+        atol=1e-3,
+    )

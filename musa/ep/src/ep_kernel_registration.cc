@@ -147,6 +147,8 @@ static const BuildKernelCreateInfoFn build_kernel_create_info_funcs[] = {
         kOnnxDomain, 15, 19, BatchNormalization)>,
     BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
         kOnnxDomain, 11, 19, Conv)>,
+    BuildKernelCreateInfo<class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(
+        kOnnxDomain, 1, 19, GlobalAveragePool)>,
 };
 
 size_t GetNumKernels() { return std::size(build_kernel_create_info_funcs); }

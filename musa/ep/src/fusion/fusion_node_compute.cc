@@ -10,6 +10,7 @@
 #include "ep.h"
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/linear_fusion.h"
+#include "fusion/shape_gather_fusion.h"
 
 /*
  * Fusion node runtime bridge
@@ -50,8 +51,7 @@ struct FusionNodeComputeInfo : OrtNodeComputeInfo {
     auto it = ep.GetFusionComputes().find(fused_node_name);
     if (it == ep.GetFusionComputes().end()) {
       std::string message =
-          "Unable to get MUSA fusion compute for fused node " +
-          fused_node_name;
+          "Unable to get MUSA fusion compute for fused node " + fused_node_name;
       return ep.GetOrtApi().CreateStatus(ORT_EP_FAIL, message.c_str());
     }
 
@@ -59,15 +59,15 @@ struct FusionNodeComputeInfo : OrtNodeComputeInfo {
     return nullptr;
   }
 
-  static OrtStatus* ORT_API_CALL ComputeImpl(
-      OrtNodeComputeInfo* /*this_ptr*/, void* compute_state,
-      OrtKernelContext* kernel_context) {
+  static OrtStatus* ORT_API_CALL ComputeImpl(OrtNodeComputeInfo* /*this_ptr*/,
+                                             void* compute_state,
+                                             OrtKernelContext* kernel_context) {
     auto* fusion = reinterpret_cast<const FusionNodeCompute*>(compute_state);
     return fusion->Compute(kernel_context);
   }
 
-  static void ORT_API_CALL ReleaseStateImpl(
-      OrtNodeComputeInfo* /*this_ptr*/, void* /*compute_state*/) {}
+  static void ORT_API_CALL ReleaseStateImpl(OrtNodeComputeInfo* /*this_ptr*/,
+                                            void* /*compute_state*/) {}
 
   MusaEp& ep;
 };
@@ -106,6 +106,9 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       if (IsLinearFusionGraph(graph)) {
         ep->GetFusionComputes()[fused_node_name] =
             CreateLinearFusion(graph, fused_node);
+      } else if (IsShapeCastGatherFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateShapeCastGatherFusion(graph, fused_node);
       } else {
         ep->GetFusionComputes()[fused_node_name] =
             CreateConcatMatMulFusion(graph, fused_node);

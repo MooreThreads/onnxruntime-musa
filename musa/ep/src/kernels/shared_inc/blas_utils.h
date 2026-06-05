@@ -8,6 +8,8 @@
 
 #include <cstdlib>
 #include <memory>
+#include <string>
+#include <unordered_set>
 
 #include "math/gemm_post_kernels.h"
 #include "math/matmul.h"
@@ -114,6 +116,41 @@ inline bool SetMudnnFloatTensor(::musa::dnn::Tensor& tensor, const void* data,
                         ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
 }
 
+inline void AppendShapeKey(std::string& key,
+                           const std::vector<int64_t>& shape) {
+  key.push_back('[');
+  for (int64_t dim : shape) {
+    key += std::to_string(dim);
+    key.push_back(',');
+  }
+  key.push_back(']');
+}
+
+inline std::string MudnnGemmKey(const std::vector<int64_t>& a_shape,
+                                const std::vector<int64_t>& b_shape,
+                                const std::vector<int64_t>& c_shape,
+                                const std::vector<int64_t>& out_shape,
+                                bool trans_a, bool trans_b, float alpha,
+                                float beta, bool has_bias,
+                                ONNXTensorElementDataType elem_type) {
+  std::string key = std::to_string(static_cast<int>(elem_type));
+  key += trans_a ? "|ta1" : "|ta0";
+  key += trans_b ? "|tb1" : "|tb0";
+  key += "|a" + std::to_string(alpha);
+  key += "|b" + std::to_string(beta);
+  key += has_bias ? "|bias1" : "|bias0";
+  AppendShapeKey(key, a_shape);
+  AppendShapeKey(key, b_shape);
+  AppendShapeKey(key, c_shape);
+  AppendShapeKey(key, out_shape);
+  return key;
+}
+
+inline std::unordered_set<std::string>& MudnnGemmUnsupportedKeys() {
+  static thread_local std::unordered_set<std::string> keys;
+  return keys;
+}
+
 inline bool MublasDataType(ONNXTensorElementDataType elem_type,
                            musaDataType_t& data_type,
                            mublasComputeType_t& compute_type) {
@@ -141,17 +178,10 @@ inline bool MublasDataType(ONNXTensorElementDataType elem_type,
 
 inline mublasStatus MublasGemmEx(mublasHandle_t handle,
                                  mublasOperation_t trans_a,
-                                 mublasOperation_t trans_b,
-                                 int m, int n, int k,
-                                 double alpha,
-                                 const void* a,
-                                 int lda,
-                                 const void* b,
-                                 int ldb,
-                                 double beta,
-                                 void* c,
-                                 int ldc,
-                                 ONNXTensorElementDataType elem_type) {
+                                 mublasOperation_t trans_b, int m, int n, int k,
+                                 double alpha, const void* a, int lda,
+                                 const void* b, int ldb, double beta, void* c,
+                                 int ldc, ONNXTensorElementDataType elem_type) {
   musaDataType_t data_type;
   mublasComputeType_t compute_type;
   if (!MublasDataType(elem_type, data_type, compute_type)) {
@@ -166,30 +196,16 @@ inline mublasStatus MublasGemmEx(mublasHandle_t handle,
   }
   const float alpha32 = static_cast<float>(alpha);
   const float beta32 = static_cast<float>(beta);
-  return mublasGemmEx(handle, trans_a, trans_b, m, n, k, &alpha32, a,
-                      data_type, lda, b, data_type, ldb, &beta32, c,
-                      data_type, ldc, compute_type, MUBLAS_GEMM_DEFAULT);
+  return mublasGemmEx(handle, trans_a, trans_b, m, n, k, &alpha32, a, data_type,
+                      lda, b, data_type, ldb, &beta32, c, data_type, ldc,
+                      compute_type, MUBLAS_GEMM_DEFAULT);
 }
 
 inline mublasStatus MublasGemmStridedBatchedEx(
-    mublasHandle_t handle,
-    mublasOperation_t trans_a,
-    mublasOperation_t trans_b,
-    int m,
-    int n,
-    int k,
-    double alpha,
-    const void* a,
-    int lda,
-    long long int stride_a,
-    const void* b,
-    int ldb,
-    long long int stride_b,
-    double beta,
-    void* c,
-    int ldc,
-    long long int stride_c,
-    int batch_count,
+    mublasHandle_t handle, mublasOperation_t trans_a, mublasOperation_t trans_b,
+    int m, int n, int k, double alpha, const void* a, int lda,
+    long long int stride_a, const void* b, int ldb, long long int stride_b,
+    double beta, void* c, int ldc, long long int stride_c, int batch_count,
     ONNXTensorElementDataType elem_type) {
   musaDataType_t data_type;
   mublasComputeType_t compute_type;
@@ -212,14 +228,22 @@ inline mublasStatus MublasGemmStridedBatchedEx(
       batch_count, compute_type, MUBLAS_GEMM_DEFAULT);
 }
 
-inline bool TryMudnnGemm(void* y_data, const void* a_data,
-                         const void* b_data, const void* c_data,
+inline bool TryMudnnGemm(void* y_data, const void* a_data, const void* b_data,
+                         const void* c_data,
                          const std::vector<int64_t>& a_shape,
                          const std::vector<int64_t>& b_shape,
                          const std::vector<int64_t>& c_shape,
                          const std::vector<int64_t>& out_shape, bool trans_a,
                          bool trans_b, float alpha, float beta, bool has_bias,
                          ONNXTensorElementDataType elem_type) {
+  const std::string key =
+      MudnnGemmKey(a_shape, b_shape, c_shape, out_shape, trans_a, trans_b,
+                   alpha, beta, has_bias, elem_type);
+  auto& unsupported_keys = MudnnGemmUnsupportedKeys();
+  if (unsupported_keys.count(key) != 0) {
+    return false;
+  }
+
   ::musa::dnn::Handle* handle = nullptr;
   OrtStatus* handle_status = EnsureMudnnHandle(&handle);
   if (handle_status != nullptr) {
@@ -249,8 +273,10 @@ inline bool TryMudnnGemm(void* y_data, const void* a_data,
   if (matmul.SetGamma(0.0) != ::musa::dnn::Status::SUCCESS) return false;
 
   if (!has_bias || beta == 0.0f) {
-    return matmul.Run(*handle, y_tensor, a_tensor, b_tensor) ==
-           ::musa::dnn::Status::SUCCESS;
+    const bool ok = matmul.Run(*handle, y_tensor, a_tensor, b_tensor) ==
+                    ::musa::dnn::Status::SUCCESS;
+    if (!ok) unsupported_keys.insert(key);
+    return ok;
   }
 
   const int64_t m = out_shape[0];
@@ -263,9 +289,11 @@ inline bool TryMudnnGemm(void* y_data, const void* a_data,
     if (matmul.SetGamma(static_cast<double>(beta)) !=
         ::musa::dnn::Status::SUCCESS)
       return false;
-    return matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor,
-                                 y_tensor,
-                                 c_tensor) == ::musa::dnn::Status::SUCCESS;
+    const bool ok =
+        matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor, y_tensor,
+                              c_tensor) == ::musa::dnn::Status::SUCCESS;
+    if (!ok) unsupported_keys.insert(key);
+    return ok;
   }
 
   if (c_shape.size() == 2 && c_shape[0] == 1 && c_shape[1] == n) {
@@ -274,9 +302,11 @@ inline bool TryMudnnGemm(void* y_data, const void* a_data,
     if (matmul.SetGamma(static_cast<double>(beta)) !=
         ::musa::dnn::Status::SUCCESS)
       return false;
-    return matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor,
-                                 y_tensor,
-                                 c_tensor) == ::musa::dnn::Status::SUCCESS;
+    const bool ok =
+        matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor, y_tensor,
+                              c_tensor) == ::musa::dnn::Status::SUCCESS;
+    if (!ok) unsupported_keys.insert(key);
+    return ok;
   }
 
   if (c_shape.size() == 2 && c_shape[0] == m && c_shape[1] == n) {
@@ -284,11 +314,14 @@ inline bool TryMudnnGemm(void* y_data, const void* a_data,
     if (matmul.SetBeta(static_cast<double>(beta)) !=
         ::musa::dnn::Status::SUCCESS)
       return false;
-    return matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor,
-                                 c_tensor,
-                                 empty_tensor) == ::musa::dnn::Status::SUCCESS;
+    const bool ok =
+        matmul.RunWithBiasAdd(*handle, y_tensor, a_tensor, b_tensor, c_tensor,
+                              empty_tensor) == ::musa::dnn::Status::SUCCESS;
+    if (!ok) unsupported_keys.insert(key);
+    return ok;
   }
 
+  unsupported_keys.insert(key);
   return false;
 }
 
@@ -369,8 +402,8 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
     c_shape = c_info.GetShape();
     std::vector<int64_t> broadcast_shape = BroadcastShape(c_shape, out_shape);
     if (broadcast_shape != out_shape) {
-      return Ort::GetApi().CreateStatus(
-          ORT_INVALID_ARGUMENT, "Gemm bias broadcast shape mismatch");
+      return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                        "Gemm bias broadcast shape mismatch");
     }
     c_data = c_value.GetTensorRawData();
     bias_is_gpu = IsGpuMemory(c_value.GetTensorMemoryInfo());
@@ -394,9 +427,8 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
   void* y_data = y.GetTensorMutableRawData();
 
   if (bias_is_gpu && TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape,
-                                  b_shape, c_shape, out_shape, trans_a,
-                                  trans_b, alpha, beta, has_bias,
-                                  elem_type)) {
+                                  b_shape, c_shape, out_shape, trans_a, trans_b,
+                                  alpha, beta, has_bias, elem_type)) {
     if (!has_activation) {
       return nullptr;
     }
@@ -423,14 +455,14 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
     int ki = static_cast<int>(k);
     int ni = static_cast<int>(n);
     mublasStatus status =
-        MublasGemmEx(handle, op_b, op_a, ni, mi, ki, alpha, b_data, ldb,
-                     a_data, lda, 0.0, y_data, ni, elem_type);
+        MublasGemmEx(handle, op_b, op_a, ni, mi, ki, alpha, b_data, ldb, a_data,
+                     lda, 0.0, y_data, ni, elem_type);
     gemm_done = status == MUBLAS_STATUS_SUCCESS;
   }
   if (!gemm_done) {
     RETURN_IF_ERROR(ComputeMusaMatMulDevice(
-        a_data, b_data, y_data, elem_type, a_shape, b_shape, out_shape,
-        trans_a, trans_b, false, false, alpha));
+        a_data, b_data, y_data, elem_type, a_shape, b_shape, out_shape, trans_a,
+        trans_b, false, false, alpha));
   }
 
   if (!has_bias && !has_activation) {
@@ -447,7 +479,8 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "unsupported Gemm dtype");
   }
-  MusaBroadcastParams params = MakeBroadcastParams(out_shape, out_shape, c_shape);
+  MusaBroadcastParams params =
+      MakeBroadcastParams(out_shape, out_shape, c_shape);
   return LaunchStatus(LaunchMusaGemmPostKernel(
       y_data, c_data, params, has_bias, beta, activation_op, has_activation,
       activation_alpha, musa_elem_type, nullptr));

@@ -5,6 +5,70 @@
 #include "tensor/gather_impl.h"
 
 namespace {
+constexpr int64_t kMaxCpuMetadataGatherElements = kMusaMaxBroadcastRank;
+
+template <typename T>
+OrtStatus* GatherCpuMetadataTyped(Ort::ConstValue input,
+                                  Ort::ConstValue indices_value,
+                                  Ort::UnownedValue output,
+                                  ONNXTensorElementDataType index_type,
+                                  int64_t input_count,
+                                  int64_t output_count) {
+  std::vector<T> input_data = ReadTyped<T>(input);
+  std::vector<int64_t> indices;
+  if (index_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+    indices = ReadTyped<int64_t>(indices_value);
+  } else if (index_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    std::vector<int32_t> vals = ReadTyped<int32_t>(indices_value);
+    indices.assign(vals.begin(), vals.end());
+  } else {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED, "Gather metadata path unsupported index dtype");
+  }
+
+  std::vector<T> output_data;
+  output_data.reserve(static_cast<size_t>(output_count));
+  for (int64_t index : indices) {
+    int64_t normalized = index < 0 ? index + input_count : index;
+    if (normalized < 0 || normalized >= input_count) {
+      return Ort::GetApi().CreateStatus(
+          ORT_INVALID_ARGUMENT, "Gather metadata index out of range");
+    }
+    output_data.push_back(input_data[static_cast<size_t>(normalized)]);
+  }
+  return WriteTyped<T>(output, output_data);
+}
+
+OrtStatus* GatherCpuMetadata(Ort::ConstValue input,
+                             Ort::ConstValue indices_value,
+                             Ort::UnownedValue output,
+                             ONNXTensorElementDataType elem_type,
+                             ONNXTensorElementDataType index_type,
+                             const std::vector<int64_t>& input_shape,
+                             const std::vector<int64_t>& indices_shape,
+                             int64_t axis) {
+  const int64_t input_count = NumElements(input_shape);
+  const int64_t output_count = NumElements(indices_shape);
+  if (axis != 0 || input_shape.size() != 1 ||
+      input_count > kMaxCpuMetadataGatherElements ||
+      output_count > kMaxCpuMetadataGatherElements) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "Gather CPU metadata path only supports small rank-1 shape tensors");
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+    return GatherCpuMetadataTyped<int64_t>(
+        input, indices_value, output, index_type, input_count, output_count);
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    return GatherCpuMetadataTyped<int32_t>(
+        input, indices_value, output, index_type, input_count, output_count);
+  }
+  return Ort::GetApi().CreateStatus(
+      ORT_NOT_IMPLEMENTED,
+      "Gather CPU metadata path only supports int32/int64 tensors");
+}
+
 class Gather : public OpKernelBase<Gather> {
  public:
   Gather(const OrtKernelInfo* info, void* /*state*/) {
@@ -62,8 +126,16 @@ OrtStatus* Gather::Compute(Ort::KernelContext& ctx) const {
         nullptr));
   }
 
-  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                    "Gather requires MUSA input, indices, and output");
+  // Shape outputs are CPU metadata; small constant indices may be placed on MUSA.
+  if (!IsGpuMemory(input0.GetTensorMemoryInfo())) {
+    return GatherCpuMetadata(input0, indices_value, y, elem_type,
+                             indices_info.GetElementType(), shape0,
+                             indices_shape, axis);
+  }
+
+  return Ort::GetApi().CreateStatus(
+      ORT_NOT_IMPLEMENTED,
+      "Gather requires MUSA tensors except CPU shape metadata inputs");
 }
 }  // namespace
 

@@ -73,6 +73,12 @@ struct MusaBatchNormParams {
   float epsilon;
 };
 
+struct MusaGlobalAveragePoolParams {
+  int64_t output_elements;
+  int64_t channels;
+  int64_t spatial_elements;
+};
+
 struct MusaBroadcastParams {
   int32_t rank;
   int64_t total_elements;

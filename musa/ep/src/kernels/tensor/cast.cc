@@ -5,6 +5,44 @@
 #include "tensor/cast_op_impl.h"
 
 namespace {
+constexpr int64_t kMaxCpuMetadataCastElements = kMusaMaxBroadcastRank;
+
+OrtStatus* CastCpuIntMetadata(Ort::ConstValue input,
+                              Ort::UnownedValue output,
+                              ONNXTensorElementDataType src_type,
+                              ONNXTensorElementDataType dst_type,
+                              int64_t count) {
+  if (count > kMaxCpuMetadataCastElements) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "Cast CPU metadata path only supports small shape tensors");
+  }
+  if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 &&
+      dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    std::vector<int64_t> src = ReadTyped<int64_t>(input);
+    std::vector<int32_t> dst;
+    dst.reserve(src.size());
+    for (int64_t value : src) {
+      if (value > std::numeric_limits<int32_t>::max() ||
+          value < std::numeric_limits<int32_t>::min()) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT, "Cast metadata int64 value overflows int32");
+      }
+      dst.push_back(static_cast<int32_t>(value));
+    }
+    return WriteTyped<int32_t>(output, dst);
+  }
+  if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 &&
+      dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+    std::vector<int32_t> src = ReadTyped<int32_t>(input);
+    std::vector<int64_t> dst(src.begin(), src.end());
+    return WriteTyped<int64_t>(output, dst);
+  }
+  return Ort::GetApi().CreateStatus(
+      ORT_NOT_IMPLEMENTED,
+      "Cast CPU metadata path only supports int32/int64 casts");
+}
+
 class Cast : public OpKernelBase<Cast> {
  public:
   Cast(const OrtKernelInfo* info, void* /*state*/) {
@@ -33,8 +71,14 @@ OrtStatus* Cast::Compute(Ort::KernelContext& ctx) const {
   Ort::UnownedValue y = ctx.GetOutput(0, shape0);
   if (!IsGpuMemory(input0.GetTensorMemoryInfo()) ||
       !IsGpuMemory(y.GetTensorMemoryInfo())) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "Cast requires MUSA input and output");
+    if (!IsGpuMemory(input0.GetTensorMemoryInfo())) {
+      return CastCpuIntMetadata(
+          input0, y, elem_type, static_cast<ONNXTensorElementDataType>(to_),
+          NumElements(shape0));
+    }
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "Cast requires MUSA tensors except CPU shape metadata input");
   }
 
   const int64_t n = NumElements(shape0);

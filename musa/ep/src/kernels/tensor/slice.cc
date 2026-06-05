@@ -66,7 +66,9 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
                                       "Slice requires MUSA input and output");
   }
 
-  if (shape0.size() == 2 && norm_steps[0] == 1 && norm_steps[1] == 1) {
+  if (shape0.size() == 2 && norm_steps[0] == 1 && norm_steps[1] == 1 &&
+      IsGpuMemory(input0.GetTensorMemoryInfo()) &&
+      IsGpuMemory(y.GetTensorMemoryInfo())) {
     const int64_t width_elems = out_shape[1];
     const int64_t height = out_shape[0];
     if (width_elems > 0 && height > 0) {
@@ -79,12 +81,58 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
       const size_t src_offset =
           static_cast<size_t>(norm_starts[0] * shape0[1] + norm_starts[1]) *
           elem_size;
-      const bool src_gpu = IsGpuMemory(input0.GetTensorMemoryInfo());
-      const bool dst_gpu = IsGpuMemory(y.GetTensorMemoryInfo());
-      if (src_gpu && dst_gpu) {
+      if (width_bytes >= 256) {
         return DeviceMemcpy2D(dst_base, dst_pitch, src_base + src_offset,
                               src_pitch, width_bytes,
                               static_cast<size_t>(height));
+      }
+    }
+  }
+
+  const bool all_unit_steps =
+      std::all_of(norm_steps.begin(), norm_steps.end(),
+                  [](int64_t step) { return step == 1; });
+  if (all_unit_steps && IsGpuMemory(input0.GetTensorMemoryInfo()) &&
+      IsGpuMemory(y.GetTensorMemoryInfo())) {
+    size_t copy_dim = shape0.size();
+    for (size_t dim = 0; dim < shape0.size(); ++dim) {
+      if (norm_starts[dim] != 0 || out_shape[dim] != shape0[dim]) {
+        copy_dim = dim;
+        break;
+      }
+    }
+    if (copy_dim < shape0.size()) {
+      bool suffix_full = true;
+      for (size_t dim = copy_dim + 1; dim < shape0.size(); ++dim) {
+        suffix_full &= norm_starts[dim] == 0 && out_shape[dim] == shape0[dim];
+      }
+      if (suffix_full) {
+        int64_t height = 1;
+        for (size_t dim = 0; dim < copy_dim; ++dim) {
+          height *= out_shape[dim];
+        }
+        int64_t suffix = 1;
+        for (size_t dim = copy_dim + 1; dim < shape0.size(); ++dim) {
+          suffix *= shape0[dim];
+        }
+        const int64_t width_elems = out_shape[copy_dim] * suffix;
+        if (width_elems > 0 && height > 0) {
+          const auto* src_base =
+              static_cast<const uint8_t*>(input0.GetTensorRawData());
+          auto* dst_base = static_cast<uint8_t*>(y.GetTensorMutableRawData());
+          const size_t src_pitch =
+              static_cast<size_t>(shape0[copy_dim] * suffix) * elem_size;
+          const size_t dst_pitch = static_cast<size_t>(width_elems) * elem_size;
+          const size_t width_bytes =
+              static_cast<size_t>(width_elems) * elem_size;
+          const size_t src_offset =
+              static_cast<size_t>(norm_starts[copy_dim] * suffix) * elem_size;
+          if (width_bytes >= 256) {
+            return DeviceMemcpy2D(dst_base, dst_pitch, src_base + src_offset,
+                                  src_pitch, width_bytes,
+                                  static_cast<size_t>(height));
+          }
+        }
       }
     }
   }
@@ -116,5 +164,9 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Slice, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .AddTypeConstraint("Tind", IntTensorTypes())),
+         .AddTypeConstraint("Tind", IntTensorTypes())
+         .SetInputMemType(1, OrtMemTypeCPUInput)
+         .SetInputMemType(2, OrtMemTypeCPUInput)
+         .SetInputMemType(3, OrtMemTypeCPUInput)
+         .SetInputMemType(4, OrtMemTypeCPUInput)),
     Slice)

@@ -70,7 +70,8 @@ OrtStatus* ReshapeString::Compute(Ort::KernelContext& ctx) const {
       IsGpuMemory(output.GetTensorMemoryInfo())) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED,
-        "ReshapeString uses CPU memory because ONNX string tensors have no MUSA device representation");
+        "ReshapeString uses CPU memory because ONNX string tensors have no "
+        "MUSA device representation");
   }
 
   const size_t count = static_cast<size_t>(input_info.GetElementCount());
@@ -91,7 +92,9 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Reshape, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .AddInputOutputAlias(0, 0)), Reshape)
+         .SetInputMemType(1, OrtMemTypeCPUInput)
+         .AddInputOutputAlias(0, 0)),
+    Reshape)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Reshape, kOnnxDomain, 19, 19,

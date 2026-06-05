@@ -134,9 +134,11 @@ struct MusaSliceParams {
 struct MusaReduceParams {
   int32_t rank;
   int32_t reduce_axis;
+  int32_t reduce_axes_count;
   int64_t output_elements;
   int64_t reduce_dim;
   int64_t reduction_elements;
+  int64_t inner_size;
   int64_t input_dims[kMusaMaxBroadcastRank];
   int64_t input_strides[kMusaMaxBroadcastRank];
   int64_t output_strides[kMusaMaxBroadcastRank];

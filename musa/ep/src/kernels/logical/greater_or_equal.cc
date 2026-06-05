@@ -23,7 +23,8 @@ OrtStatus* GreaterOrEqual::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     GreaterOrEqual, kOnnxDomain, 13, 15,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", CompareTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint(
+        "T", CompareTensorTypesNoBFloat16())),
     GreaterOrEqual)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(

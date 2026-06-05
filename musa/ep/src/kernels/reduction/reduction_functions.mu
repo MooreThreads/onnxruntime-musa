@@ -230,6 +230,14 @@ musaError_t LaunchMusaReduceKernel(const void* input,
                                    MusaElementType elem_type,
                                    musaStream_t stream) {
   switch (elem_type) {
+    case MusaElementType::Uint8:
+      if (op == MusaReduceOp::Mean) return musaErrorNotSupported;
+      return LaunchMusaReduceTyped<uint8_t, uint32_t>(input, output, params,
+                                                      op, stream);
+    case MusaElementType::Int8:
+      if (op == MusaReduceOp::Mean) return musaErrorNotSupported;
+      return LaunchMusaReduceTyped<int8_t, int32_t>(input, output, params, op,
+                                                    stream);
     case MusaElementType::Float:
       return LaunchMusaReduceTyped<float, float>(input, output, params, op,
                                                  stream);

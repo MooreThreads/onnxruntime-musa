@@ -26,7 +26,7 @@ Total registered kernels: **71**
 | `Gather` | `ai.onnx` | 13–19 | `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`Tind`: int32, int64 | `tensor/gather.cc` |
 | `Gemm` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16 | `math/gemm.cc` |
 | `Greater` | `ai.onnx` | 13–19 | `T`: uint32, uint64, int32, int64, float16, float32, float64, bfloat16 | `logical/greater.cc` |
-| `GreaterOrEqual` | `ai.onnx` | 13–15 | `T`: uint32, uint64, int32, int64, float16, float32, float64, bfloat16 | `logical/greater_or_equal.cc` |
+| `GreaterOrEqual` | `ai.onnx` | 13–15 | `T`: uint32, uint64, int32, int64, float16, float32, float64 | `logical/greater_or_equal.cc` |
 | `GreaterOrEqual` | `ai.onnx` | 16–19 | `T`: uint32, uint64, int32, int64, float16, float32, float64, bfloat16 | `logical/greater_or_equal.cc` |
 | `IsNaN` | `ai.onnx` | 13–19 | `T1`: float16, float32, float64, bfloat16<br>`T2`: bool | `logical/is_nan.cc` |
 | `LeakyRelu` | `ai.onnx` | 13–15 | `T`: float16, float32, float64 | `activation/leaky_relu.cc` |
@@ -48,7 +48,7 @@ Total registered kernels: **71**
 | `RandomUniform` | `ai.onnx` | 1–19 | `T`: float16, float32, float64, bfloat16 | `generator/random_uniform.cc` |
 | `RandomUniformLike` | `ai.onnx` | 1–19 | `T1`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`T2`: float16, float32, float64, bfloat16 | `generator/random_uniform.cc` |
 | `Reciprocal` | `ai.onnx` | 13–19 | `T`: float16, float32, float64 | `activation/reciprocal.cc` |
-| `ReduceMax` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16, int32, int64 | `reduction/reduce_max.cc` |
+| `ReduceMax` | `ai.onnx` | 13–19 | `T`: uint8, int8, float16, float32, float64, bfloat16, int32, int64 | `reduction/reduce_max.cc` |
 | `ReduceMean` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16, int32 | `reduction/reduce_mean.cc` |
 | `ReduceProd` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16, int32, int64 | `reduction/reduce_prod.cc` |
 | `ReduceSum` | `ai.onnx` | 13–19 | `T`: float16, float32, float64, bfloat16, int32, int64 | `reduction/reduce_sum.cc` |

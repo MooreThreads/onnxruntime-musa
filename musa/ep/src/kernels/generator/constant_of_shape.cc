@@ -64,8 +64,8 @@ OrtStatus* ConstantOfShape::Compute(Ort::KernelContext& ctx) const {
 
   Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
   if (!IsGpuMemory(output.GetTensorMemoryInfo())) {
-    return Ort::GetApi().CreateStatus(
-        ORT_NOT_IMPLEMENTED, "ConstantOfShape requires MUSA output");
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "ConstantOfShape requires MUSA output");
   }
   return LaunchStatus(LaunchMusaConstantOfShapeKernel(
       output.GetTensorMutableRawData(), value_bits_,
@@ -74,10 +74,9 @@ OrtStatus* ConstantOfShape::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    ConstantOfShape, kOnnxDomain, 13, 19,
+    ConstantOfShape, kOnnxDomain, 9, 19,
     (Ort::KernelDefBuilder()
-         .AddTypeConstraint(
-             "T1", GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))
-         .AddTypeConstraint("T2", AllFixedSizeTensorTypes())
-         .SetInputMemType(0, OrtMemTypeCPUInput)),
+         .AddTypeConstraint("T1",
+                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))
+         .AddTypeConstraint("T2", AllFixedSizeTensorTypesNoBFloat16())),
     ConstantOfShape)

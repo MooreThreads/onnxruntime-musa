@@ -100,8 +100,10 @@ def _resolve_constraint(expr: str, helpers: dict[str, list[str]]) -> list[str]:
     direct = _DTYPE_TOKEN_RE.findall(expr)
     if direct:
         return [DTYPE_NAMES.get(t, t.lower()) for t in direct]
-    for helper_name, dtypes in helpers.items():
-        if helper_name in expr:
+    for helper_name, dtypes in sorted(
+        helpers.items(), key=lambda item: len(item[0]), reverse=True
+    ):
+        if re.search(rf"\b{re.escape(helper_name)}\s*\(", expr):
             return dtypes
     return ["?"]
 

@@ -116,9 +116,5 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Slice, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .AddTypeConstraint("Tind", IntTensorTypes())
-         .SetInputMemType(1, OrtMemTypeCPUInput)
-         .SetInputMemType(2, OrtMemTypeCPUInput)
-         .SetInputMemType(3, OrtMemTypeCPUInput)
-         .SetInputMemType(4, OrtMemTypeCPUInput)),
+         .AddTypeConstraint("Tind", IntTensorTypes())),
     Slice)

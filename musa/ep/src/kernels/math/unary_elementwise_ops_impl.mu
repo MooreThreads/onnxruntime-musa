@@ -35,6 +35,8 @@ __device__ __forceinline__ float UnaryValue(float x, MusaUnaryOp op, float alpha
       return nearbyintf(x);
     case MusaUnaryOp::Softplus:
       return log1pf(expf(-fabsf(x))) + fmaxf(x, 0.0f);
+    case MusaUnaryOp::Ceil:
+      return ceilf(x);
   }
   return x;
 }
@@ -78,6 +80,8 @@ __device__ __forceinline__ T UnaryValueTyped(T x, MusaUnaryOp op, float alpha) {
       const double value = static_cast<double>(x);
       return static_cast<T>(log1p(exp(-fabs(value))) + fmax(value, 0.0));
     }
+    case MusaUnaryOp::Ceil:
+      return static_cast<T>(ceil(static_cast<double>(x)));
   }
   return x;
 }

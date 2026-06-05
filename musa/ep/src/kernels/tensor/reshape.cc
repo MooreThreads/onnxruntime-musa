@@ -91,7 +91,6 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Reshape, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .SetInputMemType(1, OrtMemTypeCPUInput)
          .AddInputOutputAlias(0, 0)), Reshape)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(

@@ -15,6 +15,52 @@ from op_test_utils import (
     run_with_iobinding,
 )
 
+_WHERE_OPSET9_DTYPES = [
+    (np.float16, TensorProto.FLOAT16, [[1.0], [2.0]], [[10.0, 20.0, 30.0]]),
+    (np.float32, TensorProto.FLOAT, [[1.0], [2.0]], [[10.0, 20.0, 30.0]]),
+    (np.float64, TensorProto.DOUBLE, [[1.0], [2.0]], [[10.0, 20.0, 30.0]]),
+    (np.int32, TensorProto.INT32, [[1], [2]], [[10, 20, 30]]),
+    (np.int64, TensorProto.INT64, [[1], [2]], [[10, 20, 30]]),
+    (np.uint8, TensorProto.UINT8, [[1], [2]], [[10, 20, 30]]),
+]
+
+_FIXED_DTYPES_NO_BFLOAT16 = [
+    (np.uint8, TensorProto.UINT8),
+    (np.uint16, TensorProto.UINT16),
+    (np.uint32, TensorProto.UINT32),
+    (np.uint64, TensorProto.UINT64),
+    (np.int8, TensorProto.INT8),
+    (np.int16, TensorProto.INT16),
+    (np.int32, TensorProto.INT32),
+    (np.int64, TensorProto.INT64),
+    (np.float16, TensorProto.FLOAT16),
+    (np.float32, TensorProto.FLOAT),
+    (np.float64, TensorProto.DOUBLE),
+    (np.bool_, TensorProto.BOOL),
+]
+
+
+def _values(dtype):
+    if dtype == np.bool_:
+        return (
+            np.array([[True], [False]], dtype=np.bool_),
+            np.array([[False, True, False]], dtype=np.bool_),
+        )
+    if np.issubdtype(dtype, np.unsignedinteger):
+        return (
+            np.array([[1], [2]], dtype=dtype),
+            np.array([[10, 20, 30]], dtype=dtype),
+        )
+    if np.issubdtype(dtype, np.integer):
+        return (
+            np.array([[-1], [2]], dtype=dtype),
+            np.array([[10, -20, 30]], dtype=dtype),
+        )
+    return (
+        np.array([[1.0], [2.0]], dtype=dtype),
+        np.array([[10.0, 20.0, 30.0]], dtype=dtype),
+    )
+
 
 def test_where_float_broadcast_opset16():
     cond = np.array([[True, False, True]], dtype=np.bool_)
@@ -30,13 +76,11 @@ def test_where_float_broadcast_opset16():
 
 @pytest.mark.parametrize(
     ("np_dtype", "tensor_type", "values_a", "values_b"),
-    [
-        (np.int32, TensorProto.INT32, [[1], [2]], [[10, 20, 30]]),
-        (np.int64, TensorProto.INT64, [[1], [2]], [[10, 20, 30]]),
-        (np.float16, TensorProto.FLOAT16, [[1.0], [2.0]], [[10.0, 20.0, 30.0]]),
-    ],
+    _WHERE_OPSET9_DTYPES,
 )
-def test_where_byte_copy_dtypes(np_dtype, tensor_type, values_a, values_b):
+def test_where_opset14_registered_dtypes(
+    np_dtype, tensor_type, values_a, values_b
+):
     cond = np.array([[True, False, True]], dtype=np.bool_)
     a = np.array(values_a, dtype=np_dtype)
     b = np.array(values_b, dtype=np_dtype)
@@ -44,19 +88,19 @@ def test_where_byte_copy_dtypes(np_dtype, tensor_type, values_a, values_b):
         "Where",
         inputs={"condition": cond, "X": a, "Y": b},
         outputs=[("Z", tensor_type)],
-        opset=16,
+        opset=14,
     )
 
 
-def test_where_bool_musa_only():
+@pytest.mark.parametrize(("np_dtype", "tensor_type"), _FIXED_DTYPES_NO_BFLOAT16)
+def test_where_opset16_fixed_size_dtypes(np_dtype, tensor_type):
     cond = np.array([[True, False, True]], dtype=np.bool_)
-    a = np.array([[True], [False]], dtype=np.bool_)
-    b = np.array([[False, True, False]], dtype=np.bool_)
+    a, b = _values(np_dtype)
     expected = np.where(cond, a, b)
     model = build_model(
         "Where",
         inputs={"condition": cond, "X": a, "Y": b},
-        outputs=[("Z", TensorProto.BOOL)],
+        outputs=[("Z", tensor_type)],
         opset=16,
     )
     (actual,) = run(model, {"condition": cond, "X": a, "Y": b}, use_musa=True)

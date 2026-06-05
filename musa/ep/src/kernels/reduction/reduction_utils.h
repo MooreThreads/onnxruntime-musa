@@ -6,13 +6,14 @@
 #include "reduction/reduction_functions.h"
 #include "shared_inc/op_kernel_common.h"
 
-enum class ReduceMode { kProd, kSum, kMean, kSumSquare, kMax };
+enum class ReduceMode { kProd, kSum, kMean, kSumSquare, kMax, kL2 };
 
 inline MusaReduceOp ToMusaReduceOp(ReduceMode mode) {
   if (mode == ReduceMode::kSum) return MusaReduceOp::Sum;
   if (mode == ReduceMode::kMean) return MusaReduceOp::Mean;
   if (mode == ReduceMode::kSumSquare) return MusaReduceOp::SumSquare;
   if (mode == ReduceMode::kMax) return MusaReduceOp::Max;
+  if (mode == ReduceMode::kL2) return MusaReduceOp::L2;
   return MusaReduceOp::Prod;
 }
 
@@ -98,6 +99,14 @@ inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 &&
       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
     return UnsupportedReduceStatus("unsupported ReduceMean dtype");
+  }
+  if (mode == ReduceMode::kL2 &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    return UnsupportedReduceStatus("unsupported ReduceL2 dtype");
   }
 
   MusaReduceParams params =

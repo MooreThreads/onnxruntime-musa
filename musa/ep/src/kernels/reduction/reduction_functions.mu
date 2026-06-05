@@ -278,6 +278,54 @@ __global__ void ReduceLastAxisBlockKernel(const T* input,
   }
 }
 
+template <typename T, typename AccT>
+__global__ void ReduceLastAxisMultiOutputBlockKernel(const T* input,
+                                                     T* output,
+                                                     MusaReduceParams params,
+                                                     MusaReduceOp op,
+                                                     int group_size,
+                                                     int outputs_per_block) {
+  const int group = threadIdx.x / group_size;
+  const int lane = threadIdx.x - group * group_size;
+  const int64_t output_index =
+      static_cast<int64_t>(blockIdx.x) * outputs_per_block + group;
+  const bool valid = output_index < params.output_elements;
+
+  const int64_t reduce_dim = params.reduce_dim;
+  const int64_t input_base = output_index * reduce_dim;
+
+  AccT acc = ReduceInitValue<AccT>(op);
+  if (valid) {
+    for (int64_t r = lane; r < reduce_dim; r += group_size) {
+      acc = ReduceUpdateValue(acc,
+                              ReduceToAccum<AccT>(input[input_base + r]), op);
+    }
+  }
+
+  __shared__ AccT shared[kThreadsPerBlock];
+  shared[threadIdx.x] = acc;
+  __syncthreads();
+  for (int stride = group_size / 2; stride > 0; stride >>= 1) {
+    if (lane < stride) {
+      shared[threadIdx.x] =
+          ReduceCombineValue(shared[threadIdx.x], shared[threadIdx.x + stride],
+                             op);
+    }
+    __syncthreads();
+  }
+
+  if (valid && lane == 0) {
+    AccT value = shared[threadIdx.x];
+    if (op == MusaReduceOp::Mean) {
+      value /= static_cast<AccT>(reduce_dim);
+    }
+    if (op == MusaReduceOp::L2) {
+      value = sqrt(value);
+    }
+    output[output_index] = ReduceFromAccum<T, AccT>(value);
+  }
+}
+
 }  // namespace
 
 template <typename T, typename AccT>
@@ -292,6 +340,18 @@ musaError_t LaunchMusaReduceTyped(const void* input,
   if (params.reduce_axes_count == 1 && params.reduce_dim > 0 &&
       params.reduction_elements == params.reduce_dim) {
     if (params.inner_size == 1 && params.reduce_dim >= 64) {
+      if (params.reduce_dim <= 256 && params.output_elements >= 1024) {
+        const int group_size = 64;
+        const int outputs_per_block = kThreadsPerBlock / group_size;
+        ReduceLastAxisMultiOutputBlockKernel<T, AccT>
+            <<<static_cast<int>((params.output_elements + outputs_per_block -
+                                 1) /
+                                outputs_per_block),
+               kThreadsPerBlock, 0, stream>>>(
+                reinterpret_cast<const T*>(input), reinterpret_cast<T*>(output),
+                params, op, group_size, outputs_per_block);
+        return musaGetLastError();
+      }
       ReduceLastAxisBlockKernel<T, AccT>
           <<<static_cast<int>(params.output_elements), kThreadsPerBlock, 0,
              stream>>>(reinterpret_cast<const T*>(input),

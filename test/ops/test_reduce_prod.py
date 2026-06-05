@@ -55,6 +55,18 @@ def test_reduce_prod_int32_negative_axis_keepdims():
     )
 
 
+def test_reduce_prod_profile_last_axis_256_keepdims():
+    x = np.random.default_rng(6).uniform(0.99, 1.01, (32, 18, 256)).astype(np.float32)
+    run_and_compare(
+        "ReduceProd",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"axes": [-1], "keepdims": 1},
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+
 def test_reduce_prod_float_axis0_no_keepdims_3d():
     x = np.random.default_rng(2).uniform(0.5, 1.25, (2, 3, 4)).astype(np.float32)
     run_and_compare(

@@ -1,6 +1,5 @@
 #include "matmul.h"
 
-#include <mublas.h>
 #include <mudnncxx/mudnn.h>
 #include <musa_runtime.h>
 
@@ -10,10 +9,8 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
-#include "matmul_batched_kernels.h"
 #include "shared_inc/blas_utils.h"
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
@@ -44,7 +41,6 @@ struct MatMulShapeInfo {
 
 bool IsMatMulType(ONNXTensorElementDataType elem_type) {
   return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE ||
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
 }
@@ -100,9 +96,9 @@ bool IsScalarBatch(const std::vector<int64_t>& shape) {
   return shape.empty() || NumElementsLocal(shape) == 1;
 }
 
-bool TryGetLinearBatchStride(const std::vector<int64_t>& input_batch,
-                             const std::vector<int64_t>& output_batch,
-                             int64_t matrix_elements, long long int& stride) {
+bool ResolveLinearBatchStride(const std::vector<int64_t>& input_batch,
+                              const std::vector<int64_t>& output_batch,
+                              int64_t matrix_elements, long long int& stride) {
   if (SameShape(input_batch, output_batch)) {
     stride = static_cast<long long int>(matrix_elements);
     return true;
@@ -113,25 +109,6 @@ bool TryGetLinearBatchStride(const std::vector<int64_t>& input_batch,
   }
   return false;
 }
-
-void FillBroadcastBatchStrides(const std::vector<int64_t>& input_batch,
-                               const std::vector<int64_t>& input_strides,
-                               const std::vector<int64_t>& output_batch,
-                               int64_t* output_strides) {
-  const size_t output_rank = output_batch.size();
-  const size_t input_rank = input_batch.size();
-  const size_t input_offset = output_rank - input_rank;
-  for (size_t dim = 0; dim < output_rank; ++dim) {
-    if (dim < input_offset) {
-      output_strides[dim] = 0;
-      continue;
-    }
-    const size_t input_dim = dim - input_offset;
-    output_strides[dim] =
-        input_batch[input_dim] == 1 ? 0 : input_strides[input_dim];
-  }
-}
-
 EffectiveMatMulOperand BuildOperand(const std::vector<int64_t>& shape,
                                     bool trans, bool trans_batch,
                                     bool is_left) {
@@ -232,29 +209,41 @@ MatMulShapeInfo ResolveMatMulShape(const std::vector<int64_t>& a_shape,
   return info;
 }
 
-bool TryMudnnMatMul(void* y_data, const void* a_data, const void* b_data,
-                    const std::vector<int64_t>& a_shape,
-                    const std::vector<int64_t>& b_shape,
-                    const std::vector<int64_t>& y_shape,
-                    ONNXTensorElementDataType elem_type, bool trans_a,
-                    bool trans_b) {
-  std::string key = std::to_string(static_cast<int>(elem_type));
-  key += trans_a ? "|ta1" : "|ta0";
-  key += trans_b ? "|tb1" : "|tb0";
-  AppendShapeKey(key, a_shape);
-  AppendShapeKey(key, b_shape);
-  AppendShapeKey(key, y_shape);
-  static thread_local std::unordered_set<std::string> unsupported_keys;
-  if (unsupported_keys.count(key) != 0) {
-    return false;
+OrtStatus* MudnnStatus(::musa::dnn::Status status, const char* message) {
+  if (status == ::musa::dnn::Status::SUCCESS) {
+    return nullptr;
+  }
+  std::string error = std::string(message) +
+                      ", status=" + std::to_string(static_cast<int>(status));
+  return Ort::GetApi().CreateStatus(ORT_EP_FAIL, error.c_str());
+}
+
+OrtStatus* SetMudnnBatchedMatMulTensor(::musa::dnn::Tensor& tensor,
+                                       const void* data,
+                                       const std::vector<int64_t>& shape,
+                                       ONNXTensorElementDataType elem_type,
+                                       int64_t batch, int64_t batch_stride) {
+  if (!SetMudnnTensor(tensor, data, shape, elem_type)) {
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                      "failed to setup muDNN MatMul tensor");
   }
 
+  const int64_t rows = shape[shape.size() - 2];
+  const int64_t cols = shape[shape.size() - 1];
+  const int64_t dims[3] = {batch, rows, cols};
+  const int64_t strides[3] = {batch_stride, cols, 1};
+  return MudnnStatus(tensor.SetNdInfo(3, dims, strides),
+                     "failed to set muDNN BatchMatMul tensor shape");
+}
+
+OrtStatus* RunMudnnMatMul(void* y_data, const void* a_data, const void* b_data,
+                          const std::vector<int64_t>& a_shape,
+                          const std::vector<int64_t>& b_shape,
+                          const std::vector<int64_t>& y_shape,
+                          ONNXTensorElementDataType elem_type, bool trans_a,
+                          bool trans_b, float alpha) {
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
-  if (handle_status != nullptr) {
-    Ort::GetApi().ReleaseStatus(handle_status);
-    return false;
-  }
+  RETURN_IF_ERROR(EnsureMudnnHandle(&handle));
 
   ::musa::dnn::Tensor a_tensor;
   ::musa::dnn::Tensor b_tensor;
@@ -262,119 +251,97 @@ bool TryMudnnMatMul(void* y_data, const void* a_data, const void* b_data,
   if (!SetMudnnTensor(a_tensor, a_data, a_shape, elem_type) ||
       !SetMudnnTensor(b_tensor, b_data, b_shape, elem_type) ||
       !SetMudnnTensor(y_tensor, y_data, y_shape, elem_type)) {
-    return false;
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                      "failed to setup muDNN MatMul tensors");
   }
 
   ::musa::dnn::MatMul matmul;
-  if (matmul.SetTranspose(trans_a, trans_b) != ::musa::dnn::Status::SUCCESS) {
-    return false;
-  }
-  if (matmul.SetComputeMode(::musa::dnn::MatMul::ComputeMode::TENSOR) !=
-      ::musa::dnn::Status::SUCCESS) {
-    return false;
-  }
-  if (matmul.SetAlpha(1.0) != ::musa::dnn::Status::SUCCESS) return false;
-  if (matmul.SetBeta(0.0) != ::musa::dnn::Status::SUCCESS) return false;
-  const bool ok = matmul.Run(*handle, y_tensor, a_tensor, b_tensor) ==
-                  ::musa::dnn::Status::SUCCESS;
-  if (!ok) unsupported_keys.insert(key);
-  return ok;
+  RETURN_IF_ERROR(MudnnStatus(matmul.SetTranspose(trans_a, trans_b),
+                              "muDNN MatMul SetTranspose failed"));
+  RETURN_IF_ERROR(MudnnStatus(
+      matmul.SetComputeMode(::musa::dnn::MatMul::ComputeMode::TENSOR),
+      "muDNN MatMul SetComputeMode failed"));
+  RETURN_IF_ERROR(MudnnStatus(matmul.SetAlpha(static_cast<double>(alpha)),
+                              "muDNN MatMul SetAlpha failed"));
+  RETURN_IF_ERROR(
+      MudnnStatus(matmul.SetBeta(0.0), "muDNN MatMul SetBeta failed"));
+  return MudnnStatus(matmul.Run(*handle, y_tensor, a_tensor, b_tensor),
+                     "muDNN MatMul execution failed");
 }
 
-bool TryMublasMatMul(const void* a_data, const void* b_data, void* y_data,
-                     const std::vector<int64_t>& a_shape,
-                     const std::vector<int64_t>& b_shape,
-                     const MatMulShapeInfo& shape_info,
-                     ONNXTensorElementDataType elem_type, bool trans_a,
-                     bool trans_b, bool trans_batch_a, bool trans_batch_b,
-                     float alpha) {
-  if (shape_info.lhs_vector || shape_info.rhs_vector || trans_batch_a ||
-      trans_batch_b || shape_info.lhs.rows <= 0 || shape_info.rhs.cols <= 0 ||
-      shape_info.lhs.cols <= 0) {
-    return false;
-  }
-  const int64_t m64 = shape_info.lhs.rows;
-  const int64_t k64 = shape_info.lhs.cols;
-  const int64_t n64 = shape_info.rhs.cols;
-  if (m64 > INT32_MAX || k64 > INT32_MAX || n64 > INT32_MAX ||
-      a_shape.back() > INT32_MAX || b_shape.back() > INT32_MAX) {
-    return false;
-  }
-
-  mublasHandle_t handle = nullptr;
-  OrtStatus* status = EnsureMublasHandle(&handle);
-  if (status != nullptr) {
-    Ort::GetApi().ReleaseStatus(status);
-    return false;
-  }
-
-  const int m = static_cast<int>(m64);
-  const int k = static_cast<int>(k64);
-  const int n = static_cast<int>(n64);
-  const int lda = static_cast<int>(a_shape.back());
-  const int ldb = static_cast<int>(b_shape.back());
-  const mublasOperation_t op_a = trans_a ? MUBLAS_OP_T : MUBLAS_OP_N;
-  const mublasOperation_t op_b = trans_b ? MUBLAS_OP_T : MUBLAS_OP_N;
+OrtStatus* RunMudnnBatchMatMul(void* y_data, const void* a_data,
+                               const void* b_data,
+                               const std::vector<int64_t>& a_shape,
+                               const std::vector<int64_t>& b_shape,
+                               const MatMulShapeInfo& shape_info,
+                               ONNXTensorElementDataType elem_type,
+                               bool trans_a, bool trans_b, float alpha) {
   const int64_t batch_total = NumElementsLocal(shape_info.batch_shape);
-
   long long int stride_a = 0;
   long long int stride_b = 0;
-  const bool can_use_strided_batched =
-      batch_total > 1 && batch_total <= INT32_MAX &&
-      TryGetLinearBatchStride(
+  if (!ResolveLinearBatchStride(
           shape_info.lhs.batch_shape, shape_info.batch_shape,
-          a_shape[a_shape.size() - 2] * a_shape.back(), stride_a) &&
-      TryGetLinearBatchStride(
+          a_shape[a_shape.size() - 2] * a_shape.back(), stride_a) ||
+      !ResolveLinearBatchStride(
           shape_info.rhs.batch_shape, shape_info.batch_shape,
-          b_shape[b_shape.size() - 2] * b_shape.back(), stride_b);
-  if (can_use_strided_batched) {
-    const long long int stride_y = static_cast<long long int>(m64 * n64);
-    mublasStatus gemm_status = MublasGemmStridedBatchedEx(
-        handle, op_b, op_a, n, m, k, alpha, b_data, ldb, stride_b, a_data, lda,
-        stride_a, 0.0, y_data, n, stride_y, static_cast<int>(batch_total),
-        elem_type);
-    return gemm_status == MUBLAS_STATUS_SUCCESS;
+          b_shape[b_shape.size() - 2] * b_shape.back(), stride_b)) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "muDNN BatchMatMul only supports equal or single-batch broadcast");
   }
 
-  if (batch_total == 1) {
-    mublasStatus gemm_status =
-        MublasGemmEx(handle, op_b, op_a, n, m, k, alpha, b_data, ldb, a_data,
-                     lda, 0.0, y_data, n, elem_type);
-    return gemm_status == MUBLAS_STATUS_SUCCESS;
+  ::musa::dnn::Handle* handle = nullptr;
+  RETURN_IF_ERROR(EnsureMudnnHandle(&handle));
+
+  ::musa::dnn::Tensor a_tensor;
+  ::musa::dnn::Tensor b_tensor;
+  ::musa::dnn::Tensor y_tensor;
+  const int64_t a_batch = stride_a == 0 ? 1 : batch_total;
+  const int64_t b_batch = stride_b == 0 ? 1 : batch_total;
+  const std::vector<int64_t> y_shape_3d = {batch_total, shape_info.lhs.rows,
+                                           shape_info.rhs.cols};
+  RETURN_IF_ERROR(SetMudnnBatchedMatMulTensor(a_tensor, a_data, a_shape,
+                                              elem_type, a_batch, stride_a));
+  RETURN_IF_ERROR(SetMudnnBatchedMatMulTensor(b_tensor, b_data, b_shape,
+                                              elem_type, b_batch, stride_b));
+  RETURN_IF_ERROR(SetMudnnBatchedMatMulTensor(
+      y_tensor, y_data, y_shape_3d, elem_type, batch_total,
+      shape_info.lhs.rows * shape_info.rhs.cols));
+
+  ::musa::dnn::BatchMatMul batch_op;
+  RETURN_IF_ERROR(MudnnStatus(batch_op.SetTranspose(trans_a, trans_b),
+                              "muDNN BatchMatMul SetTranspose failed"));
+  RETURN_IF_ERROR(MudnnStatus(
+      batch_op.SetComputeMode(::musa::dnn::BatchMatMul::ComputeMode::TENSOR),
+      "muDNN BatchMatMul SetComputeMode failed"));
+  RETURN_IF_ERROR(MudnnStatus(batch_op.SetAlpha(static_cast<double>(alpha)),
+                              "muDNN BatchMatMul SetAlpha failed"));
+  RETURN_IF_ERROR(
+      MudnnStatus(batch_op.SetBeta(0.0), "muDNN BatchMatMul SetBeta failed"));
+
+  bool used_workspace = false;
+  ::musa::dnn::MemoryMaintainer maintainer =
+      [&used_workspace](size_t bytes) -> ::musa::dnn::MemoryHandler {
+    used_workspace = used_workspace || bytes != 0;
+    void* ptr = nullptr;
+    if (bytes != 0 && musaMalloc(&ptr, bytes) != musaSuccess) {
+      ptr = nullptr;
+    }
+    return ::musa::dnn::MemoryHandler(ptr, [](void* p) {
+      if (p != nullptr) {
+        musaFree(p);
+      }
+    });
+  };
+
+  RETURN_IF_ERROR(MudnnStatus(
+      batch_op.Run(*handle, y_tensor, a_tensor, b_tensor, maintainer),
+      "muDNN BatchMatMul execution failed"));
+  if (used_workspace && musaDeviceSynchronize() != musaSuccess) {
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                      "muDNN BatchMatMul synchronize failed");
   }
-
-  return false;
-}
-
-MusaBatchedMatMulParams MakeMatMulParams(const MatMulShapeInfo& shape_info,
-                                         float alpha) {
-  MusaBatchedMatMulParams params{};
-  params.output_rank = static_cast<int32_t>(shape_info.compute_shape.size());
-  params.batch_rank = static_cast<int32_t>(shape_info.batch_shape.size());
-  params.total_elements = NumElementsLocal(shape_info.compute_shape);
-  params.m = shape_info.lhs.rows;
-  params.n = shape_info.rhs.cols;
-  params.k = shape_info.lhs.cols;
-  params.alpha = alpha;
-
-  auto output_strides = StridesLocal(shape_info.compute_shape);
-  for (size_t dim = 0; dim < shape_info.compute_shape.size(); ++dim) {
-    params.output_dims[dim] = shape_info.compute_shape[dim];
-    params.output_strides[dim] = output_strides[dim];
-  }
-
-  FillBroadcastBatchStrides(shape_info.lhs.batch_shape,
-                            shape_info.lhs.batch_strides,
-                            shape_info.batch_shape, params.a_batch_strides);
-  FillBroadcastBatchStrides(shape_info.rhs.batch_shape,
-                            shape_info.rhs.batch_strides,
-                            shape_info.batch_shape, params.b_batch_strides);
-
-  params.a_row_stride = shape_info.lhs.row_stride;
-  params.a_col_stride = shape_info.lhs.col_stride;
-  params.b_row_stride = shape_info.rhs.row_stride;
-  params.b_col_stride = shape_info.rhs.col_stride;
-  return params;
+  return nullptr;
 }
 
 OrtStatus* ComputeMusaMatMulDeviceImpl(
@@ -383,10 +350,6 @@ OrtStatus* ComputeMusaMatMulDeviceImpl(
     const std::vector<int64_t>& b_shape, const std::vector<int64_t>& y_shape,
     bool trans_a, bool trans_b, bool trans_batch_a, bool trans_batch_b,
     float alpha) {
-  if (a_data == nullptr || b_data == nullptr || y_data == nullptr) {
-    return Ort::GetApi().CreateStatus(
-        ORT_INVALID_ARGUMENT, "MUSA MatMul device pointers must be non-null.");
-  }
   if (!IsMatMulType(elem_type)) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "unsupported MatMul dtype");
@@ -410,37 +373,44 @@ OrtStatus* ComputeMusaMatMulDeviceImpl(
   if (NumElementsLocal(shape_info.compute_shape) == 0) {
     return nullptr;
   }
-
-  const bool can_try_mudnn =
-      !shape_info.lhs_vector && !shape_info.rhs_vector && !trans_batch_a &&
-      !trans_batch_b && alpha == 1.0f &&
-      NumElementsLocal(shape_info.compute_shape) >= 1000000;
-  if (can_try_mudnn &&
-      TryMudnnMatMul(y_data, a_data, b_data, a_shape, b_shape,
-                     shape_info.compute_shape, elem_type, trans_a, trans_b)) {
-    return nullptr;
+  if (y_data == nullptr) {
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT, "MUSA MatMul output pointer must be non-null.");
+  }
+  if (shape_info.lhs.cols == 0) {
+    musaError_t status = musaMemsetAsync(
+        y_data, 0, NumElementsLocal(y_shape) * ElementSize(elem_type), nullptr);
+    return LaunchStatus(status);
+  }
+  if (a_data == nullptr || b_data == nullptr) {
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT, "MUSA MatMul input pointers must be non-null.");
+  }
+  if (shape_info.lhs_vector || shape_info.rhs_vector) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "muDNN MatMul port does not support ONNX vector MatMul inputs");
+  }
+  if (trans_batch_a || trans_batch_b) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "muDNN MatMul port does not support transBatch attributes");
   }
 
-  if (TryMublasMatMul(a_data, b_data, y_data, a_shape, b_shape, shape_info,
-                      elem_type, trans_a, trans_b, trans_batch_a, trans_batch_b,
-                      alpha)) {
-    return nullptr;
+  if (shape_info.batch_shape.empty()) {
+    return RunMudnnMatMul(y_data, a_data, b_data, a_shape, b_shape,
+                          shape_info.compute_shape, elem_type, trans_a, trans_b,
+                          alpha);
   }
 
-  MusaElementType musa_elem_type;
-  if (!ToMusaElementType(elem_type, musa_elem_type)) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "unsupported MatMul dtype");
-  }
-  MusaBatchedMatMulParams params = MakeMatMulParams(shape_info, alpha);
-  return LaunchStatus(LaunchMusaBatchedMatMulKernel(
-      a_data, b_data, y_data, params, musa_elem_type, nullptr));
+  return RunMudnnBatchMatMul(y_data, a_data, b_data, a_shape, b_shape,
+                             shape_info, elem_type, trans_a, trans_b, alpha);
 }
 
-OrtStatus* ComputeMublasBatchedMatMul(Ort::KernelContext& kernel_context,
-                                      Ort::ConstValue a, Ort::ConstValue b,
-                                      const std::vector<int64_t>& a_shape,
-                                      const std::vector<int64_t>& b_shape) {
+OrtStatus* ComputeMudnnMatMul(Ort::KernelContext& kernel_context,
+                              Ort::ConstValue a, Ort::ConstValue b,
+                              const std::vector<int64_t>& a_shape,
+                              const std::vector<int64_t>& b_shape) {
   if (!IsGpuMemory(a.GetTensorMemoryInfo()) ||
       !IsGpuMemory(b.GetTensorMemoryInfo())) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
@@ -534,7 +504,7 @@ OrtStatus* ORT_API_CALL MatMul::ComputeImpl(
   std::vector<int64_t> a_shape = a_shape_info.GetShape();
   std::vector<int64_t> b_shape = b_shape_info.GetShape();
 
-  return ComputeMublasBatchedMatMul(kernel_context, a, b, a_shape, b_shape);
+  return ComputeMudnnMatMul(kernel_context, a, b, a_shape, b_shape);
   EXCEPTION_TO_RETURNED_STATUS_END
 }
 

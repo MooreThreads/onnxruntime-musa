@@ -3,6 +3,7 @@
 """End-to-end CPU-vs-MUSA test for the MatMul operator."""
 
 import numpy as np
+import pytest
 
 from op_test_utils import (
     TensorProto,
@@ -32,22 +33,36 @@ def test_matmul_batched_broadcast_left_batch():
     run_and_compare("MatMul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
 
 
-def test_matmul_rank4_batched():
+def test_matmul_rank4_cross_broadcast_unsupported():
     a = np.random.default_rng(6).standard_normal((2, 1, 3, 4)).astype(np.float32)
     b = np.random.default_rng(7).standard_normal((1, 5, 4, 6)).astype(np.float32)
+    with pytest.raises(Exception, match="equal or single-batch broadcast"):
+        run_and_compare("MatMul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)], rtol=2e-3, atol=2e-4)
+
+
+def test_matmul_rank4_contiguous_batched():
+    a = np.random.default_rng(20).standard_normal((2, 3, 4, 8)).astype(np.float32)
+    b = np.random.default_rng(21).standard_normal((2, 3, 8, 5)).astype(np.float32)
     run_and_compare("MatMul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)], rtol=2e-3, atol=2e-4)
 
 
-def test_matmul_double_2d():
+def test_matmul_batched_broadcast_right_matrix():
+    a = np.random.default_rng(22).standard_normal((4, 6, 7)).astype(np.float32)
+    b = np.random.default_rng(23).standard_normal((7, 3)).astype(np.float32)
+    run_and_compare("MatMul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)], rtol=2e-3, atol=2e-4)
+
+
+def test_matmul_double_2d_unsupported():
     a = np.random.default_rng(8).standard_normal((4, 8)).astype(np.float64)
     b = np.random.default_rng(9).standard_normal((8, 5)).astype(np.float64)
-    run_and_compare(
-        "MatMul",
-        inputs={"A": a, "B": b},
-        outputs=[("Y", TensorProto.DOUBLE)],
-        rtol=1e-9,
-        atol=1e-10,
-    )
+    with pytest.raises(Exception, match="unsupported MatMul dtype"):
+        run_and_compare(
+            "MatMul",
+            inputs={"A": a, "B": b},
+            outputs=[("Y", TensorProto.DOUBLE)],
+            rtol=1e-9,
+            atol=1e-10,
+        )
 
 
 def test_matmul_float16_2d():
@@ -94,19 +109,22 @@ def test_matmul_bfloat16_2d():
     )
 
 
-def test_matmul_vector_matrix():
+def test_matmul_vector_matrix_unsupported():
     a = np.random.default_rng(14).standard_normal((8,)).astype(np.float32)
     b = np.random.default_rng(15).standard_normal((8, 5)).astype(np.float32)
-    run_and_compare("MatMul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+    with pytest.raises(Exception, match="vector MatMul"):
+        run_and_compare("MatMul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
 
 
-def test_matmul_matrix_vector():
+def test_matmul_matrix_vector_unsupported():
     a = np.random.default_rng(16).standard_normal((4, 8)).astype(np.float32)
     b = np.random.default_rng(17).standard_normal((8,)).astype(np.float32)
-    run_and_compare("MatMul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+    with pytest.raises(Exception, match="vector MatMul"):
+        run_and_compare("MatMul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
 
 
-def test_matmul_vector_vector_scalar():
+def test_matmul_vector_vector_scalar_unsupported():
     a = np.random.default_rng(18).standard_normal((8,)).astype(np.float32)
     b = np.random.default_rng(19).standard_normal((8,)).astype(np.float32)
-    run_and_compare("MatMul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+    with pytest.raises(Exception, match="vector MatMul"):
+        run_and_compare("MatMul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])

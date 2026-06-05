@@ -56,6 +56,28 @@ def test_batch_normalization_float_4d():
     )
 
 
+def test_batch_normalization_opset13_float_4d():
+    rng = np.random.default_rng(11)
+    x = rng.standard_normal((2, 3, 4, 5)).astype(np.float32)
+    scale = rng.uniform(0.5, 1.5, (3,)).astype(np.float32)
+    bias = rng.uniform(-0.2, 0.2, (3,)).astype(np.float32)
+    mean = rng.standard_normal((3,)).astype(np.float32)
+    var = rng.uniform(0.5, 2.0, (3,)).astype(np.float32)
+    run_and_compare(
+        "BatchNormalization",
+        inputs={
+            "X": x,
+            "scale": scale,
+            "B": bias,
+            "input_mean": mean,
+            "input_var": var,
+        },
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"epsilon": 1e-3},
+        opset=13,
+    )
+
+
 def test_batch_normalization_float_3d_custom_epsilon():
     rng = np.random.default_rng(2)
     x = rng.standard_normal((2, 4, 6)).astype(np.float32)

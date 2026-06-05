@@ -45,6 +45,15 @@ bool TryMudnnConcatFloat(Ort::KernelContext& ctx,
                          const std::vector<std::vector<int64_t>>& shapes,
                          const std::vector<int64_t>& out_shape, int64_t axis,
                          Ort::UnownedValue y) {
+  if (NumElements(out_shape) == 0) {
+    return false;
+  }
+  for (const auto& shape : shapes) {
+    if (NumElements(shape) == 0) {
+      return false;
+    }
+  }
+
   ::musa::dnn::Handle* handle = nullptr;
   OrtStatus* handle_status = EnsureMudnnHandle(&handle);
   if (handle_status != nullptr) {

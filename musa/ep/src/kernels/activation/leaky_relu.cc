@@ -74,7 +74,7 @@ OrtStatus* LeakyRelu::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    LeakyRelu, kOnnxDomain, 13, 15,
+    LeakyRelu, kOnnxDomain, 6, 15,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())),
     LeakyRelu)
 

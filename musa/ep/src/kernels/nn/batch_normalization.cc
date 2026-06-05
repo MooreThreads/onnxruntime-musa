@@ -1,16 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#include "nn/batch_norm_impl.h"
 #include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
-#include "nn/batch_norm_impl.h"
 
 namespace {
 bool TryMudnnBatchNormalization(Ort::KernelContext& ctx,
                                 const std::vector<int64_t>& shape,
                                 ONNXTensorElementDataType elem_type,
-                                float epsilon,
-                                Ort::UnownedValue y) {
+                                float epsilon, Ort::UnownedValue y) {
   if (!AllGpuInputs(ctx) || !IsGpuMemory(y.GetTensorMemoryInfo())) {
     return false;
   }
@@ -57,8 +56,8 @@ bool TryMudnnBatchNormalization(Ort::KernelContext& ctx,
   }
 
   return op.RunPure(*handle, output_tensor, input_tensor, mean_tensor,
-                    variance_tensor, scale_tensor, bias_tensor) ==
-         ::musa::dnn::Status::SUCCESS;
+                    variance_tensor, scale_tensor,
+                    bias_tensor) == ::musa::dnn::Status::SUCCESS;
 }
 
 class BatchNormalization : public OpKernelBase<BatchNormalization> {
@@ -77,13 +76,17 @@ class BatchNormalization : public OpKernelBase<BatchNormalization> {
 
 OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
   if (ctx.GetInputCount() != 5) {
+    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                      "BatchNormalization requires 5 inputs");
+  }
+  if (ctx.GetOutputCount() != 1) {
     return Ort::GetApi().CreateStatus(
-        ORT_INVALID_ARGUMENT, "BatchNormalization requires 5 inputs");
+        ORT_NOT_IMPLEMENTED,
+        "BatchNormalization only supports inference output Y");
   }
   if (training_mode_ != 0) {
     return Ort::GetApi().CreateStatus(
-        ORT_NOT_IMPLEMENTED,
-        "BatchNormalization only supports inference mode");
+        ORT_NOT_IMPLEMENTED, "BatchNormalization only supports inference mode");
   }
   auto input_info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   const auto elem_type = input_info.GetElementType();
@@ -96,7 +99,8 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
   std::vector<int64_t> shape = input_info.GetShape();
   if (shape.size() < 2) {
     return Ort::GetApi().CreateStatus(
-        ORT_INVALID_ARGUMENT, "BatchNormalization input rank must be at least 2");
+        ORT_INVALID_ARGUMENT,
+        "BatchNormalization input rank must be at least 2");
   }
   const int64_t channels = shape[1];
   int64_t spatial_size = 1;
@@ -106,8 +110,7 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
     auto info = ctx.GetInput(index).GetTensorTypeAndShapeInfo();
     if (info.GetElementType() != elem_type) {
       const std::string msg =
-          std::string("BatchNormalization ") + name +
-          " dtype must match input";
+          std::string("BatchNormalization ") + name + " dtype must match input";
       return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, msg.c_str());
     }
     auto param_shape = info.GetShape();
@@ -149,10 +152,21 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
   }
 
   return Ort::GetApi().CreateStatus(
-      ORT_NOT_IMPLEMENTED,
-      "BatchNormalization requires MUSA device tensors");
+      ORT_NOT_IMPLEMENTED, "BatchNormalization requires MUSA device tensors");
 }
 }  // namespace
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    BatchNormalization, kOnnxDomain, 9, 13,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())),
+    BatchNormalization)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(BatchNormalization, kOnnxDomain, 14, 14,
+                                  (Ort::KernelDefBuilder()
+                                       .AddTypeConstraint("T", HfdTensorTypes())
+                                       .AddTypeConstraint("U",
+                                                          HfdTensorTypes())),
+                                  BatchNormalization)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     BatchNormalization, kOnnxDomain, 15, 19,

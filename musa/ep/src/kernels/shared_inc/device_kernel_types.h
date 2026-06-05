@@ -81,6 +81,21 @@ struct MusaGlobalAveragePoolParams {
   int64_t spatial_elements;
 };
 
+struct MusaMaxPoolParams {
+  int32_t rank;
+  int32_t spatial_rank;
+  int32_t has_indices;
+  int64_t output_elements;
+  int64_t input_dims[kMusaMaxBroadcastRank];
+  int64_t input_strides[kMusaMaxBroadcastRank];
+  int64_t output_dims[kMusaMaxBroadcastRank];
+  int64_t output_strides[kMusaMaxBroadcastRank];
+  int64_t kernel_shape[kMusaMaxBroadcastRank];
+  int64_t pads_begin[kMusaMaxBroadcastRank];
+  int64_t strides[kMusaMaxBroadcastRank];
+  int64_t dilations[kMusaMaxBroadcastRank];
+};
+
 struct MusaRangeParams {
   int64_t count;
 };
@@ -167,6 +182,37 @@ struct MusaNonZeroParams {
   int64_t total_elements;
   int64_t nonzero_elements;
   int64_t input_strides[kMusaMaxBroadcastRank];
+};
+
+struct MusaGatherNDParams {
+  int32_t input_rank;
+  int32_t indices_rank;
+  int32_t batch_dims;
+  int32_t num_slice_dims;
+  int64_t output_elements;
+  int64_t slice_size;
+  int64_t num_slices_per_batch;
+  int64_t input_batch_stride;
+  int64_t input_dims[kMusaMaxBroadcastRank];
+  int64_t sizes_from_slice_dims[kMusaMaxBroadcastRank];
+};
+
+struct MusaReverseSequenceParams {
+  int64_t batch_size;
+  int64_t max_seq_len;
+  int64_t element_size;
+  int64_t total_elements;
+  int32_t time_major;
+};
+
+struct MusaTopKParams {
+  int64_t rows;
+  int64_t dim;
+  int64_t inner;
+  int64_t k;
+  int64_t output_elements;
+  int32_t largest;
+  int32_t sorted;
 };
 
 struct MusaConv2DParams {

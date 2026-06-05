@@ -47,6 +47,12 @@ bool Conv::TryMudnnConv(Ort::KernelContext& ctx,
                         const std::vector<int64_t>& w_shape,
                         const std::vector<int64_t>& y_shape,
                         Ort::UnownedValue output) const {
+  // Conv1D exported as NCHW Conv with H=1 and kH=1 is covered by the custom
+  // device fallback; avoid a muDNN path that is unstable for this layout.
+  if (x_shape[2] == 1 && w_shape[2] == 1) {
+    return false;
+  }
+
   Ort::ConstValue x = ctx.GetInput(0);
   Ort::ConstValue w = ctx.GetInput(1);
   if (!IsGpuMemory(x.GetTensorMemoryInfo()) ||

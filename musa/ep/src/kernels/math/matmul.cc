@@ -9,6 +9,8 @@
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "matmul_batched_kernels.h"
@@ -59,8 +61,7 @@ std::vector<int64_t> StridesLocal(const std::vector<int64_t>& shape) {
   std::vector<int64_t> strides(shape.size(), 1);
   for (int64_t i = static_cast<int64_t>(shape.size()) - 2; i >= 0; --i) {
     strides[static_cast<size_t>(i)] =
-        strides[static_cast<size_t>(i + 1)] *
-        shape[static_cast<size_t>(i + 1)];
+        strides[static_cast<size_t>(i + 1)] * shape[static_cast<size_t>(i + 1)];
   }
   return strides;
 }
@@ -132,8 +133,7 @@ void FillBroadcastBatchStrides(const std::vector<int64_t>& input_batch,
 }
 
 EffectiveMatMulOperand BuildOperand(const std::vector<int64_t>& shape,
-                                    bool trans,
-                                    bool trans_batch,
+                                    bool trans, bool trans_batch,
                                     bool is_left) {
   if (shape.empty()) {
     throw std::runtime_error("MatMul input rank must be >= 1");
@@ -151,8 +151,7 @@ EffectiveMatMulOperand BuildOperand(const std::vector<int64_t>& shape,
 
   if (trans_batch) {
     if (shape.size() <= 2) {
-      throw std::runtime_error(
-          "MatMul transBatch requires rank > 2 inputs");
+      throw std::runtime_error("MatMul transBatch requires rank > 2 inputs");
     }
     operand.batch_shape =
         std::vector<int64_t>(shape.begin() + 1, shape.end() - 1);
@@ -185,10 +184,8 @@ EffectiveMatMulOperand BuildOperand(const std::vector<int64_t>& shape,
 
 MatMulShapeInfo ResolveMatMulShape(const std::vector<int64_t>& a_shape,
                                    const std::vector<int64_t>& b_shape,
-                                   bool trans_a,
-                                   bool trans_b,
-                                   bool trans_batch_a,
-                                   bool trans_batch_b) {
+                                   bool trans_a, bool trans_b,
+                                   bool trans_batch_a, bool trans_batch_b) {
   if (a_shape.empty() || b_shape.empty()) {
     throw std::runtime_error("MatMul input rank must be >= 1");
   }
@@ -239,9 +236,19 @@ bool TryMudnnMatMul(void* y_data, const void* a_data, const void* b_data,
                     const std::vector<int64_t>& a_shape,
                     const std::vector<int64_t>& b_shape,
                     const std::vector<int64_t>& y_shape,
-                    ONNXTensorElementDataType elem_type,
-                    bool trans_a,
+                    ONNXTensorElementDataType elem_type, bool trans_a,
                     bool trans_b) {
+  std::string key = std::to_string(static_cast<int>(elem_type));
+  key += trans_a ? "|ta1" : "|ta0";
+  key += trans_b ? "|tb1" : "|tb0";
+  AppendShapeKey(key, a_shape);
+  AppendShapeKey(key, b_shape);
+  AppendShapeKey(key, y_shape);
+  static thread_local std::unordered_set<std::string> unsupported_keys;
+  if (unsupported_keys.count(key) != 0) {
+    return false;
+  }
+
   ::musa::dnn::Handle* handle = nullptr;
   OrtStatus* handle_status = EnsureMudnnHandle(&handle);
   if (handle_status != nullptr) {
@@ -268,19 +275,18 @@ bool TryMudnnMatMul(void* y_data, const void* a_data, const void* b_data,
   }
   if (matmul.SetAlpha(1.0) != ::musa::dnn::Status::SUCCESS) return false;
   if (matmul.SetBeta(0.0) != ::musa::dnn::Status::SUCCESS) return false;
-  return matmul.Run(*handle, y_tensor, a_tensor, b_tensor) ==
-         ::musa::dnn::Status::SUCCESS;
+  const bool ok = matmul.Run(*handle, y_tensor, a_tensor, b_tensor) ==
+                  ::musa::dnn::Status::SUCCESS;
+  if (!ok) unsupported_keys.insert(key);
+  return ok;
 }
 
 bool TryMublasMatMul(const void* a_data, const void* b_data, void* y_data,
                      const std::vector<int64_t>& a_shape,
                      const std::vector<int64_t>& b_shape,
                      const MatMulShapeInfo& shape_info,
-                     ONNXTensorElementDataType elem_type,
-                     bool trans_a,
-                     bool trans_b,
-                     bool trans_batch_a,
-                     bool trans_batch_b,
+                     ONNXTensorElementDataType elem_type, bool trans_a,
+                     bool trans_b, bool trans_batch_a, bool trans_batch_b,
                      float alpha) {
   if (shape_info.lhs_vector || shape_info.rhs_vector || trans_batch_a ||
       trans_batch_b || shape_info.lhs.rows <= 0 || shape_info.rhs.cols <= 0 ||
@@ -315,14 +321,12 @@ bool TryMublasMatMul(const void* a_data, const void* b_data, void* y_data,
   long long int stride_b = 0;
   const bool can_use_strided_batched =
       batch_total > 1 && batch_total <= INT32_MAX &&
-      TryGetLinearBatchStride(shape_info.lhs.batch_shape,
-                              shape_info.batch_shape,
-                              a_shape[a_shape.size() - 2] * a_shape.back(),
-                              stride_a) &&
-      TryGetLinearBatchStride(shape_info.rhs.batch_shape,
-                              shape_info.batch_shape,
-                              b_shape[b_shape.size() - 2] * b_shape.back(),
-                              stride_b);
+      TryGetLinearBatchStride(
+          shape_info.lhs.batch_shape, shape_info.batch_shape,
+          a_shape[a_shape.size() - 2] * a_shape.back(), stride_a) &&
+      TryGetLinearBatchStride(
+          shape_info.rhs.batch_shape, shape_info.batch_shape,
+          b_shape[b_shape.size() - 2] * b_shape.back(), stride_b);
   if (can_use_strided_batched) {
     const long long int stride_y = static_cast<long long int>(m64 * n64);
     mublasStatus gemm_status = MublasGemmStridedBatchedEx(
@@ -361,12 +365,10 @@ MusaBatchedMatMulParams MakeMatMulParams(const MatMulShapeInfo& shape_info,
 
   FillBroadcastBatchStrides(shape_info.lhs.batch_shape,
                             shape_info.lhs.batch_strides,
-                            shape_info.batch_shape,
-                            params.a_batch_strides);
+                            shape_info.batch_shape, params.a_batch_strides);
   FillBroadcastBatchStrides(shape_info.rhs.batch_shape,
                             shape_info.rhs.batch_strides,
-                            shape_info.batch_shape,
-                            params.b_batch_strides);
+                            shape_info.batch_shape, params.b_batch_strides);
 
   params.a_row_stride = shape_info.lhs.row_stride;
   params.a_col_stride = shape_info.lhs.col_stride;
@@ -420,8 +422,8 @@ OrtStatus* ComputeMusaMatMulDeviceImpl(
   }
 
   if (TryMublasMatMul(a_data, b_data, y_data, a_shape, b_shape, shape_info,
-                      elem_type, trans_a, trans_b, trans_batch_a,
-                      trans_batch_b, alpha)) {
+                      elem_type, trans_a, trans_b, trans_batch_a, trans_batch_b,
+                      alpha)) {
     return nullptr;
   }
 
@@ -459,21 +461,18 @@ OrtStatus* ComputeMublasBatchedMatMul(Ort::KernelContext& kernel_context,
                                       "MatMul requires MUSA output");
   }
 
-  return ComputeMusaMatMulDeviceImpl(
-      a.GetTensorRawData(), b.GetTensorRawData(), y.GetTensorMutableRawData(),
-      elem_type, a_shape, b_shape, shape_info.output_shape, false, false,
-      false, false, 1.0f);
+  return ComputeMusaMatMulDeviceImpl(a.GetTensorRawData(), b.GetTensorRawData(),
+                                     y.GetTensorMutableRawData(), elem_type,
+                                     a_shape, b_shape, shape_info.output_shape,
+                                     false, false, false, false, 1.0f);
 }
 }  // namespace
 
-OrtStatus* ComputeMusaMatMulOutputShape(
-    const std::vector<int64_t>& a_shape,
-    const std::vector<int64_t>& b_shape,
-    bool trans_a,
-    bool trans_b,
-    bool trans_batch_a,
-    bool trans_batch_b,
-    std::vector<int64_t>& y_shape) {
+OrtStatus* ComputeMusaMatMulOutputShape(const std::vector<int64_t>& a_shape,
+                                        const std::vector<int64_t>& b_shape,
+                                        bool trans_a, bool trans_b,
+                                        bool trans_batch_a, bool trans_batch_b,
+                                        std::vector<int64_t>& y_shape) {
   try {
     y_shape = ResolveMatMulShape(a_shape, b_shape, trans_a, trans_b,
                                  trans_batch_a, trans_batch_b)
@@ -484,17 +483,12 @@ OrtStatus* ComputeMusaMatMulOutputShape(
   }
 }
 
-OrtStatus* ComputeMusaMatMulDevice(const void* a_data, const void* b_data,
-                                   void* y_data,
-                                   ONNXTensorElementDataType elem_type,
-                                   const std::vector<int64_t>& a_shape,
-                                   const std::vector<int64_t>& b_shape,
-                                   const std::vector<int64_t>& y_shape,
-                                   bool trans_a,
-                                   bool trans_b,
-                                   bool trans_batch_a,
-                                   bool trans_batch_b,
-                                   float alpha) {
+OrtStatus* ComputeMusaMatMulDevice(
+    const void* a_data, const void* b_data, void* y_data,
+    ONNXTensorElementDataType elem_type, const std::vector<int64_t>& a_shape,
+    const std::vector<int64_t>& b_shape, const std::vector<int64_t>& y_shape,
+    bool trans_a, bool trans_b, bool trans_batch_a, bool trans_batch_b,
+    float alpha) {
   return ComputeMusaMatMulDeviceImpl(a_data, b_data, y_data, elem_type, a_shape,
                                      b_shape, y_shape, trans_a, trans_b,
                                      trans_batch_a, trans_batch_b, alpha);

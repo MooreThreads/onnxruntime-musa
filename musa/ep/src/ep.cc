@@ -19,6 +19,7 @@
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/fusion_node_compute.h"
 #include "fusion/linear_fusion.h"
+#include "fusion/shape_gather_fusion.h"
 #include "plugin_ep_utils.h"
 
 namespace {
@@ -375,6 +376,70 @@ std::vector<std::vector<Ort::ConstNode>> FindGemmActivationFusions(
   return fusions;
 }
 
+std::vector<std::vector<Ort::ConstNode>> FindShapeCastGatherFusions(
+    const std::vector<Ort::ConstNode>& all_nodes,
+    const std::unordered_set<std::string>& graph_output_names,
+    std::unordered_set<size_t>& fused_node_ids) {
+  std::vector<std::vector<Ort::ConstNode>> fusions;
+
+  for (Ort::ConstNode shape_node : all_nodes) {
+    if (!IsOnnxOp(shape_node, "Shape") ||
+        fused_node_ids.count(shape_node.GetId()) != 0) {
+      continue;
+    }
+
+    std::vector<Ort::ConstValueInfo> shape_outputs = shape_node.GetOutputs();
+    if (shape_outputs.size() != 1 ||
+        graph_output_names.count(shape_outputs[0].GetName()) != 0) {
+      continue;
+    }
+
+    std::vector<Ort::ValueInfoConsumerProducerInfo> shape_consumers =
+        shape_outputs[0].GetConsumers();
+    if (shape_consumers.size() != 1 || shape_consumers[0].index != 0) {
+      continue;
+    }
+
+    Ort::ConstNode cast_node = shape_consumers[0].node;
+    if (!IsOnnxOp(cast_node, "Cast") ||
+        fused_node_ids.count(cast_node.GetId()) != 0) {
+      continue;
+    }
+    auto cast_to = GetIntAttribute(cast_node, "to");
+    if (!cast_to.has_value() ||
+        (*cast_to != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 &&
+         *cast_to != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64)) {
+      continue;
+    }
+
+    std::vector<Ort::ConstValueInfo> cast_outputs = cast_node.GetOutputs();
+    if (cast_outputs.size() != 1 ||
+        graph_output_names.count(cast_outputs[0].GetName()) != 0) {
+      continue;
+    }
+
+    std::vector<Ort::ValueInfoConsumerProducerInfo> cast_consumers =
+        cast_outputs[0].GetConsumers();
+    if (cast_consumers.size() != 1 || cast_consumers[0].index != 0) {
+      continue;
+    }
+
+    Ort::ConstNode gather_node = cast_consumers[0].node;
+    if (!IsOnnxOp(gather_node, "Gather") ||
+        fused_node_ids.count(gather_node.GetId()) != 0 ||
+        GetIntAttribute(gather_node, "axis").value_or(0) != 0) {
+      continue;
+    }
+
+    fusions.push_back({shape_node, cast_node, gather_node});
+    fused_node_ids.insert(shape_node.GetId());
+    fused_node_ids.insert(cast_node.GetId());
+    fused_node_ids.insert(gather_node.GetId());
+  }
+
+  return fusions;
+}
+
 std::vector<std::vector<Ort::ConstNode>> FindFusedGemmFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
@@ -508,11 +573,24 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
           fusion_nodes.size(), &node_fusion_options));
     }
 
+    std::vector<std::vector<Ort::ConstNode>> shape_cast_gather_fusions =
+        FindShapeCastGatherFusions(all_nodes, graph_output_names,
+                                   fused_node_ids);
     std::vector<std::vector<Ort::ConstNode>> gemm_activation_fusions =
         FindGemmActivationFusions(all_nodes, graph_output_names,
                                   fused_node_ids);
     std::vector<std::vector<Ort::ConstNode>> fused_gemm_fusions =
         FindFusedGemmFusions(all_nodes, graph_output_names, fused_node_ids);
+
+    for (const auto& fusion_nodes : shape_cast_gather_fusions) {
+      OrtNodeFusionOptions node_fusion_options = {};
+      node_fusion_options.ort_version_supported = ORT_API_VERSION;
+      node_fusion_options.drop_constant_initializers = true;
+      RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_AddNodesToFuse(
+          graph_support_info,
+          reinterpret_cast<const OrtNode* const*>(fusion_nodes.data()),
+          fusion_nodes.size(), &node_fusion_options));
+    }
 
     for (const auto& fusion_nodes : gemm_activation_fusions) {
       OrtNodeFusionOptions node_fusion_options = {};

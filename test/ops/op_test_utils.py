@@ -329,6 +329,47 @@ def run_model_and_compare(
     return musa_outputs
 
 
+def run_model_and_compare_with_cpu_fallback(
+    model_bytes: bytes,
+    feeds: Mapping[str, np.ndarray],
+    *,
+    rtol: float = 1e-3,
+    atol: float = 1e-4,
+) -> list[np.ndarray]:
+    """Run a full ONNX model on CPU and MUSA with ORT CPU fallback enabled."""
+    cpu_outputs = run(model_bytes, feeds, use_musa=False)
+
+    devices = musa_devices()
+    if not devices:
+        raise RuntimeError(
+            "No MUSA device available; refusing to build a CPU-only session "
+            "for the MUSA run (would compare CPU against CPU)."
+        )
+    so = ort.SessionOptions()
+    so.add_provider_for_devices(devices, {})
+    session = ort.InferenceSession(model_bytes, sess_options=so)
+    musa_outputs = session.run(None, dict(feeds))
+
+    assert len(cpu_outputs) == len(
+        musa_outputs
+    ), f"model output count mismatch cpu={len(cpu_outputs)} musa={len(musa_outputs)}"
+    for i, (cpu_output, musa_output) in enumerate(zip(cpu_outputs, musa_outputs)):
+        assert (
+            cpu_output.shape == musa_output.shape
+        ), f"output[{i}] shape mismatch cpu={cpu_output.shape} musa={musa_output.shape}"
+        assert (
+            cpu_output.dtype == musa_output.dtype
+        ), f"output[{i}] dtype mismatch cpu={cpu_output.dtype} musa={musa_output.dtype}"
+        np.testing.assert_allclose(
+            musa_output,
+            cpu_output,
+            rtol=rtol,
+            atol=atol,
+            err_msg=f"output[{i}] CPU vs MUSA mismatch",
+        )
+    return musa_outputs
+
+
 __all__ = [
     "TensorProto",
     "bfloat16_bits_to_float32",
@@ -342,4 +383,5 @@ __all__ = [
     "run_and_compare",
     "run_with_iobinding",
     "run_model_and_compare",
+    "run_model_and_compare_with_cpu_fallback",
 ]

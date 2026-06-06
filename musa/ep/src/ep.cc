@@ -9,8 +9,10 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <queue>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -19,7 +21,6 @@
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/fusion_node_compute.h"
 #include "fusion/linear_fusion.h"
-#include "fusion/shape_gather_fusion.h"
 #include "plugin_ep_utils.h"
 
 namespace {
@@ -87,6 +88,206 @@ bool NormalizeAxis(int64_t axis, size_t rank, int64_t& normalized_axis) {
 
   normalized_axis = axis < 0 ? axis + signed_rank : axis;
   return true;
+}
+
+constexpr int64_t kSmallInitializerThreshold = 100;
+
+bool MemTypeOnCpuExplicitly(OrtMemType mem_type) {
+  return mem_type == OrtMemTypeCPUInput || mem_type == OrtMemTypeCPUOutput;
+}
+
+std::vector<Ort::ConstNode> GetOutputNodes(
+    const std::vector<Ort::ConstValueInfo>& node_outputs) {
+  std::vector<Ort::ConstNode> output_nodes;
+  for (Ort::ConstValueInfo output : node_outputs) {
+    if (output == nullptr) {
+      continue;
+    }
+    for (const auto& consumer : output.GetConsumers()) {
+      output_nodes.push_back(consumer.node);
+    }
+  }
+  return output_nodes;
+}
+
+bool IsCpuPreferredAllowedType(Ort::ConstValueInfo input) {
+  Ort::ConstTypeInfo type_info = input.TypeInfo();
+  if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+
+  auto type_shape_info = type_info.GetTensorTypeAndShapeInfo();
+  ONNXTensorElementDataType elem_type = type_shape_info.GetElementType();
+  return elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
+         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 &&
+         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E4M3FN &&
+         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E4M3FNUZ &&
+         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E5M2 &&
+         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E5M2FNUZ &&
+         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT4E2M1;
+}
+
+bool IsSmallInitializer(Ort::ConstValueInfo input) {
+  if (!input.IsConstantInitializer()) {
+    return false;
+  }
+  Ort::ConstTypeInfo type_info = input.TypeInfo();
+  if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+  return type_info.GetTensorTypeAndShapeInfo().GetElementCount() <=
+         kSmallInitializerThreshold;
+}
+
+OrtStatus* GetCpuPreferredNodes(
+    const OrtGraph& ort_graph, OrtEpGraphSupportInfo& graph_support_info,
+    const OrtEpApi& ep_api, std::span<const OrtNode* const> tentative_nodes,
+    std::unordered_set<const OrtNode*>& cpu_preferred_nodes) noexcept {
+  try {
+    const OrtApi& ort_api = Ort::GetApi();
+    Ort::ConstGraph graph{&ort_graph};
+    std::vector<Ort::ConstNode> ordered_nodes = graph.GetNodes();
+    if (ordered_nodes.empty()) {
+      return nullptr;
+    }
+
+    std::unordered_map<size_t, Ort::ConstNode> node_id_to_node;
+    std::unordered_map<size_t, size_t> node_id_to_order_map;
+    for (size_t i = 0; i < ordered_nodes.size(); ++i) {
+      size_t node_id = ordered_nodes[i].GetId();
+      node_id_to_node.emplace(node_id, ordered_nodes[i]);
+      node_id_to_order_map.emplace(node_id, i);
+    }
+
+    auto greater_order_comp = [&](size_t lhs, size_t rhs) {
+      return node_id_to_order_map[lhs] > node_id_to_order_map[rhs];
+    };
+    std::priority_queue<size_t, std::vector<size_t>,
+                        decltype(greater_order_comp)>
+        candidates(greater_order_comp);
+    std::unordered_set<const OrtValueInfo*> cpu_output_args;
+    std::unordered_set<size_t> provider_nodes;
+    provider_nodes.reserve(tentative_nodes.size());
+    std::unordered_map<size_t, Ort::ConstKernelDef> node_to_kernel;
+    node_to_kernel.reserve(tentative_nodes.size());
+
+    for (const OrtNode* ort_node : tentative_nodes) {
+      Ort::ConstNode node{ort_node};
+      size_t node_id = node.GetId();
+      provider_nodes.insert(node_id);
+
+      const OrtKernelDef* ort_kernel_def = nullptr;
+      RETURN_IF_ERROR(ep_api.EpGraphSupportInfo_LookUpKernel(
+          &graph_support_info, node, &ort_kernel_def));
+      RETURN_IF(ort_kernel_def == nullptr, ort_api,
+                "Missing kernel definition for tentative MUSA node");
+
+      Ort::ConstKernelDef kernel_def{ort_kernel_def};
+      node_to_kernel.emplace(node_id, kernel_def);
+
+      std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+      for (size_t out_index = 0; out_index < outputs.size(); ++out_index) {
+        Ort::ConstValueInfo output = outputs[out_index];
+        if (output == nullptr) {
+          continue;
+        }
+        if (MemTypeOnCpuExplicitly(kernel_def.GetOutputMemType(out_index))) {
+          cpu_output_args.insert(output);
+          for (const auto& consumer : output.GetConsumers()) {
+            candidates.push(consumer.node.GetId());
+          }
+        }
+      }
+    }
+
+    std::unordered_set<size_t> visited;
+    visited.reserve(candidates.size());
+    std::unordered_set<const OrtNode*> cpu_nodes;
+    cpu_nodes.reserve(candidates.size());
+
+    while (!candidates.empty()) {
+      size_t cur = candidates.top();
+      candidates.pop();
+      if (!visited.insert(cur).second) {
+        continue;
+      }
+
+      auto node_iter = node_id_to_node.find(cur);
+      RETURN_IF(node_iter == node_id_to_node.end(), ort_api,
+                "Unable to get node while finding CPU-preferred subgraph");
+      Ort::ConstNode node = node_iter->second;
+
+      if (provider_nodes.find(cur) == provider_nodes.end()) {
+        std::string ep_name = node.GetEpName();
+        if (ep_name.empty() || ep_name == "CPUExecutionProvider") {
+          std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+          for (Ort::ConstValueInfo output : outputs) {
+            if (output != nullptr) {
+              cpu_output_args.insert(output);
+            }
+          }
+          for (Ort::ConstNode downstream_node : GetOutputNodes(outputs)) {
+            candidates.push(downstream_node.GetId());
+          }
+        }
+        continue;
+      }
+
+      auto kernel_iter = node_to_kernel.find(cur);
+      RETURN_IF(kernel_iter == node_to_kernel.end(), ort_api,
+                "Unable to get kernel definition for CPU-preferred node");
+
+      bool place_in_cpu = true;
+      std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+      for (size_t i = 0; i < inputs.size(); ++i) {
+        Ort::ConstValueInfo input = inputs[i];
+        if (input == nullptr) {
+          continue;
+        }
+        if (!IsCpuPreferredAllowedType(input)) {
+          place_in_cpu = false;
+          break;
+        }
+        if (IsSmallInitializer(input) || input.IsRequiredGraphInput() ||
+            input.IsOptionalGraphInput()) {
+          continue;
+        }
+        if (cpu_output_args.find(input) == cpu_output_args.end()) {
+          place_in_cpu = false;
+          break;
+        }
+        if (MemTypeOnCpuExplicitly(kernel_iter->second.GetInputMemType(i))) {
+          place_in_cpu = false;
+          break;
+        }
+      }
+
+      if (place_in_cpu) {
+        cpu_nodes.insert(node);
+        std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+        for (Ort::ConstValueInfo output : outputs) {
+          if (output != nullptr) {
+            cpu_output_args.insert(output);
+          }
+        }
+        for (Ort::ConstNode downstream_node : GetOutputNodes(outputs)) {
+          candidates.push(downstream_node.GetId());
+        }
+      }
+    }
+
+    cpu_preferred_nodes = std::move(cpu_nodes);
+    return nullptr;
+  } catch (const Ort::Exception& ex) {
+    Ort::Status status(ex);
+    return status.release();
+  } catch (const std::exception& ex) {
+    Ort::Status status(ex.what(), ORT_EP_FAIL);
+    return status.release();
+  } catch (...) {
+    Ort::Status status("Unknown exception", ORT_EP_FAIL);
+    return status.release();
+  }
 }
 
 bool CanFuseConcatMatMul(Ort::ConstNode concat_node, Ort::ConstNode matmul_node,
@@ -376,70 +577,6 @@ std::vector<std::vector<Ort::ConstNode>> FindGemmActivationFusions(
   return fusions;
 }
 
-std::vector<std::vector<Ort::ConstNode>> FindShapeCastGatherFusions(
-    const std::vector<Ort::ConstNode>& all_nodes,
-    const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
-  std::vector<std::vector<Ort::ConstNode>> fusions;
-
-  for (Ort::ConstNode shape_node : all_nodes) {
-    if (!IsOnnxOp(shape_node, "Shape") ||
-        fused_node_ids.count(shape_node.GetId()) != 0) {
-      continue;
-    }
-
-    std::vector<Ort::ConstValueInfo> shape_outputs = shape_node.GetOutputs();
-    if (shape_outputs.size() != 1 ||
-        graph_output_names.count(shape_outputs[0].GetName()) != 0) {
-      continue;
-    }
-
-    std::vector<Ort::ValueInfoConsumerProducerInfo> shape_consumers =
-        shape_outputs[0].GetConsumers();
-    if (shape_consumers.size() != 1 || shape_consumers[0].index != 0) {
-      continue;
-    }
-
-    Ort::ConstNode cast_node = shape_consumers[0].node;
-    if (!IsOnnxOp(cast_node, "Cast") ||
-        fused_node_ids.count(cast_node.GetId()) != 0) {
-      continue;
-    }
-    auto cast_to = GetIntAttribute(cast_node, "to");
-    if (!cast_to.has_value() ||
-        (*cast_to != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 &&
-         *cast_to != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64)) {
-      continue;
-    }
-
-    std::vector<Ort::ConstValueInfo> cast_outputs = cast_node.GetOutputs();
-    if (cast_outputs.size() != 1 ||
-        graph_output_names.count(cast_outputs[0].GetName()) != 0) {
-      continue;
-    }
-
-    std::vector<Ort::ValueInfoConsumerProducerInfo> cast_consumers =
-        cast_outputs[0].GetConsumers();
-    if (cast_consumers.size() != 1 || cast_consumers[0].index != 0) {
-      continue;
-    }
-
-    Ort::ConstNode gather_node = cast_consumers[0].node;
-    if (!IsOnnxOp(gather_node, "Gather") ||
-        fused_node_ids.count(gather_node.GetId()) != 0 ||
-        GetIntAttribute(gather_node, "axis").value_or(0) != 0) {
-      continue;
-    }
-
-    fusions.push_back({shape_node, cast_node, gather_node});
-    fused_node_ids.insert(shape_node.GetId());
-    fused_node_ids.insert(cast_node.GetId());
-    fused_node_ids.insert(gather_node.GetId());
-  }
-
-  return fusions;
-}
-
 std::vector<std::vector<Ort::ConstNode>> FindFusedGemmFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
@@ -572,25 +709,11 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
           reinterpret_cast<const OrtNode* const*>(fusion_nodes.data()),
           fusion_nodes.size(), &node_fusion_options));
     }
-
-    std::vector<std::vector<Ort::ConstNode>> shape_cast_gather_fusions =
-        FindShapeCastGatherFusions(all_nodes, graph_output_names,
-                                   fused_node_ids);
     std::vector<std::vector<Ort::ConstNode>> gemm_activation_fusions =
         FindGemmActivationFusions(all_nodes, graph_output_names,
                                   fused_node_ids);
     std::vector<std::vector<Ort::ConstNode>> fused_gemm_fusions =
         FindFusedGemmFusions(all_nodes, graph_output_names, fused_node_ids);
-
-    for (const auto& fusion_nodes : shape_cast_gather_fusions) {
-      OrtNodeFusionOptions node_fusion_options = {};
-      node_fusion_options.ort_version_supported = ORT_API_VERSION;
-      node_fusion_options.drop_constant_initializers = true;
-      RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_AddNodesToFuse(
-          graph_support_info,
-          reinterpret_cast<const OrtNode* const*>(fusion_nodes.data()),
-          fusion_nodes.size(), &node_fusion_options));
-    }
 
     for (const auto& fusion_nodes : gemm_activation_fusions) {
       OrtNodeFusionOptions node_fusion_options = {};
@@ -612,17 +735,45 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
           fusion_nodes.size(), &node_fusion_options));
     }
 
-    // Mark non-fused nodes as supported if we have a registered kernel.
+    std::vector<Ort::ConstNode> candidate_nodes;
+    std::vector<const OrtNode*> tentative_nodes;
+
+    // Mark non-fused nodes as supported if we have a registered kernel. Defer
+    // adding them until after the CUDA-style CPU-preferred shape subgraph pass.
     for (const auto& node : all_nodes) {
       if (fused_node_ids.count(node.GetId()) != 0) {
+        continue;
+      }
+
+      std::string ep_name = node.GetEpName();
+      if (!ep_name.empty()) {
+        if (ep_name == ep->name_) {
+          candidate_nodes.push_back(node);
+          tentative_nodes.push_back(node);
+        }
         continue;
       }
 
       const OrtKernelDef* kernel_def = nullptr;
       RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_LookUpKernel(
           graph_support_info, node, &kernel_def));
-
       if (kernel_def != nullptr) {
+        candidate_nodes.push_back(node);
+        tentative_nodes.push_back(node);
+      }
+    }
+
+    std::unordered_set<const OrtNode*> cpu_preferred_nodes;
+    if (!tentative_nodes.empty()) {
+      RETURN_IF_ERROR(GetCpuPreferredNodes(
+          *ort_graph, *graph_support_info, ep->ep_api_,
+          std::span<const OrtNode* const>(tentative_nodes.data(),
+                                          tentative_nodes.size()),
+          cpu_preferred_nodes));
+    }
+
+    for (const auto& node : candidate_nodes) {
+      if (cpu_preferred_nodes.count(node) == 0) {
         RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_AddSingleNode(
             graph_support_info, node));
       }

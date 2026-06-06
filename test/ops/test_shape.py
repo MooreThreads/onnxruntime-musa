@@ -14,6 +14,7 @@ from op_test_utils import (
     float32_to_bfloat16_bits,
     run_and_compare,
     run_model_and_compare,
+    run_model_and_compare_with_cpu_fallback,
     run_with_iobinding,
 )
 
@@ -95,7 +96,7 @@ def test_shape_bfloat16():
     np.testing.assert_array_equal(actual, np.array([2, 3, 4], dtype=np.int64))
 
 
-def test_shape_device_output_feeds_cast_gather_indices():
+def test_shape_cpu_metadata_feeds_cast_gather_indices():
     x = np.zeros((2, 3, 4), dtype=np.float32)
     data = np.arange(10, dtype=np.float32)
     nodes = [
@@ -109,4 +110,4 @@ def test_shape_device_output_feeds_cast_gather_indices():
         outputs=[("Y", TensorProto.FLOAT)],
         name="shape_cast_gather_indices",
     )
-    run_model_and_compare(model, {"X": x, "data": data})
+    run_model_and_compare_with_cpu_fallback(model, {"X": x, "data": data})

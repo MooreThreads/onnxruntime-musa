@@ -13,7 +13,7 @@ bool IsGpu(const OrtEpApi& ep_api, const OrtMemoryDevice* device) {
 OrtStatus* CopyImpl(const OrtApi& api, const OrtEpApi& ep_api,
                     const OrtMemoryDevice* src_device,
                     const OrtMemoryDevice* dst_device, const void* src_data,
-                    void* dst_data, size_t bytes) {
+                    void* dst_data, size_t bytes, musaStream_t stream) {
   if (bytes == 0 || src_data == dst_data) {
     return nullptr;
   }
@@ -30,7 +30,12 @@ OrtStatus* CopyImpl(const OrtApi& api, const OrtEpApi& ep_api,
     kind = musaMemcpyHostToDevice;
   }
 
-  musaError_t status = musaMemcpy(dst_data, src_data, bytes, kind);
+  musaError_t status = musaSuccess;
+  if (stream != nullptr && kind != musaMemcpyHostToHost) {
+    status = musaMemcpyAsync(dst_data, src_data, bytes, kind, stream);
+  } else {
+    status = musaMemcpy(dst_data, src_data, bytes, kind);
+  }
   if (status != musaSuccess) {
     return api.CreateStatus(ORT_EP_FAIL, musaGetErrorString(status));
   }
@@ -57,7 +62,7 @@ bool ORT_API_CALL MusaDataTransfer::CanCopyImpl(
 
 OrtStatus* ORT_API_CALL MusaDataTransfer::CopyTensorsImpl(
     OrtDataTransferImpl* this_ptr, const OrtValue** src_tensors_ptr,
-    OrtValue** dst_tensors_ptr, OrtSyncStream** /*streams_ptr*/,
+    OrtValue** dst_tensors_ptr, OrtSyncStream** streams_ptr,
     size_t num_tensors) noexcept {
   auto& impl = *static_cast<MusaDataTransfer*>(this_ptr);
 
@@ -79,8 +84,13 @@ OrtStatus* ORT_API_CALL MusaDataTransfer::CopyTensorsImpl(
     RETURN_IF_ERROR(
         impl.ort_api_.GetTensorMutableData(dst_tensors[i], &dst_data));
     RETURN_IF_ERROR(impl.ort_api_.GetTensorSizeInBytes(src_tensors[i], &bytes));
+    musaStream_t stream = nullptr;
+    if (streams_ptr != nullptr && streams_ptr[i] != nullptr) {
+      stream = static_cast<musaStream_t>(
+          impl.ort_api_.SyncStream_GetHandle(streams_ptr[i]));
+    }
     RETURN_IF_ERROR(CopyImpl(impl.ort_api_, impl.ep_api_, src_device,
-                             dst_device, src_data, dst_data, bytes));
+                             dst_device, src_data, dst_data, bytes, stream));
   }
 
   return nullptr;

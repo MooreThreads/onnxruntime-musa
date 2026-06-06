@@ -57,8 +57,8 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
     out_shape[static_cast<size_t>(axis)] = splits[out_idx];
     Ort::UnownedValue y = ctx.GetOutput(out_idx, out_shape);
     if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
-      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                        "Split requires MUSA input and outputs");
+      return Ort::GetApi().CreateStatus(
+          ORT_NOT_IMPLEMENTED, "Split requires MUSA input and outputs");
     }
     output_data[out_idx] = y.GetTensorMutableRawData();
     axis_start += splits[out_idx];
@@ -75,8 +75,9 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Split, kOnnxDomain, 13, 19,
-                                  (Ort::KernelDefBuilder()
-                                       .AddTypeConstraint("T",
-                                                          AllFixedSizeTensorTypes())),
-                                  Split)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Split, kOnnxDomain, 13, 19,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypes())
+         .SetInputMemType(1, OrtMemTypeCPUInput)),
+    Split)

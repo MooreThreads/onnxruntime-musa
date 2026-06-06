@@ -10,6 +10,7 @@
 #include "ep.h"
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/linear_fusion.h"
+#include "fusion/shape_reshape_fusion.h"
 
 /*
  * Fusion node runtime bridge
@@ -102,7 +103,10 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       }
 
       std::string fused_node_name = fused_node.GetName();
-      if (IsLinearFusionGraph(graph)) {
+      if (IsShapeReshapeFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateShapeReshapeFusion(graph, fused_node);
+      } else if (IsLinearFusionGraph(graph)) {
         ep->GetFusionComputes()[fused_node_name] =
             CreateLinearFusion(graph, fused_node);
       } else {

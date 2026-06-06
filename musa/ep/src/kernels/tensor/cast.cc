@@ -7,8 +7,7 @@
 namespace {
 constexpr int64_t kMaxCpuMetadataCastElements = kMusaMaxBroadcastRank;
 
-OrtStatus* CastCpuIntMetadata(Ort::ConstValue input,
-                              Ort::UnownedValue output,
+OrtStatus* CastCpuIntMetadata(Ort::ConstValue input, Ort::UnownedValue output,
                               ONNXTensorElementDataType src_type,
                               ONNXTensorElementDataType dst_type,
                               int64_t count) {
@@ -37,6 +36,25 @@ OrtStatus* CastCpuIntMetadata(Ort::ConstValue input,
     std::vector<int32_t> src = ReadTyped<int32_t>(input);
     std::vector<int64_t> dst(src.begin(), src.end());
     return WriteTyped<int64_t>(output, dst);
+  }
+  if (dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    std::vector<float> dst;
+    if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+      std::vector<int64_t> src = ReadTyped<int64_t>(input);
+      dst.reserve(src.size());
+      for (int64_t value : src) {
+        dst.push_back(static_cast<float>(value));
+      }
+      return WriteTyped<float>(output, dst);
+    }
+    if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+      std::vector<int32_t> src = ReadTyped<int32_t>(input);
+      dst.reserve(src.size());
+      for (int32_t value : src) {
+        dst.push_back(static_cast<float>(value));
+      }
+      return WriteTyped<float>(output, dst);
+    }
   }
   return Ort::GetApi().CreateStatus(
       ORT_NOT_IMPLEMENTED,
@@ -72,9 +90,9 @@ OrtStatus* Cast::Compute(Ort::KernelContext& ctx) const {
   if (!IsGpuMemory(input0.GetTensorMemoryInfo()) ||
       !IsGpuMemory(y.GetTensorMemoryInfo())) {
     if (!IsGpuMemory(input0.GetTensorMemoryInfo())) {
-      return CastCpuIntMetadata(
-          input0, y, elem_type, static_cast<ONNXTensorElementDataType>(to_),
-          NumElements(shape0));
+      return CastCpuIntMetadata(input0, y, elem_type,
+                                static_cast<ONNXTensorElementDataType>(to_),
+                                NumElements(shape0));
     }
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED,

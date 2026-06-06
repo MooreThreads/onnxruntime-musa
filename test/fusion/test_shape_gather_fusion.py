@@ -1,6 +1,6 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
-"""End-to-end tests for shape metadata without Shape-Gather fusion copy nodes."""
+"""Guardrails for shape-metadata matching not catching large data tensors."""
 
 import json
 import os
@@ -47,34 +47,6 @@ def _ops_by_provider(events):
     return ops
 
 
-def _build_shape_metadata_reshape_model() -> bytes:
-    gather_index = numpy_helper.from_array(
-        np.array([0, 1], dtype=np.int64), name="gather_index"
-    )
-    suffix = numpy_helper.from_array(np.array([4], dtype=np.int32), name="suffix")
-    nodes = [
-        helper.make_node("Shape", ["X"], ["shape_i64"]),
-        helper.make_node("Cast", ["shape_i64"], ["shape_i32"], to=TensorProto.INT32),
-        helper.make_node("Gather", ["shape_i32", "gather_index"], ["prefix"], axis=0),
-        helper.make_node("Concat", ["prefix", "suffix"], ["target_i32"], axis=0),
-        helper.make_node("Cast", ["target_i32"], ["target_i64"], to=TensorProto.INT64),
-        helper.make_node("Reshape", ["Data", "target_i64"], ["Y"]),
-    ]
-    graph = helper.make_graph(
-        nodes,
-        "shape_metadata_reshape",
-        [
-            helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", "M", "K"]),
-            helper.make_tensor_value_info("Data", TensorProto.FLOAT, ["N", "MK"]),
-        ],
-        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
-        initializer=[gather_index, suffix],
-    )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
-    model.ir_version = min(model.ir_version, 10)
-    return model.SerializeToString()
-
-
 def _build_large_cast_model() -> bytes:
     node = helper.make_node("Cast", ["X"], ["Y"], to=TensorProto.FLOAT)
     graph = helper.make_graph(
@@ -88,31 +60,81 @@ def _build_large_cast_model() -> bytes:
     return model.SerializeToString()
 
 
-def test_shape_metadata_reshape_has_no_memcpy_to_host(tmp_path):
-    model = _build_shape_metadata_reshape_model()
-    x = np.zeros((2, 3, 4), dtype=np.float32)
-    data = np.arange(24, dtype=np.float32).reshape(2, 12)
-
-    cpu_session = ort.InferenceSession(model, providers=["CPUExecutionProvider"])
-    (expected,) = cpu_session.run(None, {"X": x, "Data": data})
-
-    (actual,), events = _profile_musa_session(
-        model, {"X": x, "Data": data}, tmp_path, "shape_metadata_reshape"
+def _build_constant_of_shape_gather_model() -> bytes:
+    embedding = numpy_helper.from_array(
+        np.arange(8, dtype=np.float32).reshape(2, 4), name="embedding"
     )
-    np.testing.assert_array_equal(actual, expected)
+    zero = numpy_helper.from_array(np.array([0], dtype=np.int64), name="zero")
+    nodes = [
+        helper.make_node("Shape", ["X"], ["shape"]),
+        helper.make_node("ConstantOfShape", ["shape"], ["indices"], value=zero),
+        helper.make_node("Gather", ["embedding", "indices"], ["Y"], axis=0),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "constant_of_shape_gather",
+        [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", "M"])],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
+        initializer=[embedding],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
 
-    ops_by_provider = _ops_by_provider(events)
-    musa_ops = ops_by_provider.get("MUSAExecutionProvider", set())
-    cpu_ops = ops_by_provider.get("CPUExecutionProvider", set())
-    all_ops = set().union(*ops_by_provider.values())
 
-    assert {"Shape", "Reshape"} <= musa_ops
-    assert {"Cast", "Gather", "Concat"} <= cpu_ops
-    assert "Gather" not in musa_ops
-    assert "Concat" not in musa_ops
-    assert "MemcpyToHost" not in all_ops
-    assert "MemcpyFromHost" not in all_ops
-    assert not any(str(op).startswith("MUSAExecutionProvider_") for op in all_ops)
+def _build_shape_gather_expand_model() -> bytes:
+    scalar_index = numpy_helper.from_array(
+        np.array(0, dtype=np.int64), name="scalar_index"
+    )
+    vector_index = numpy_helper.from_array(
+        np.array([0], dtype=np.int64), name="vector_index"
+    )
+    nodes = [
+        helper.make_node("Shape", ["X"], ["shape"]),
+        helper.make_node("Gather", ["shape", "scalar_index"], ["batch_scalar"], axis=0),
+        helper.make_node("Gather", ["shape", "vector_index"], ["target_shape"], axis=0),
+        helper.make_node("Expand", ["batch_scalar", "target_shape"], ["Y"]),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "shape_gather_expand",
+        [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", "M"])],
+        [helper.make_tensor_value_info("Y", TensorProto.INT64, None)],
+        initializer=[scalar_index, vector_index],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
+
+
+def _build_shape_mul_expand_shape_model() -> bytes:
+    starts = numpy_helper.from_array(np.array([0], dtype=np.int64), name="starts")
+    ends = numpy_helper.from_array(np.array([1], dtype=np.int64), name="ends")
+    axes = numpy_helper.from_array(np.array([0], dtype=np.int64), name="axes")
+    two = numpy_helper.from_array(np.array(2, dtype=np.int32), name="two")
+    nodes = [
+        helper.make_node("Shape", ["X"], ["shape_i64"]),
+        helper.make_node("Cast", ["shape_i64"], ["shape_i32"], to=TensorProto.INT32),
+        helper.make_node("Slice", ["shape_i32", "starts", "ends", "axes"], ["batch_vec"]),
+        helper.make_node("Squeeze", ["batch_vec", "axes"], ["batch_scalar"]),
+        helper.make_node("Mul", ["batch_scalar", "two"], ["double_batch"]),
+        helper.make_node("Unsqueeze", ["double_batch", "axes"], ["target_i32"]),
+        helper.make_node("Cast", ["target_i32"], ["target_i64"], to=TensorProto.INT64),
+        helper.make_node("Expand", ["Data", "target_i64"], ["Y"]),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "shape_mul_expand_shape",
+        [
+            helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", "M"]),
+            helper.make_tensor_value_info("Data", TensorProto.FLOAT, []),
+        ],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
+        initializer=[starts, ends, axes, two],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
 
 
 def test_large_cast_stays_on_musa(tmp_path):
@@ -128,3 +150,66 @@ def test_large_cast_stays_on_musa(tmp_path):
     ops_by_provider = _ops_by_provider(events)
     assert "Cast" in ops_by_provider.get("MUSAExecutionProvider", set())
     assert "Cast" not in ops_by_provider.get("CPUExecutionProvider", set())
+
+
+def test_constant_of_shape_gather_indices_stay_on_musa(tmp_path):
+    model = _build_constant_of_shape_gather_model()
+    x = np.zeros((2, 3), dtype=np.float32)
+
+    cpu_session = ort.InferenceSession(model, providers=["CPUExecutionProvider"])
+    (expected,) = cpu_session.run(None, {"X": x})
+
+    (actual,), events = _profile_musa_session(
+        model, {"X": x}, tmp_path, "constant_of_shape_gather"
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+    ops_by_provider = _ops_by_provider(events)
+    musa_ops = ops_by_provider.get("MUSAExecutionProvider", set())
+    cpu_ops = ops_by_provider.get("CPUExecutionProvider", set())
+    assert "ConstantOfShape" in musa_ops
+    assert "Gather" in musa_ops
+    assert "ConstantOfShape" not in cpu_ops
+
+
+def test_shape_gather_feeding_expand_stays_on_musa(tmp_path):
+    model = _build_shape_gather_expand_model()
+    x = np.zeros((3, 4), dtype=np.float32)
+
+    cpu_session = ort.InferenceSession(model, providers=["CPUExecutionProvider"])
+    (expected,) = cpu_session.run(None, {"X": x})
+
+    (actual,), events = _profile_musa_session(
+        model, {"X": x}, tmp_path, "shape_gather_expand"
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+    ops_by_provider = _ops_by_provider(events)
+    musa_ops = ops_by_provider.get("MUSAExecutionProvider", set())
+    cpu_ops = ops_by_provider.get("CPUExecutionProvider", set())
+    assert "Gather" in musa_ops
+    assert "Expand" in musa_ops
+    assert "Expand" not in cpu_ops
+
+
+def test_int32_shape_mul_feeding_expand_shape_stays_on_cpu_metadata(tmp_path):
+    model = _build_shape_mul_expand_shape_model()
+    feeds = {
+        "X": np.zeros((3, 4), dtype=np.float32),
+        "Data": np.array(1.5, dtype=np.float32),
+    }
+
+    cpu_session = ort.InferenceSession(model, providers=["CPUExecutionProvider"])
+    (expected,) = cpu_session.run(None, feeds)
+
+    (actual,), events = _profile_musa_session(
+        model, feeds, tmp_path, "shape_mul_expand_shape"
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+    ops_by_provider = _ops_by_provider(events)
+    musa_ops = ops_by_provider.get("MUSAExecutionProvider", set())
+    cpu_ops = ops_by_provider.get("CPUExecutionProvider", set())
+    assert "Mul" in cpu_ops
+    assert "Mul" not in musa_ops
+    assert "Expand" in musa_ops

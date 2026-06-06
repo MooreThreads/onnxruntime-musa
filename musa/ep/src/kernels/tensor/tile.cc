@@ -84,12 +84,14 @@ OrtStatus* Tile::Compute(Ort::KernelContext& ctx) const {
 
   return LaunchStatus(LaunchMusaTileKernel(
       input.GetTensorRawData(), y.GetTensorMutableRawData(),
-      static_cast<int32_t>(elem_size), MakeTileParams(input_shape, output_shape),
-      nullptr));
+      static_cast<int32_t>(elem_size),
+      MakeTileParams(input_shape, output_shape), nullptr));
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Tile, kOnnxDomain, 13, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllFixedSizeTensorTypes())),
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypes())
+         .SetInputMemType(1, OrtMemTypeCPUInput)),
     Tile)

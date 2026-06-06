@@ -21,6 +21,7 @@
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/fusion_node_compute.h"
 #include "fusion/linear_fusion.h"
+#include "fusion/shape_reshape_fusion.h"
 #include "plugin_ep_utils.h"
 
 namespace {
@@ -110,7 +111,7 @@ std::vector<Ort::ConstNode> GetOutputNodes(
   return output_nodes;
 }
 
-bool IsCpuPreferredAllowedType(Ort::ConstValueInfo input) {
+bool IsIntegerMetadataType(Ort::ConstValueInfo input) {
   Ort::ConstTypeInfo type_info = input.TypeInfo();
   if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
     return false;
@@ -118,13 +119,21 @@ bool IsCpuPreferredAllowedType(Ort::ConstValueInfo input) {
 
   auto type_shape_info = type_info.GetTensorTypeAndShapeInfo();
   ONNXTensorElementDataType elem_type = type_shape_info.GetElementType();
-  return elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
-         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 &&
-         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E4M3FN &&
-         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E4M3FNUZ &&
-         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E5M2 &&
-         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E5M2FNUZ &&
-         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT4E2M1;
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
+}
+
+bool IsCpuPreferredMetadataType(Ort::ConstValueInfo input) {
+  Ort::ConstTypeInfo type_info = input.TypeInfo();
+  if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+
+  auto type_shape_info = type_info.GetTensorTypeAndShapeInfo();
+  ONNXTensorElementDataType elem_type = type_shape_info.GetElementType();
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
 }
 
 bool IsSmallInitializer(Ort::ConstValueInfo input) {
@@ -137,6 +146,123 @@ bool IsSmallInitializer(Ort::ConstValueInfo input) {
   }
   return type_info.GetTensorTypeAndShapeInfo().GetElementCount() <=
          kSmallInitializerThreshold;
+}
+
+bool IsCpuPreferredMetadataOp(Ort::ConstNode node) {
+  if (IsOnnxOp(node, "Cast")) {
+    auto cast_to = GetIntAttribute(node, "to");
+    return cast_to.has_value() &&
+           (*cast_to == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
+            *cast_to == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+  }
+
+  if (IsOnnxOp(node, "ConstantOfShape")) {
+    std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+    return outputs.size() == 1 && IsIntegerMetadataType(outputs[0]);
+  }
+
+  return IsOnnxOp(node, "Gather") || IsOnnxOp(node, "Concat") ||
+         IsOnnxOp(node, "Equal") || IsOnnxOp(node, "Where") ||
+         IsOnnxOp(node, "Reshape") || IsOnnxOp(node, "Slice") ||
+         IsOnnxOp(node, "Split") || IsOnnxOp(node, "Squeeze") ||
+         IsOnnxOp(node, "Unsqueeze") || IsOnnxOp(node, "Add") ||
+         IsOnnxOp(node, "Sub") || IsOnnxOp(node, "Mul") ||
+         IsOnnxOp(node, "Div") || IsOnnxOp(node, "Max") ||
+         IsOnnxOp(node, "Min") || IsOnnxOp(node, "ReduceProd") ||
+         IsOnnxOp(node, "ReduceMax");
+}
+
+bool HasOnlyCpuPreferredMetadataOutputs(Ort::ConstNode node) {
+  std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+  if (outputs.empty()) {
+    return false;
+  }
+  for (Ort::ConstValueInfo output : outputs) {
+    if (output == nullptr || !IsCpuPreferredMetadataType(output)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CanKeepCpuPreferredOutputs(
+    Ort::ConstNode node, const std::unordered_set<size_t>& provider_nodes,
+    const std::unordered_map<size_t, Ort::ConstKernelDef>& node_to_kernel,
+    std::unordered_map<size_t, bool>& cpu_preferred_downstream_cache,
+    std::unordered_set<size_t>& visiting_cpu_preferred);
+
+bool CanCpuPreferMetadataSubgraph(
+    Ort::ConstNode node, const std::unordered_set<size_t>& provider_nodes,
+    const std::unordered_map<size_t, Ort::ConstKernelDef>& node_to_kernel,
+    std::unordered_map<size_t, bool>& cpu_preferred_downstream_cache,
+    std::unordered_set<size_t>& visiting_cpu_preferred) {
+  const size_t node_id = node.GetId();
+  auto cached = cpu_preferred_downstream_cache.find(node_id);
+  if (cached != cpu_preferred_downstream_cache.end()) {
+    return cached->second;
+  }
+  if (!visiting_cpu_preferred.insert(node_id).second) {
+    return false;
+  }
+
+  bool can_prefer = IsCpuPreferredMetadataOp(node) &&
+                    HasOnlyCpuPreferredMetadataOutputs(node) &&
+                    CanKeepCpuPreferredOutputs(
+                        node, provider_nodes, node_to_kernel,
+                        cpu_preferred_downstream_cache, visiting_cpu_preferred);
+  visiting_cpu_preferred.erase(node_id);
+  cpu_preferred_downstream_cache.emplace(node_id, can_prefer);
+  return can_prefer;
+}
+
+bool CanConsumerReadCpuPreferredOutput(
+    const Ort::ValueInfoConsumerProducerInfo& consumer,
+    const std::unordered_set<size_t>& provider_nodes,
+    const std::unordered_map<size_t, Ort::ConstKernelDef>& node_to_kernel,
+    std::unordered_map<size_t, bool>& cpu_preferred_downstream_cache,
+    std::unordered_set<size_t>& visiting_cpu_preferred) {
+  Ort::ConstNode consumer_node = consumer.node;
+  const size_t consumer_node_id = consumer_node.GetId();
+  if (provider_nodes.find(consumer_node_id) == provider_nodes.end()) {
+    return true;
+  }
+
+  auto kernel_iter = node_to_kernel.find(consumer_node_id);
+  if (kernel_iter == node_to_kernel.end()) {
+    return false;
+  }
+  if (consumer.index >= 0 &&
+      MemTypeOnCpuExplicitly(kernel_iter->second.GetInputMemType(
+          static_cast<size_t>(consumer.index)))) {
+    return true;
+  }
+  return CanCpuPreferMetadataSubgraph(
+      consumer_node, provider_nodes, node_to_kernel,
+      cpu_preferred_downstream_cache, visiting_cpu_preferred);
+}
+
+bool CanKeepCpuPreferredOutputs(
+    Ort::ConstNode node, const std::unordered_set<size_t>& provider_nodes,
+    const std::unordered_map<size_t, Ort::ConstKernelDef>& node_to_kernel,
+    std::unordered_map<size_t, bool>& cpu_preferred_downstream_cache,
+    std::unordered_set<size_t>& visiting_cpu_preferred) {
+  for (Ort::ConstValueInfo output : node.GetOutputs()) {
+    if (output == nullptr) {
+      continue;
+    }
+    for (const auto& consumer : output.GetConsumers()) {
+      if (IsOnnxOp(node, "ConstantOfShape") &&
+          IsOnnxOp(consumer.node, "Gather")) {
+        return false;
+      }
+      if (!CanConsumerReadCpuPreferredOutput(
+              consumer, provider_nodes, node_to_kernel,
+              cpu_preferred_downstream_cache, visiting_cpu_preferred)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 OrtStatus* GetCpuPreferredNodes(
@@ -204,6 +330,8 @@ OrtStatus* GetCpuPreferredNodes(
     visited.reserve(candidates.size());
     std::unordered_set<const OrtNode*> cpu_nodes;
     cpu_nodes.reserve(candidates.size());
+    std::unordered_map<size_t, bool> cpu_preferred_downstream_cache;
+    std::unordered_set<size_t> visiting_cpu_preferred;
 
     while (!candidates.empty()) {
       size_t cur = candidates.top();
@@ -237,29 +365,40 @@ OrtStatus* GetCpuPreferredNodes(
       RETURN_IF(kernel_iter == node_to_kernel.end(), ort_api,
                 "Unable to get kernel definition for CPU-preferred node");
 
+      if (!CanCpuPreferMetadataSubgraph(node, provider_nodes, node_to_kernel,
+                                        cpu_preferred_downstream_cache,
+                                        visiting_cpu_preferred)) {
+        continue;
+      }
+
       bool place_in_cpu = true;
+      bool has_cpu_metadata_input = false;
       std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
       for (size_t i = 0; i < inputs.size(); ++i) {
         Ort::ConstValueInfo input = inputs[i];
         if (input == nullptr) {
           continue;
         }
-        if (!IsCpuPreferredAllowedType(input)) {
+        if (!IsCpuPreferredMetadataType(input)) {
           place_in_cpu = false;
           break;
         }
-        if (IsSmallInitializer(input) || input.IsRequiredGraphInput() ||
-            input.IsOptionalGraphInput()) {
+        if (IsSmallInitializer(input)) {
           continue;
         }
         if (cpu_output_args.find(input) == cpu_output_args.end()) {
           place_in_cpu = false;
           break;
         }
+        has_cpu_metadata_input = true;
         if (MemTypeOnCpuExplicitly(kernel_iter->second.GetInputMemType(i))) {
           place_in_cpu = false;
           break;
         }
+      }
+
+      if (!has_cpu_metadata_input) {
+        place_in_cpu = false;
       }
 
       if (place_in_cpu) {
@@ -425,6 +564,281 @@ std::vector<std::vector<Ort::ConstNode>> FindConcatMatMulFusions(
     fusions.push_back({concat_node, matmul_node});
     fused_node_ids.insert(concat_node.GetId());
     fused_node_ids.insert(matmul_node.GetId());
+  }
+
+  return fusions;
+}
+
+bool IsSmallIntegerInitializer(Ort::ConstValueInfo input) {
+  if (!IsSmallInitializer(input)) {
+    return false;
+  }
+
+  Ort::ConstTypeInfo type_info = input.TypeInfo();
+  if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+  ONNXTensorElementDataType elem_type =
+      type_info.GetTensorTypeAndShapeInfo().GetElementType();
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
+}
+
+std::unordered_map<std::string, Ort::ConstNode> BuildProducerMap(
+    const std::vector<Ort::ConstNode>& all_nodes) {
+  std::unordered_map<std::string, Ort::ConstNode> producers;
+  for (Ort::ConstNode node : all_nodes) {
+    for (Ort::ConstValueInfo output : node.GetOutputs()) {
+      if (output != nullptr) {
+        producers.emplace(Name(output), node);
+      }
+    }
+  }
+  return producers;
+}
+
+Ort::ConstNode FindProducer(
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    Ort::ConstValueInfo input) {
+  if (input == nullptr) {
+    return Ort::ConstNode{nullptr};
+  }
+
+  auto it = producers.find(Name(input));
+  if (it == producers.end()) {
+    return Ort::ConstNode{nullptr};
+  }
+  return it->second;
+}
+
+bool HasOnlyConsumer(Ort::ConstValueInfo output, Ort::ConstNode expected_node,
+                     int64_t expected_input_index) {
+  if (output == nullptr) {
+    return false;
+  }
+
+  std::vector<Ort::ValueInfoConsumerProducerInfo> consumers =
+      output.GetConsumers();
+  return consumers.size() == 1 &&
+         consumers[0].node.GetId() == expected_node.GetId() &&
+         consumers[0].index == expected_input_index;
+}
+
+bool CanFuseShapeReshapeFromGather(
+    Ort::ConstNode gather_node,
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& fused_node_ids,
+    std::unordered_set<size_t>& group_node_ids) {
+  if (!IsOnnxOp(gather_node, "Gather") ||
+      fused_node_ids.count(gather_node.GetId()) != 0 ||
+      GetIntAttribute(gather_node, "axis").value_or(0) != 0) {
+    return false;
+  }
+
+  std::vector<Ort::ConstValueInfo> gather_inputs = gather_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> gather_outputs = gather_node.GetOutputs();
+  if (gather_inputs.size() != 2 || gather_outputs.size() != 1 ||
+      graph_output_names.count(Name(gather_outputs[0])) != 0 ||
+      !IsSmallIntegerInitializer(gather_inputs[1])) {
+    return false;
+  }
+
+  Ort::ConstNode cast_node = FindProducer(producers, gather_inputs[0]);
+  if (!cast_node || !IsOnnxOp(cast_node, "Cast") ||
+      fused_node_ids.count(cast_node.GetId()) != 0) {
+    return false;
+  }
+  auto cast_to = GetIntAttribute(cast_node, "to");
+  if (!cast_to.has_value() ||
+      (*cast_to != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 &&
+       *cast_to != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64)) {
+    return false;
+  }
+
+  std::vector<Ort::ConstValueInfo> cast_inputs = cast_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> cast_outputs = cast_node.GetOutputs();
+  if (cast_inputs.size() != 1 || cast_outputs.size() != 1 ||
+      graph_output_names.count(Name(cast_outputs[0])) != 0 ||
+      !HasOnlyConsumer(cast_outputs[0], gather_node, 0)) {
+    return false;
+  }
+
+  Ort::ConstNode shape_input_producer = FindProducer(producers, cast_inputs[0]);
+  if (!shape_input_producer) {
+    return false;
+  }
+
+  Ort::ConstNode shape_node{nullptr};
+  Ort::ConstNode pre_gather_node{nullptr};
+  bool include_shape_node = false;
+  if (IsOnnxOp(shape_input_producer, "Shape")) {
+    shape_node = shape_input_producer;
+    if (fused_node_ids.count(shape_node.GetId()) != 0) {
+      return false;
+    }
+
+    std::vector<Ort::ConstValueInfo> shape_inputs = shape_node.GetInputs();
+    std::vector<Ort::ConstValueInfo> shape_outputs = shape_node.GetOutputs();
+    if (shape_inputs.size() != 1 || shape_outputs.size() != 1 ||
+        graph_output_names.count(Name(shape_outputs[0])) != 0) {
+      return false;
+    }
+    include_shape_node = HasOnlyConsumer(shape_outputs[0], cast_node, 0);
+  } else if (IsOnnxOp(shape_input_producer, "Gather")) {
+    pre_gather_node = shape_input_producer;
+    if (fused_node_ids.count(pre_gather_node.GetId()) != 0 ||
+        GetIntAttribute(pre_gather_node, "axis").value_or(0) != 0) {
+      return false;
+    }
+
+    std::vector<Ort::ConstValueInfo> pre_gather_inputs =
+        pre_gather_node.GetInputs();
+    std::vector<Ort::ConstValueInfo> pre_gather_outputs =
+        pre_gather_node.GetOutputs();
+    if (pre_gather_inputs.size() != 2 || pre_gather_outputs.size() != 1 ||
+        graph_output_names.count(Name(pre_gather_outputs[0])) != 0 ||
+        !IsSmallIntegerInitializer(pre_gather_inputs[1]) ||
+        !HasOnlyConsumer(pre_gather_outputs[0], cast_node, 0)) {
+      return false;
+    }
+
+    shape_node = FindProducer(producers, pre_gather_inputs[0]);
+    if (!shape_node || !IsOnnxOp(shape_node, "Shape") ||
+        fused_node_ids.count(shape_node.GetId()) != 0) {
+      return false;
+    }
+
+    std::vector<Ort::ConstValueInfo> shape_inputs = shape_node.GetInputs();
+    std::vector<Ort::ConstValueInfo> shape_outputs = shape_node.GetOutputs();
+    if (shape_inputs.size() != 1 || shape_outputs.size() != 1 ||
+        graph_output_names.count(Name(shape_outputs[0])) != 0) {
+      return false;
+    }
+    include_shape_node = HasOnlyConsumer(shape_outputs[0], pre_gather_node, 0);
+  } else {
+    return false;
+  }
+
+  std::vector<Ort::ValueInfoConsumerProducerInfo> gather_consumers =
+      gather_outputs[0].GetConsumers();
+  if (gather_consumers.empty()) {
+    return false;
+  }
+
+  group_node_ids.clear();
+  if (include_shape_node) {
+    group_node_ids.insert(shape_node.GetId());
+  }
+  if (pre_gather_node) {
+    group_node_ids.insert(pre_gather_node.GetId());
+  }
+  group_node_ids.insert(cast_node.GetId());
+  group_node_ids.insert(gather_node.GetId());
+
+  for (const auto& gather_consumer : gather_consumers) {
+    Ort::ConstNode concat_node = gather_consumer.node;
+    if (!IsOnnxOp(concat_node, "Concat") ||
+        fused_node_ids.count(concat_node.GetId()) != 0 ||
+        GetIntAttribute(concat_node, "axis").value_or(0) != 0) {
+      return false;
+    }
+
+    std::vector<Ort::ConstValueInfo> concat_inputs = concat_node.GetInputs();
+    std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
+    if (concat_inputs.size() < 2 || concat_outputs.size() != 1 ||
+        graph_output_names.count(Name(concat_outputs[0])) != 0) {
+      return false;
+    }
+
+    int gather_input_count = 0;
+    for (Ort::ConstValueInfo concat_input : concat_inputs) {
+      if (Name(concat_input) == Name(gather_outputs[0])) {
+        ++gather_input_count;
+      } else if (!IsSmallIntegerInitializer(concat_input)) {
+        return false;
+      }
+    }
+    if (gather_input_count != 1) {
+      return false;
+    }
+
+    std::vector<Ort::ValueInfoConsumerProducerInfo> concat_consumers =
+        concat_outputs[0].GetConsumers();
+    if (concat_consumers.size() != 1 || concat_consumers[0].index != 0) {
+      return false;
+    }
+
+    Ort::ConstNode final_cast_node = concat_consumers[0].node;
+    if (!IsOnnxOp(final_cast_node, "Cast") ||
+        fused_node_ids.count(final_cast_node.GetId()) != 0 ||
+        GetIntAttribute(final_cast_node, "to").value_or(-1) !=
+            ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+      return false;
+    }
+
+    std::vector<Ort::ConstValueInfo> final_cast_outputs =
+        final_cast_node.GetOutputs();
+    if (final_cast_outputs.size() != 1 ||
+        graph_output_names.count(Name(final_cast_outputs[0])) != 0) {
+      return false;
+    }
+
+    std::vector<Ort::ValueInfoConsumerProducerInfo> reshape_consumers =
+        final_cast_outputs[0].GetConsumers();
+    if (reshape_consumers.empty()) {
+      return false;
+    }
+
+    group_node_ids.insert(concat_node.GetId());
+    group_node_ids.insert(final_cast_node.GetId());
+
+    for (const auto& reshape_consumer : reshape_consumers) {
+      Ort::ConstNode reshape_node = reshape_consumer.node;
+      if (reshape_consumer.index != 1 || !IsOnnxOp(reshape_node, "Reshape") ||
+          fused_node_ids.count(reshape_node.GetId()) != 0) {
+        return false;
+      }
+
+      std::vector<Ort::ConstValueInfo> reshape_inputs =
+          reshape_node.GetInputs();
+      std::vector<Ort::ConstValueInfo> reshape_outputs =
+          reshape_node.GetOutputs();
+      if (reshape_inputs.size() != 2 || reshape_outputs.size() != 1 ||
+          reshape_inputs[0].IsConstantInitializer()) {
+        return false;
+      }
+      group_node_ids.insert(reshape_node.GetId());
+    }
+  }
+
+  return true;
+}
+
+std::vector<std::vector<Ort::ConstNode>> FindShapeReshapeFusions(
+    const std::vector<Ort::ConstNode>& all_nodes,
+    const std::unordered_set<std::string>& graph_output_names,
+    std::unordered_set<size_t>& fused_node_ids) {
+  std::vector<std::vector<Ort::ConstNode>> fusions;
+  auto producers = BuildProducerMap(all_nodes);
+
+  for (Ort::ConstNode node : all_nodes) {
+    std::unordered_set<size_t> group_node_ids;
+    if (!CanFuseShapeReshapeFromGather(node, producers, graph_output_names,
+                                       fused_node_ids, group_node_ids)) {
+      continue;
+    }
+
+    std::vector<Ort::ConstNode> fusion_nodes;
+    for (Ort::ConstNode ordered_node : all_nodes) {
+      if (group_node_ids.count(ordered_node.GetId()) != 0) {
+        fusion_nodes.push_back(ordered_node);
+      }
+    }
+    if (!fusion_nodes.empty()) {
+      fusions.push_back(std::move(fusion_nodes));
+      fused_node_ids.insert(group_node_ids.begin(), group_node_ids.end());
+    }
   }
 
   return fusions;
@@ -714,6 +1128,8 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
                                   fused_node_ids);
     std::vector<std::vector<Ort::ConstNode>> fused_gemm_fusions =
         FindFusedGemmFusions(all_nodes, graph_output_names, fused_node_ids);
+    std::vector<std::vector<Ort::ConstNode>> shape_reshape_fusions =
+        FindShapeReshapeFusions(all_nodes, graph_output_names, fused_node_ids);
 
     for (const auto& fusion_nodes : gemm_activation_fusions) {
       OrtNodeFusionOptions node_fusion_options = {};
@@ -729,6 +1145,16 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
       OrtNodeFusionOptions node_fusion_options = {};
       node_fusion_options.ort_version_supported = ORT_API_VERSION;
       node_fusion_options.drop_constant_initializers = false;
+      RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_AddNodesToFuse(
+          graph_support_info,
+          reinterpret_cast<const OrtNode* const*>(fusion_nodes.data()),
+          fusion_nodes.size(), &node_fusion_options));
+    }
+
+    for (const auto& fusion_nodes : shape_reshape_fusions) {
+      OrtNodeFusionOptions node_fusion_options = {};
+      node_fusion_options.ort_version_supported = ORT_API_VERSION;
+      node_fusion_options.drop_constant_initializers = true;
       RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_AddNodesToFuse(
           graph_support_info,
           reinterpret_cast<const OrtNode* const*>(fusion_nodes.data()),

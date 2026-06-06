@@ -78,5 +78,6 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T1",
                             GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))
-         .AddTypeConstraint("T2", AllFixedSizeTensorTypesNoBFloat16())),
+         .AddTypeConstraint("T2", AllFixedSizeTensorTypesNoBFloat16())
+         .SetInputMemType(0, OrtMemTypeCPUInput)),
     ConstantOfShape)

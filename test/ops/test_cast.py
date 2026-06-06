@@ -12,6 +12,7 @@ from op_test_utils import (
     build_model_with_input_types,
     float32_to_bfloat16_bits,
     run_model_and_compare,
+    run_model_and_compare_with_cpu_fallback,
     run_and_compare,
     run_with_iobinding,
 )
@@ -182,5 +183,5 @@ def test_cast_shape_metadata_int64_to_int32():
         opset=17,
         name="cast_shape_metadata_graph",
     )
-    (actual,) = run_model_and_compare(model, {"X": x})
+    (actual,) = run_model_and_compare_with_cpu_fallback(model, {"X": x})
     np.testing.assert_array_equal(actual, np.array([2, 3, 4], dtype=np.int32))

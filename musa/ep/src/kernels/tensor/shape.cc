@@ -24,5 +24,5 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .AddTypeConstraint("T1",
                             GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))
-         .SetOutputMemType(0, OrtMemTypeCPUOutput)),
+         .SetOutputMemType(0, OrtMemTypeCPUInput)),
     Shape)

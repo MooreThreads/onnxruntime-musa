@@ -10,6 +10,7 @@ from op_test_utils import (
     build_graph_model,
     run_and_compare,
     run_model_and_compare,
+    run_model_and_compare_with_cpu_fallback,
 )
 
 
@@ -106,5 +107,7 @@ def test_gather_shape_metadata_int64():
         opset=17,
         name="gather_shape_metadata_graph",
     )
-    (actual,) = run_model_and_compare(model, {"X": x, "indices": indices})
+    (actual,) = run_model_and_compare_with_cpu_fallback(
+        model, {"X": x, "indices": indices}
+    )
     np.testing.assert_array_equal(actual, np.array([2, 4, 5], dtype=np.int64))

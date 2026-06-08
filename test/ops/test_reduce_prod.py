@@ -24,6 +24,17 @@ def test_reduce_prod_axis1_keepdims():
     )
 
 
+def test_reduce_prod_1d_negative_axis_no_keepdims_scalar():
+    x = np.random.default_rng(7).uniform(0.8, 1.2, (32,)).astype(np.float32)
+    outputs = run_and_compare(
+        "ReduceProd",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"axes": [-1], "keepdims": 0},
+    )
+    assert outputs[0].shape == ()
+
+
 def test_reduce_prod_int64():
     # Use tile of [1, 2] so each row product = 2**16 (no overflow)
     x = np.tile(np.array([1, 2], dtype=np.int64), (16, 16))

@@ -58,3 +58,23 @@ def test_conv_lowered_conv1d_h1_k1_with_bias():
         rtol=1e-4,
         atol=1e-4,
     )
+
+
+def test_conv_heightwise_width1_kernel_k5_pad2():
+    x = np.random.default_rng(5).standard_normal((2, 1, 17, 8)).astype(np.float32)
+    w = np.random.default_rng(6).standard_normal((1, 1, 5, 1)).astype(np.float32)
+    run_and_compare(
+        "Conv",
+        inputs={"X": x, "W": w},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={
+            "dilations": [1, 1],
+            "group": 1,
+            "kernel_shape": [5, 1],
+            "pads": [2, 0, 2, 0],
+            "strides": [1, 1],
+        },
+        opset=13,
+        rtol=1e-5,
+        atol=1e-5,
+    )

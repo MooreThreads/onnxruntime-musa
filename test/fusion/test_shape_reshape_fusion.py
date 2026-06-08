@@ -1,6 +1,6 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
-"""End-to-end tests for the Shape/Cast/Gather/Concat/Reshape fusion."""
+"""End-to-end tests for Shape/Cast/Split/Concat/Cast feeding Reshape."""
 
 import json
 import os
@@ -9,16 +9,81 @@ import numpy as np
 import onnxruntime as ort
 from onnx import helper, numpy_helper
 
-from op_test_utils import TensorProto, musa_devices
+from op_test_utils import TensorProto, musa_devices, run_model_and_compare
 
 
-def _profile_musa_session(model: bytes, feeds: dict[str, np.ndarray], tmp_path, prefix: str):
+def _build_shape_reshape_model() -> bytes:
+    tail = numpy_helper.from_array(np.array([-1], dtype=np.int32), name="tail")
+    nodes = [
+        helper.make_node("Shape", ["X"], ["shape"]),
+        helper.make_node("Cast", ["shape"], ["shape_i32"], to=TensorProto.INT32),
+        helper.make_node("Split", ["shape_i32"], ["dim0", "dim1", "dim2"], axis=0),
+        helper.make_node("Concat", ["dim0", "dim1", "tail"], ["target_i32"], axis=0),
+        helper.make_node("Cast", ["target_i32"], ["target_i64"], to=TensorProto.INT64),
+        helper.make_node("Reshape", ["X", "target_i64"], ["Y"]),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "shape_reshape_fusion_profile",
+        [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", "M", "K"])],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
+        initializer=[tail],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
+
+
+def _build_shape_tile_reshape_model() -> bytes:
+    starts = numpy_helper.from_array(np.array([0], dtype=np.int64), name="starts")
+    ends = numpy_helper.from_array(np.array([1], dtype=np.int64), name="ends")
+    axes = numpy_helper.from_array(np.array([0], dtype=np.int64), name="axes")
+    tile_tail = numpy_helper.from_array(np.array([2], dtype=np.int32), name="tile_tail")
+    reshape_tail = numpy_helper.from_array(
+        np.array([4], dtype=np.int32), name="reshape_tail"
+    )
+    nodes = [
+        helper.make_node("Shape", ["X"], ["shape"]),
+        helper.make_node("Cast", ["shape"], ["shape_i32"], to=TensorProto.INT32),
+        helper.make_node("Slice", ["shape_i32", "starts", "ends", "axes"], ["dim0"]),
+        helper.make_node("Concat", ["dim0", "tile_tail"], ["repeats_i32"], axis=0),
+        helper.make_node("Cast", ["repeats_i32"], ["repeats"], to=TensorProto.INT64),
+        helper.make_node("Tile", ["D", "repeats"], ["T"]),
+        helper.make_node("Concat", ["dim0", "reshape_tail"], ["target_i32"], axis=0),
+        helper.make_node("Cast", ["target_i32"], ["target"], to=TensorProto.INT64),
+        helper.make_node("Reshape", ["T", "target"], ["Y"]),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "shape_tile_reshape_fusion_profile",
+        [
+            helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", "M"]),
+            helper.make_tensor_value_info("D", TensorProto.FLOAT, [1, 2]),
+        ],
+        [
+            helper.make_tensor_value_info("Y", TensorProto.FLOAT, None),
+        ],
+        initializer=[starts, ends, axes, tile_tail, reshape_tail],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
+
+
+def test_shape_reshape_fusion_removes_metadata_chain(tmp_path):
+    model = _build_shape_reshape_model()
+    x = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+
+    (actual,) = run_model_and_compare(model, {"X": x})
+    np.testing.assert_array_equal(actual, x)
+
     so = ort.SessionOptions()
+    so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
     so.enable_profiling = True
-    so.profile_file_prefix = str(tmp_path / prefix)
+    so.profile_file_prefix = str(tmp_path / "shape_reshape_fusion")
     so.add_provider_for_devices(musa_devices(), {})
     session = ort.InferenceSession(model, sess_options=so)
-    outputs = session.run(None, feeds)
+    session.run(None, {"X": x})
     profile_path = session.end_profiling()
     try:
         with open(profile_path, "r", encoding="utf-8") as f:
@@ -26,191 +91,51 @@ def _profile_musa_session(model: bytes, feeds: dict[str, np.ndarray], tmp_path, 
     finally:
         if os.path.exists(profile_path):
             os.remove(profile_path)
-    return outputs, events
 
-
-def _node_events(events):
-    return [
+    node_events = [
         e
         for e in events
         if e.get("cat") == "Node" and e.get("name", "").endswith("_kernel_time")
     ]
+    op_names = {e.get("args", {}).get("op_name") for e in node_events}
+    providers = {e.get("args", {}).get("provider") for e in node_events}
+    assert "MUSAExecutionProvider" in providers
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
+    assert not ({"Shape", "Cast", "Split", "Concat", "Reshape"} & op_names)
 
 
-def _ops_by_provider(events):
-    ops = {}
-    for event in _node_events(events):
-        args = event.get("args", {})
-        provider = args.get("provider")
-        op_name = args.get("op_name")
-        ops.setdefault(provider, set()).add(op_name)
-    return ops
-
-
-def _assert_shape_reshape_fused(events):
-    ops_by_provider = _ops_by_provider(events)
-    musa_ops = ops_by_provider.get("MUSAExecutionProvider", set())
-    cpu_ops = ops_by_provider.get("CPUExecutionProvider", set())
-    all_ops = set().union(*ops_by_provider.values())
-    fused_ops = {op for op in musa_ops if str(op).startswith("MUSAExecutionProvider_")}
-
-    assert fused_ops
-    assert "Shape" not in musa_ops
-    assert "Reshape" not in musa_ops
-    assert "Cast" not in cpu_ops
-    assert "Gather" not in cpu_ops
-    assert "Concat" not in cpu_ops
-    assert "Gather" not in musa_ops
-    assert "Concat" not in musa_ops
-    assert "MemcpyToHost" not in all_ops
-    assert "MemcpyFromHost" not in all_ops
-
-
-def _build_shape_metadata_reshape_model() -> bytes:
-    gather_index = numpy_helper.from_array(
-        np.array([0, 1], dtype=np.int64), name="gather_index"
-    )
-    suffix = numpy_helper.from_array(np.array([4], dtype=np.int32), name="suffix")
-    nodes = [
-        helper.make_node("Shape", ["X"], ["shape_i64"]),
-        helper.make_node("Cast", ["shape_i64"], ["shape_i32"], to=TensorProto.INT32),
-        helper.make_node("Gather", ["shape_i32", "gather_index"], ["prefix"], axis=0),
-        helper.make_node("Concat", ["prefix", "suffix"], ["target_i32"], axis=0),
-        helper.make_node("Cast", ["target_i32"], ["target_i64"], to=TensorProto.INT64),
-        helper.make_node("Reshape", ["Data", "target_i64"], ["Y"]),
-        helper.make_node("Reshape", ["Data2", "target_i64"], ["Z"]),
-    ]
-    graph = helper.make_graph(
-        nodes,
-        "shape_metadata_reshape",
-        [
-            helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", "M", "K"]),
-            helper.make_tensor_value_info("Data", TensorProto.FLOAT, ["N", "MK"]),
-            helper.make_tensor_value_info("Data2", TensorProto.FLOAT, ["N", "MK"]),
-        ],
-        [
-            helper.make_tensor_value_info("Y", TensorProto.FLOAT, None),
-            helper.make_tensor_value_info("Z", TensorProto.FLOAT, None),
-        ],
-        initializer=[gather_index, suffix],
-    )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
-    model.ir_version = min(model.ir_version, 10)
-    return model.SerializeToString()
-
-
-def _build_shape_pre_gather_metadata_reshape_model() -> bytes:
-    pre_gather_index = numpy_helper.from_array(
-        np.array([1, 0, 2], dtype=np.int64), name="pre_gather_index"
-    )
-    gather_index = numpy_helper.from_array(
-        np.array([0, 1], dtype=np.int64), name="gather_index"
-    )
-    suffix = numpy_helper.from_array(np.array([4], dtype=np.int32), name="suffix")
-    nodes = [
-        helper.make_node("Shape", ["X"], ["shape_i64"]),
-        helper.make_node(
-            "Gather", ["shape_i64", "pre_gather_index"], ["shape_perm"], axis=0
-        ),
-        helper.make_node("Cast", ["shape_perm"], ["shape_i32"], to=TensorProto.INT32),
-        helper.make_node("Gather", ["shape_i32", "gather_index"], ["prefix"], axis=0),
-        helper.make_node("Concat", ["prefix", "suffix"], ["target_i32"], axis=0),
-        helper.make_node("Cast", ["target_i32"], ["target_i64"], to=TensorProto.INT64),
-        helper.make_node("Reshape", ["Data", "target_i64"], ["Y"]),
-    ]
-    graph = helper.make_graph(
-        nodes,
-        "shape_pre_gather_metadata_reshape",
-        [
-            helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", "M", "K"]),
-            helper.make_tensor_value_info("Data", TensorProto.FLOAT, ["M", "NK"]),
-        ],
-        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
-        initializer=[pre_gather_index, gather_index, suffix],
-    )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
-    model.ir_version = min(model.ir_version, 10)
-    return model.SerializeToString()
-
-
-def _build_shape_reshape_with_zero_and_infer_dim_model() -> bytes:
-    gather_index = numpy_helper.from_array(
-        np.array([0], dtype=np.int64), name="gather_index"
-    )
-    suffix = numpy_helper.from_array(np.array([0, -1], dtype=np.int32), name="suffix")
-    nodes = [
-        helper.make_node("Shape", ["X"], ["shape_i64"]),
-        helper.make_node("Cast", ["shape_i64"], ["shape_i32"], to=TensorProto.INT32),
-        helper.make_node("Gather", ["shape_i32", "gather_index"], ["prefix"], axis=0),
-        helper.make_node("Concat", ["prefix", "suffix"], ["target_i32"], axis=0),
-        helper.make_node("Cast", ["target_i32"], ["target_i64"], to=TensorProto.INT64),
-        helper.make_node("Reshape", ["Data", "target_i64"], ["Y"]),
-    ]
-    graph = helper.make_graph(
-        nodes,
-        "shape_reshape_zero_and_infer_dim",
-        [
-            helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", "M", "K"]),
-            helper.make_tensor_value_info("Data", TensorProto.FLOAT, ["N", "M", "K"]),
-        ],
-        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
-        initializer=[gather_index, suffix],
-    )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
-    model.ir_version = min(model.ir_version, 10)
-    return model.SerializeToString()
-
-
-def test_shape_reshape_fusion_multiple_reshape_consumers(tmp_path):
-    model = _build_shape_metadata_reshape_model()
-    x = np.zeros((2, 3, 4), dtype=np.float32)
-    data = np.arange(24, dtype=np.float32).reshape(2, 12)
-    data2 = data + 100.0
-    feeds = {"X": x, "Data": data, "Data2": data2}
-
-    expected = ort.InferenceSession(model, providers=["CPUExecutionProvider"]).run(
-        None, feeds
-    )
-    actual, events = _profile_musa_session(model, feeds, tmp_path, "shape_reshape")
-
-    for actual_output, expected_output in zip(actual, expected):
-        np.testing.assert_array_equal(actual_output, expected_output)
-    _assert_shape_reshape_fused(events)
-
-
-def test_shape_reshape_fusion_after_pre_gather(tmp_path):
-    model = _build_shape_pre_gather_metadata_reshape_model()
+def test_shape_reshape_fusion_handles_tile_repeats(tmp_path):
+    model = _build_shape_tile_reshape_model()
     feeds = {
-        "X": np.zeros((2, 3, 4), dtype=np.float32),
-        "Data": np.arange(24, dtype=np.float32).reshape(3, 8),
+        "X": np.ones((3, 5), dtype=np.float32),
+        "D": np.array([[1.0, 2.0]], dtype=np.float32),
     }
 
-    expected = ort.InferenceSession(model, providers=["CPUExecutionProvider"]).run(
-        None, feeds
-    )
-    actual, events = _profile_musa_session(
-        model, feeds, tmp_path, "shape_reshape_pre_gather"
-    )
+    (actual,) = run_model_and_compare(model, feeds)
+    np.testing.assert_array_equal(actual, np.tile(feeds["D"], (3, 2)).reshape(3, 4))
 
-    for actual_output, expected_output in zip(actual, expected):
-        np.testing.assert_array_equal(actual_output, expected_output)
-    _assert_shape_reshape_fused(events)
+    so = ort.SessionOptions()
+    so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    so.enable_profiling = True
+    so.profile_file_prefix = str(tmp_path / "shape_tile_reshape_fusion")
+    so.add_provider_for_devices(musa_devices(), {})
+    session = ort.InferenceSession(model, sess_options=so)
+    session.run(None, feeds)
+    profile_path = session.end_profiling()
+    try:
+        with open(profile_path, "r", encoding="utf-8") as f:
+            events = json.load(f)
+    finally:
+        if os.path.exists(profile_path):
+            os.remove(profile_path)
 
-
-def test_shape_reshape_fusion_resolves_zero_and_inferred_dim(tmp_path):
-    model = _build_shape_reshape_with_zero_and_infer_dim_model()
-    feeds = {
-        "X": np.zeros((2, 3, 4), dtype=np.float32),
-        "Data": np.arange(24, dtype=np.float32).reshape(2, 3, 4),
-    }
-
-    expected = ort.InferenceSession(model, providers=["CPUExecutionProvider"]).run(
-        None, feeds
-    )
-    actual, events = _profile_musa_session(
-        model, feeds, tmp_path, "shape_reshape_zero_infer"
-    )
-
-    for actual_output, expected_output in zip(actual, expected):
-        np.testing.assert_array_equal(actual_output, expected_output)
-    _assert_shape_reshape_fused(events)
+    node_events = [
+        e
+        for e in events
+        if e.get("cat") == "Node" and e.get("name", "").endswith("_kernel_time")
+    ]
+    op_names = {e.get("args", {}).get("op_name") for e in node_events}
+    providers = {e.get("args", {}).get("provider") for e in node_events}
+    assert "MUSAExecutionProvider" in providers
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
+    assert not ({"Shape", "Cast", "Slice", "Concat", "Tile", "Reshape"} & op_names)

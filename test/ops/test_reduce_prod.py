@@ -77,6 +77,16 @@ def test_reduce_prod_float_axis0_no_keepdims_3d():
     )
 
 
+def test_reduce_prod_all_axes_no_keepdims_scalar_output():
+    x = np.random.default_rng(7).uniform(0.5, 1.25, (2, 3, 4)).astype(np.float32)
+    run_and_compare(
+        "ReduceProd",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"axes": [0, 1, 2], "keepdims": 0},
+    )
+
+
 def test_reduce_prod_multi_axis_int32_no_keepdims():
     x = np.ones((2, 3, 4), dtype=np.int32)
     x[:, :, 0] = 2

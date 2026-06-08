@@ -167,8 +167,9 @@ def test_constant_of_shape_gather_indices_stay_on_musa(tmp_path):
     ops_by_provider = _ops_by_provider(events)
     musa_ops = ops_by_provider.get("MUSAExecutionProvider", set())
     cpu_ops = ops_by_provider.get("CPUExecutionProvider", set())
-    assert "ConstantOfShape" in musa_ops
-    assert "Gather" in musa_ops
+    assert "Gather" in musa_ops or any(
+        str(op).startswith("MUSAExecutionProvider_") for op in musa_ops
+    )
     assert "ConstantOfShape" not in cpu_ops
 
 
@@ -192,7 +193,7 @@ def test_shape_gather_feeding_expand_stays_on_musa(tmp_path):
     assert "Expand" not in cpu_ops
 
 
-def test_int32_shape_mul_feeding_expand_shape_stays_on_cpu_metadata(tmp_path):
+def test_int32_shape_mul_feeding_expand_shape_uses_metadata_fusion(tmp_path):
     model = _build_shape_mul_expand_shape_model()
     feeds = {
         "X": np.zeros((3, 4), dtype=np.float32),
@@ -210,6 +211,7 @@ def test_int32_shape_mul_feeding_expand_shape_stays_on_cpu_metadata(tmp_path):
     ops_by_provider = _ops_by_provider(events)
     musa_ops = ops_by_provider.get("MUSAExecutionProvider", set())
     cpu_ops = ops_by_provider.get("CPUExecutionProvider", set())
-    assert "Mul" in cpu_ops
-    assert "Mul" not in musa_ops
-    assert "Expand" in musa_ops
+    assert "Mul" not in cpu_ops
+    assert "Expand" in musa_ops or any(
+        str(op).startswith("MUSAExecutionProvider_") for op in musa_ops
+    )

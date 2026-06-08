@@ -76,6 +76,34 @@ bool TryMudnnMax(Ort::KernelContext& ctx,
   return true;
 }
 
+OrtStatus* TryScalarInt32Max(
+    Ort::KernelContext& ctx, const std::vector<std::vector<int64_t>>& shapes,
+    const std::vector<int64_t>& output_shape, ONNXTensorElementDataType elem_type,
+    bool& handled) {
+  handled = false;
+  if (ctx.GetInputCount() != 2 ||
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
+      !AllGpuInputs(ctx)) {
+    return nullptr;
+  }
+  const bool lhs_scalar = shapes[0].empty();
+  const bool rhs_scalar = shapes[1].empty();
+  if (lhs_scalar == rhs_scalar) {
+    return nullptr;
+  }
+
+  Ort::UnownedValue y = ctx.GetOutput(0, output_shape);
+  if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
+    return UnsupportedDeviceElementwiseStatus("Max", elem_type);
+  }
+
+  handled = true;
+  return LaunchStatus(LaunchMusaBinaryScalarInt32Kernel(
+      ctx.GetInput(0).GetTensorData<int32_t>(),
+      ctx.GetInput(1).GetTensorData<int32_t>(), y.GetTensorMutableData<int32_t>(),
+      NumElements(output_shape), lhs_scalar, MusaBinaryOp::Max, nullptr));
+}
+
 OrtStatus* ComputeDeviceMaxFallback(
     Ort::KernelContext& ctx, const std::vector<std::vector<int64_t>>& shapes,
     const std::vector<int64_t>& output_shape,
@@ -140,6 +168,12 @@ OrtStatus* Max::Compute(Ort::KernelContext& ctx) const {
     shapes.push_back(
         ctx.GetInput(input_index).GetTensorTypeAndShapeInfo().GetShape());
     out_shape = BroadcastShape(out_shape, shapes.back());
+  }
+  bool handled = false;
+  OrtStatus* scalar_status = TryScalarInt32Max(ctx, shapes, out_shape, elem_type,
+                                               handled);
+  if (handled) {
+    return scalar_status;
   }
   if (TryMudnnMax(ctx, shapes, out_shape, elem_type)) {
     return nullptr;

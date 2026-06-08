@@ -56,7 +56,7 @@ class Softmax : public OpKernelBase<Softmax> {
  public:
   Softmax(const OrtKernelInfo* info, void* /*state*/) {
     Ort::ConstKernelInfo kernel_info(info);
-    axis_ = AttrOrDefault<int64_t>(kernel_info, "axis", 0);
+    axis_ = AttrOrDefault<int64_t>(kernel_info, "axis", -1);
   }
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
 

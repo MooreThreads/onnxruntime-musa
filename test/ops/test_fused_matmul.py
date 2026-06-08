@@ -3,7 +3,6 @@
 """End-to-end CPU-vs-MUSA test for the FusedMatMul contrib operator."""
 
 import numpy as np
-import pytest
 
 from op_test_utils import TensorProto, run_and_compare
 
@@ -84,46 +83,43 @@ def test_fused_matmul_batched_transb():
     )
 
 
-def test_fused_matmul_double_alpha_unsupported():
+def test_fused_matmul_double_alpha():
     a = np.random.default_rng(12).standard_normal((4, 8)).astype(np.float64)
     b = np.random.default_rng(13).standard_normal((8, 5)).astype(np.float64)
-    with pytest.raises(Exception, match="unsupported MatMul dtype"):
-        run_and_compare(
-            "FusedMatMul",
-            inputs={"A": a, "B": b},
-            outputs=[("Y", TensorProto.DOUBLE)],
-            attrs={"alpha": 0.25},
-            domain="com.microsoft",
-            rtol=1e-9,
-            atol=1e-10,
-        )
+    run_and_compare(
+        "FusedMatMul",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.DOUBLE)],
+        attrs={"alpha": 0.25},
+        domain="com.microsoft",
+        rtol=1e-9,
+        atol=1e-10,
+    )
 
 
-def test_fused_matmul_trans_batch_a_unsupported():
+def test_fused_matmul_trans_batch_a():
     a = np.random.default_rng(14).standard_normal((5, 2, 3)).astype(np.float32)
     b = np.random.default_rng(15).standard_normal((2, 3, 4)).astype(np.float32)
-    with pytest.raises(Exception, match="transBatch"):
-        run_and_compare(
-            "FusedMatMul",
-            inputs={"A": a, "B": b},
-            outputs=[("Y", TensorProto.FLOAT)],
-            attrs={"transBatchA": 1},
-            domain="com.microsoft",
-            rtol=2e-3,
-            atol=2e-4,
-        )
+    run_and_compare(
+        "FusedMatMul",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"transBatchA": 1},
+        domain="com.microsoft",
+        rtol=2e-3,
+        atol=2e-4,
+    )
 
 
-def test_fused_matmul_trans_batch_b_unsupported():
+def test_fused_matmul_trans_batch_b():
     a = np.random.default_rng(16).standard_normal((2, 5, 3)).astype(np.float32)
     b = np.random.default_rng(17).standard_normal((3, 2, 4)).astype(np.float32)
-    with pytest.raises(Exception, match="transBatch"):
-        run_and_compare(
-            "FusedMatMul",
-            inputs={"A": a, "B": b},
-            outputs=[("Y", TensorProto.FLOAT)],
-            attrs={"transBatchB": 1},
-            domain="com.microsoft",
-            rtol=2e-3,
-            atol=2e-4,
-        )
+    run_and_compare(
+        "FusedMatMul",
+        inputs={"A": a, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"transBatchB": 1},
+        domain="com.microsoft",
+        rtol=2e-3,
+        atol=2e-4,
+    )

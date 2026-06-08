@@ -8,9 +8,24 @@
 #include <string>
 
 #include "ep.h"
+#include "fusion/centered_reduce_fusion.h"
 #include "fusion/concat_matmul_fusion.h"
+#include "fusion/concat_split_fusion.h"
 #include "fusion/linear_fusion.h"
+#include "fusion/masked_gather_reduce_fusion.h"
+#include "fusion/pow_affine_split_reduce_fusion.h"
+#include "fusion/shape_expand_fusion.h"
+#include "fusion/shape_cast_concat_fusion.h"
+#include "fusion/shape_cast_reshape_fusion.h"
+#include "fusion/shape_cast_split_fusion.h"
+#include "fusion/shape_cast_source_fusion.h"
+#include "fusion/shape_cast_transpose_fusion.h"
+#include "fusion/shape_gather_fusion.h"
 #include "fusion/shape_reshape_fusion.h"
+#include "fusion/slice_concat_fusion.h"
+#include "fusion/slice_sum_concat_fusion.h"
+#include "fusion/split_reduce_fusion.h"
+#include "fusion/tile_mask_select_fusion.h"
 
 /*
  * Fusion node runtime bridge
@@ -103,12 +118,57 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       }
 
       std::string fused_node_name = fused_node.GetName();
-      if (IsShapeReshapeFusionGraph(graph)) {
+      if (IsMaskedGatherReduceFusionGraph(graph)) {
         ep->GetFusionComputes()[fused_node_name] =
-            CreateShapeReshapeFusion(graph, fused_node);
+            CreateMaskedGatherReduceFusion(graph, fused_node);
+      } else if (IsCenteredReduceFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateCenteredReduceFusion(graph, fused_node);
+      } else if (IsPowAffineSplitReduceFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreatePowAffineSplitReduceFusion(graph, fused_node);
+      } else if (IsSplitReduceFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateSplitReduceFusion(graph, fused_node);
       } else if (IsLinearFusionGraph(graph)) {
         ep->GetFusionComputes()[fused_node_name] =
             CreateLinearFusion(graph, fused_node);
+      } else if (IsConcatSplitFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateConcatSplitFusion(graph, fused_node);
+      } else if (IsShapeCastGatherFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateShapeCastGatherFusion(graph, fused_node);
+      } else if (IsSliceConcatFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateSliceConcatFusion(graph, fused_node);
+      } else if (IsShapeExpandFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateShapeExpandFusion(graph, fused_node);
+      } else if (IsShapeCastSourceFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateShapeCastSourceFusion(graph, fused_node);
+      } else if (IsShapeCastConcatFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateShapeCastConcatFusion(graph, fused_node);
+      } else if (IsShapeCastTransposeFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateShapeCastTransposeFusion(graph, fused_node);
+      } else if (IsShapeCastSplitFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateShapeCastSplitFusion(graph, fused_node);
+      } else if (IsShapeCastReshapeFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateShapeCastReshapeFusion(graph, fused_node);
+      } else if (IsShapeReshapeFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateShapeReshapeFusion(graph, fused_node);
+      } else if (IsTileMaskSelectFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateTileMaskSelectFusion(graph, fused_node);
+      } else if (IsSliceSumConcatFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateSliceSumConcatFusion(graph, fused_node);
       } else {
         ep->GetFusionComputes()[fused_node_name] =
             CreateConcatMatMulFusion(graph, fused_node);

@@ -9,6 +9,14 @@ musaError_t LaunchMusaBinaryFloatKernel(const float* lhs,
                                         MusaBinaryOp op,
                                         musaStream_t stream);
 
+musaError_t LaunchMusaBinaryScalarInt32Kernel(const int32_t* lhs,
+                                              const int32_t* rhs,
+                                              int32_t* output,
+                                              int64_t count,
+                                              bool scalar_lhs,
+                                              MusaBinaryOp op,
+                                              musaStream_t stream);
+
 musaError_t LaunchMusaBinaryKernel(const void* lhs,
                                    const void* rhs,
                                    void* output,

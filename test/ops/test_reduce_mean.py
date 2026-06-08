@@ -34,6 +34,17 @@ def test_reduce_mean_axis0_no_keepdims():
     )
 
 
+def test_reduce_mean_1d_axis0_no_keepdims_scalar():
+    x = np.random.default_rng(9).standard_normal((32,)).astype(np.float32)
+    outputs = run_and_compare(
+        "ReduceMean",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"axes": [0], "keepdims": 0},
+    )
+    assert outputs[0].shape == ()
+
+
 def test_reduce_mean_negative_axis_keepdims():
     x = np.random.default_rng(2).standard_normal((2, 3, 4)).astype(np.float32)
     run_and_compare(

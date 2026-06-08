@@ -33,6 +33,32 @@ def test_opset19_reduce_prod_int32():
     )
 
 
+def test_opset19_reduce_mean_1d_axis0_no_keepdims_scalar():
+    x = np.random.default_rng(3).standard_normal((32,)).astype(np.float32)
+    axes = np.array([0], dtype=np.int64)
+    outputs = run_and_compare(
+        "ReduceMean",
+        inputs={"X": x, "axes": axes},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"keepdims": 0},
+        opset=19,
+    )
+    assert outputs[0].shape == ()
+
+
+def test_opset19_reduce_prod_1d_negative_axis_no_keepdims_scalar():
+    x = np.random.default_rng(4).uniform(0.8, 1.2, (32,)).astype(np.float32)
+    axes = np.array([-1], dtype=np.int64)
+    outputs = run_and_compare(
+        "ReduceProd",
+        inputs={"X": x, "axes": axes},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"keepdims": 0},
+        opset=19,
+    )
+    assert outputs[0].shape == ()
+
+
 def test_opset19_reduce_sum_double():
     x = np.random.default_rng(1).standard_normal((4, 8)).astype(np.float64)
     axes = np.array([0], dtype=np.int64)

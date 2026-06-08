@@ -81,7 +81,6 @@ inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
       output_shape.push_back(input_shape[i]);
     }
   }
-  if (output_shape.empty()) output_shape.push_back(1);
 
   if (input_shape.size() > kMusaMaxBroadcastRank) {
     return UnsupportedReduceStatus("Reduce rank exceeds MUSA device limit");

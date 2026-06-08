@@ -1,6 +1,8 @@
 #include "tensor/tile_impl.h"
 #include "shared_inc/musa_kernel_common.mu.h"
 
+#include <stdint.h>
+
 namespace {
 
 __device__ __forceinline__ void CopyElement(const void* input,
@@ -51,6 +53,46 @@ __global__ void TileKernel(const void* input,
   }
 }
 
+template <typename T>
+__global__ void TileLastDimKernel(const T* input,
+                                  T* output,
+                                  int64_t rows,
+                                  int64_t cols,
+                                  int64_t repeats) {
+  const int64_t input_elements = rows * cols;
+  const int64_t thread_id =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t total_threads =
+      static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t input_index = thread_id; input_index < input_elements;
+       input_index += total_threads) {
+    const T value = input[input_index];
+    const int64_t row = input_index / cols;
+    const int64_t col = input_index - row * cols;
+    int64_t output_index = row * cols * repeats + col;
+    for (int64_t repeat = 0; repeat < repeats; ++repeat) {
+      output[output_index] = value;
+      output_index += cols;
+    }
+  }
+}
+
+template <typename T>
+__global__ void TileLastDimBroadcastKernel(const T* input,
+                                           T* output,
+                                           int64_t rows,
+                                           int64_t repeats) {
+  const int64_t output_elements = rows * repeats;
+  const int64_t thread_id =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t total_threads =
+      static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t output_index = thread_id; output_index < output_elements;
+       output_index += total_threads) {
+    output[output_index] = input[output_index / repeats];
+  }
+}
+
 }  // namespace
 
 musaError_t LaunchMusaTileKernel(const void* input,
@@ -63,5 +105,76 @@ musaError_t LaunchMusaTileKernel(const void* input,
   }
   TileKernel<<<BlocksForCount(params.total_elements), kThreadsPerBlock, 0,
                stream>>>(input, output, element_size, params);
+  return musaGetLastError();
+}
+
+musaError_t LaunchMusaTileLastDimKernel(const void* input,
+                                        void* output,
+                                        int32_t element_size,
+                                        int64_t rows,
+                                        int64_t cols,
+                                        int64_t repeats,
+                                        musaStream_t stream) {
+  if (rows == 0 || cols == 0 || repeats == 0) {
+    return musaSuccess;
+  }
+  const int64_t input_elements = rows * cols;
+  const int64_t output_elements = rows * cols * repeats;
+  switch (element_size) {
+    case 1:
+      if (cols == 1) {
+        TileLastDimBroadcastKernel<uint8_t>
+            <<<BlocksForCount(output_elements), kThreadsPerBlock, 0, stream>>>(
+                reinterpret_cast<const uint8_t*>(input),
+                reinterpret_cast<uint8_t*>(output), rows, repeats);
+      } else {
+        TileLastDimKernel<uint8_t><<<BlocksForCount(input_elements),
+                                     kThreadsPerBlock, 0, stream>>>(
+            reinterpret_cast<const uint8_t*>(input),
+            reinterpret_cast<uint8_t*>(output), rows, cols, repeats);
+      }
+      break;
+    case 2:
+      if (cols == 1) {
+        TileLastDimBroadcastKernel<uint16_t>
+            <<<BlocksForCount(output_elements), kThreadsPerBlock, 0, stream>>>(
+                reinterpret_cast<const uint16_t*>(input),
+                reinterpret_cast<uint16_t*>(output), rows, repeats);
+      } else {
+        TileLastDimKernel<uint16_t><<<BlocksForCount(input_elements),
+                                      kThreadsPerBlock, 0, stream>>>(
+            reinterpret_cast<const uint16_t*>(input),
+            reinterpret_cast<uint16_t*>(output), rows, cols, repeats);
+      }
+      break;
+    case 4:
+      if (cols == 1) {
+        TileLastDimBroadcastKernel<uint32_t>
+            <<<BlocksForCount(output_elements), kThreadsPerBlock, 0, stream>>>(
+                reinterpret_cast<const uint32_t*>(input),
+                reinterpret_cast<uint32_t*>(output), rows, repeats);
+      } else {
+        TileLastDimKernel<uint32_t><<<BlocksForCount(input_elements),
+                                      kThreadsPerBlock, 0, stream>>>(
+            reinterpret_cast<const uint32_t*>(input),
+            reinterpret_cast<uint32_t*>(output), rows, cols, repeats);
+      }
+      break;
+    case 8:
+      if (cols == 1) {
+        TileLastDimBroadcastKernel<uint64_t>
+            <<<BlocksForCount(output_elements), kThreadsPerBlock, 0, stream>>>(
+                reinterpret_cast<const uint64_t*>(input),
+                reinterpret_cast<uint64_t*>(output), rows, repeats);
+      } else {
+        TileLastDimKernel<uint64_t><<<BlocksForCount(input_elements),
+                                      kThreadsPerBlock, 0, stream>>>(
+            reinterpret_cast<const uint64_t*>(input),
+            reinterpret_cast<uint64_t*>(output), rows, cols, repeats);
+      }
+      break;
+    default:
+      return musaErrorNotSupported;
+  }
   return musaGetLastError();
 }

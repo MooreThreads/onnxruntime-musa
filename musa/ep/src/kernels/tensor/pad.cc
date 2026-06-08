@@ -115,9 +115,39 @@ OrtStatus* Pad::Compute(Ort::KernelContext& ctx) const {
                                       "Pad requires MUSA output");
   }
 
+  const uint64_t constant_value = ScalarInputOrZero(ctx, 2, elem_size);
+  const bool zero_constant = constant_value == 0;
+  const bool right_pad_last_axis_only =
+      input_shape.size() >= 2 &&
+      std::all_of(pads_begin.begin(), pads_begin.end(),
+                  [](int64_t pad) { return pad == 0; }) &&
+      [&]() {
+        for (size_t dim = 0; dim + 1 < pads_end.size(); ++dim) {
+          if (pads_end[dim] != 0) {
+            return false;
+          }
+        }
+        return pads_end.back() > 0;
+      }();
+  if (zero_constant && right_pad_last_axis_only) {
+    void* output_data = output.GetTensorMutableRawData();
+    const size_t output_bytes =
+        static_cast<size_t>(NumElements(output_shape)) * elem_size;
+    musaError_t status = musaMemsetAsync(output_data, 0, output_bytes, nullptr);
+    if (status != musaSuccess) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    }
+
+    const int64_t rows = NumElements(input_shape) / input_shape.back();
+    const size_t src_pitch = static_cast<size_t>(input_shape.back()) * elem_size;
+    const size_t dst_pitch = static_cast<size_t>(output_shape.back()) * elem_size;
+    return DeviceMemcpy2D(output_data, dst_pitch, input.GetTensorRawData(),
+                          src_pitch, src_pitch, static_cast<size_t>(rows));
+  }
+
   return LaunchStatus(LaunchMusaPadKernel(
-      input.GetTensorRawData(), output.GetTensorMutableRawData(),
-      ScalarInputOrZero(ctx, 2, elem_size), static_cast<int32_t>(elem_size),
+      input.GetTensorRawData(), output.GetTensorMutableRawData(), constant_value,
+      static_cast<int32_t>(elem_size),
       MakePadParams(input_shape, output_shape, pads_begin), nullptr));
 }
 }  // namespace

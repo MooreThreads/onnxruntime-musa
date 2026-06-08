@@ -21,6 +21,7 @@ class MusaEp : public OrtEp {
  public:
   struct Config {
     bool enable_prepack_weight_sharing = false;
+    bool enable_cpu_preferred_metadata = false;
   };
 
   MusaEp(MusaEpFactory& factory, const Config& config, const OrtLogger& logger);

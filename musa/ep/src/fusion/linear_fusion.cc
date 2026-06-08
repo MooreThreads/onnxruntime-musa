@@ -48,6 +48,16 @@
  *   Semantics:
  *     Y = activation(MatMul(A, B) + bias)
  *
+ * Pattern 3: MatMul + activation
+ *
+ *   MatMul(A, B)
+ *      |
+ *      v
+ *   Relu | LeakyRelu | Tanh
+ *
+ *   Semantics:
+ *     Y = activation(MatMul(A, B))
+ *
  * Runtime path:
  *   Both patterns are lowered to the shared MUSA GEMM helper so bias and
  *   activation can run on device without materializing unnecessary host-side
@@ -57,7 +67,6 @@
 namespace {
 
 constexpr size_t kNoBiasInput = std::numeric_limits<size_t>::max();
-
 bool IsOnnxDomain(const std::string& domain) {
   return domain.empty() || domain == "ai.onnx";
 }
@@ -159,8 +168,17 @@ OrtStatus* RunDeviceFusedGemm(float* y_data, const float* a_data,
         ORT_INVALID_ARGUMENT, "FusedGemm dimensions exceed int32 limits");
   }
 
-  if (TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape, b_shape, c_shape,
-                   y_shape, trans_a, trans_b, alpha, beta, has_bias,
+  const bool prefer_mudnn_no_bias =
+      IsEnvEnabled("MUSA_EP_PREFER_MUDNN_NO_BIAS_GEMM", true) && !has_bias;
+  const bool use_flat_mudnn = prefer_mudnn_no_bias && y_shape.size() != 2;
+  const bool try_mudnn_first =
+      !ResolveTF32EnabledForMublas() || prefer_mudnn_no_bias;
+  std::vector<int64_t> mudnn_y_shape = use_flat_mudnn
+                                           ? std::vector<int64_t>{m, n}
+                                           : y_shape;
+  if (try_mudnn_first &&
+      TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape, b_shape, c_shape,
+                   mudnn_y_shape, trans_a, trans_b, alpha, beta, has_bias,
                    ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)) {
     if (activation.empty()) {
       return nullptr;
@@ -186,16 +204,20 @@ OrtStatus* RunDeviceFusedGemm(float* y_data, const float* a_data,
   int mi = static_cast<int>(m);
   int ki = static_cast<int>(k);
   int ni = static_cast<int>(n);
-  float zero = 0.0f;
   mublasStatus status =
-      mublasSgemm(handle, op_b, op_a, ni, mi, ki, &alpha, b_data, ldb,
-                  a_data, lda, &zero, y_data, ni);
+      MublasGemmEx(handle, op_b, op_a, ni, mi, ki, alpha, b_data, ldb,
+                   a_data, lda, 0.0, y_data, ni,
+                   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
   if (status != MUBLAS_STATUS_SUCCESS) {
     return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSgemm failed");
   }
 
-  MusaUnaryOp activation_op = MusaUnaryOp::Relu;
   const bool has_activation = !activation.empty();
+  if (!has_bias && !has_activation) {
+    return nullptr;
+  }
+
+  MusaUnaryOp activation_op = MusaUnaryOp::Relu;
   if (has_activation && !TryMapActivation(activation, activation_op)) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "unsupported FusedGemm activation");
@@ -320,6 +342,86 @@ struct LinearFusionCompute : FusionNodeCompute {
   float activation_alpha;
 };
 
+struct ReshapeMatMulReshapeFusionCompute : FusionNodeCompute {
+  ReshapeMatMulReshapeFusionCompute(size_t a_input_index,
+                                    std::vector<size_t> b_input_indices)
+      : a_input_index(a_input_index),
+        b_input_indices(std::move(b_input_indices)) {}
+
+  OrtStatus* Compute(OrtKernelContext* kernel_context) const override {
+    try {
+      Ort::KernelContext ctx(kernel_context);
+      Ort::ConstValue a = ctx.GetInput(a_input_index);
+      ValidateFloatTensor(a, "A");
+      std::vector<int64_t> a_shape = TensorShape(a);
+      if (a_shape.size() < 2) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "ReshapeMatMulReshape requires A rank >= 2");
+      }
+
+      const int64_t k = a_shape.back();
+      if (k <= 0) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT,
+            "ReshapeMatMulReshape requires positive K dimension");
+      }
+      const int64_t m = NumElementsChecked(a_shape) / k;
+      const std::vector<int64_t> compute_a_shape = {m, k};
+      const float* a_data = a.GetTensorData<float>();
+      if (!IsGpuMemory(a.GetTensorMemoryInfo())) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "ReshapeMatMulReshape requires MUSA input tensor");
+      }
+
+      for (size_t output_index = 0; output_index < b_input_indices.size();
+           ++output_index) {
+        Ort::ConstValue b = ctx.GetInput(b_input_indices[output_index]);
+        ValidateFloatTensor(b, "B");
+        std::vector<int64_t> b_shape = TensorShape(b);
+        if (b_shape.size() != 2 || b_shape[0] != k || b_shape[1] <= 0) {
+          return Ort::GetApi().CreateStatus(
+              ORT_INVALID_ARGUMENT,
+              "ReshapeMatMulReshape B shape must be [K, N]");
+        }
+        if (!IsGpuMemory(b.GetTensorMemoryInfo())) {
+          return Ort::GetApi().CreateStatus(
+              ORT_NOT_IMPLEMENTED,
+              "ReshapeMatMulReshape requires MUSA weight tensor");
+        }
+
+        std::vector<int64_t> y_shape = a_shape;
+        y_shape.back() = b_shape[1];
+        Ort::UnownedValue y = ctx.GetOutput(output_index, y_shape);
+        if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
+          return Ort::GetApi().CreateStatus(
+              ORT_NOT_IMPLEMENTED,
+              "ReshapeMatMulReshape requires MUSA output tensor");
+        }
+
+        OrtStatus* status = RunDeviceFusedGemm(
+            y.GetTensorMutableData<float>(), a_data, b.GetTensorData<float>(),
+            nullptr, compute_a_shape, b_shape, {1}, y_shape, false, false,
+            1.0f, 1.0f, "", 0.01f, false);
+        if (status != nullptr) {
+          return status;
+        }
+      }
+
+      return nullptr;
+    } catch (const Ort::Exception& ex) {
+      Ort::Status status(ex);
+      return status.release();
+    } catch (const std::exception& ex) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, ex.what());
+    }
+  }
+
+  size_t a_input_index;
+  std::vector<size_t> b_input_indices;
+};
+
 std::string ActivationNameAndAlpha(Ort::ConstNode activation_node,
                                    float& activation_alpha) {
   std::string activation = activation_node.GetOperatorType();
@@ -348,6 +450,84 @@ std::unordered_map<std::string, size_t> FusedInputIndices(
     fused_input_indices.emplace(Name(fused_inputs[i]), i);
   }
   return fused_input_indices;
+}
+
+std::unique_ptr<FusionNodeCompute> CreateReshapeMatMulReshapeFusion(
+    Ort::ConstGraph graph, Ort::ConstNode fused_node) {
+  Ort::ConstNode input_reshape{nullptr};
+  std::unordered_map<std::string, size_t> output_to_b_index;
+  auto fused_input_indices = FusedInputIndices(fused_node);
+
+  for (Ort::ConstNode node : graph.GetNodes()) {
+    if (!IsOnnxOp(node, "MatMul")) {
+      continue;
+    }
+
+    std::vector<Ort::ConstValueInfo> matmul_inputs = node.GetInputs();
+    std::vector<Ort::ConstValueInfo> matmul_outputs = node.GetOutputs();
+    if (matmul_inputs.size() != 2 || matmul_outputs.size() != 1) {
+      throw std::runtime_error("invalid ReshapeMatMulReshape MatMul");
+    }
+
+    Ort::ConstNode reshape_before = matmul_inputs[0].GetProducerNode().node;
+    if (!IsOnnxOp(reshape_before, "Reshape")) {
+      throw std::runtime_error(
+          "ReshapeMatMulReshape expects MatMul input from Reshape");
+    }
+    if (!input_reshape) {
+      input_reshape = reshape_before;
+    } else if (input_reshape.GetId() != reshape_before.GetId()) {
+      throw std::runtime_error(
+          "ReshapeMatMulReshape expects one shared input Reshape");
+    }
+
+    std::vector<Ort::ValueInfoConsumerProducerInfo> consumers =
+        matmul_outputs[0].GetConsumers();
+    if (consumers.size() != 1 || consumers[0].index != 0 ||
+        !IsOnnxOp(consumers[0].node, "Reshape")) {
+      throw std::runtime_error(
+          "ReshapeMatMulReshape expects MatMul output to feed Reshape");
+    }
+
+    std::vector<Ort::ConstValueInfo> output_reshape_outputs =
+        consumers[0].node.GetOutputs();
+    if (output_reshape_outputs.size() != 1) {
+      throw std::runtime_error(
+          "ReshapeMatMulReshape output Reshape must have one output");
+    }
+
+    output_to_b_index.emplace(
+        Name(output_reshape_outputs[0]),
+        GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[1])));
+  }
+
+  if (!input_reshape || output_to_b_index.empty()) {
+    throw std::runtime_error("invalid ReshapeMatMulReshape fused graph");
+  }
+
+  std::vector<Ort::ConstValueInfo> reshape_inputs = input_reshape.GetInputs();
+  if (reshape_inputs.size() != 2) {
+    throw std::runtime_error(
+        "ReshapeMatMulReshape input Reshape must have two inputs");
+  }
+
+  std::vector<size_t> b_input_indices;
+  for (Ort::ConstValueInfo output : fused_node.GetOutputs()) {
+    auto it = output_to_b_index.find(Name(output));
+    if (it == output_to_b_index.end()) {
+      throw std::runtime_error(
+          "unable to map ReshapeMatMulReshape fused output");
+    }
+    b_input_indices.push_back(it->second);
+  }
+  if (b_input_indices.size() != output_to_b_index.size()) {
+    throw std::runtime_error(
+        "ReshapeMatMulReshape fused output count mismatch");
+  }
+
+  return std::make_unique<ReshapeMatMulReshapeFusionCompute>(
+      GetFusedInputIndex(fused_input_indices, Name(reshape_inputs[0])),
+      std::move(b_input_indices));
 }
 
 std::unique_ptr<FusionNodeCompute> CreateGemmActivationFusion(
@@ -387,11 +567,13 @@ std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
   std::vector<Ort::ConstValueInfo> matmul_outputs = matmul_node.GetOutputs();
   std::vector<Ort::ConstValueInfo> add_inputs = add_node.GetInputs();
   std::vector<Ort::ConstValueInfo> add_outputs = add_node.GetOutputs();
-  std::vector<Ort::ConstValueInfo> activation_inputs = activation_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> activation_inputs =
+      activation_node ? activation_node.GetInputs()
+                      : std::vector<Ort::ConstValueInfo>{};
   if (matmul_inputs.size() != 2 || matmul_outputs.size() != 1 ||
       add_inputs.size() != 2 || add_outputs.size() != 1 ||
-      activation_inputs.size() != 1) {
-    throw std::runtime_error("invalid MatMulAddActivation fused graph");
+      (activation_node && activation_inputs.size() != 1)) {
+    throw std::runtime_error("invalid MatMulAdd fused graph");
   }
 
   const std::string matmul_output_name = Name(matmul_outputs[0]);
@@ -403,8 +585,36 @@ std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
   } else {
     throw std::runtime_error("MatMul output does not feed Add");
   }
-  if (Name(activation_inputs[0]) != Name(add_outputs[0])) {
+  if (activation_node && Name(activation_inputs[0]) != Name(add_outputs[0])) {
     throw std::runtime_error("Add output does not feed activation");
+  }
+
+  auto fused_input_indices = FusedInputIndices(fused_node);
+  float activation_alpha = 0.01f;
+  std::string activation;
+  if (activation_node) {
+    activation = ActivationNameAndAlpha(activation_node, activation_alpha);
+  }
+  return std::make_unique<LinearFusionCompute>(
+      GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[0])),
+      GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[1])),
+      GetFusedInputIndex(fused_input_indices,
+                         Name(add_inputs[static_cast<size_t>(bias_input_idx)])),
+      false, false, 1.0f, 1.0f, true, std::move(activation),
+      activation_alpha);
+}
+
+std::unique_ptr<FusionNodeCompute> CreateMatMulActivationFusion(
+    Ort::ConstNode matmul_node, Ort::ConstNode activation_node,
+    Ort::ConstNode fused_node) {
+  std::vector<Ort::ConstValueInfo> matmul_inputs = matmul_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> matmul_outputs = matmul_node.GetOutputs();
+  std::vector<Ort::ConstValueInfo> activation_inputs =
+      activation_node.GetInputs();
+  if (matmul_inputs.size() != 2 || matmul_outputs.size() != 1 ||
+      activation_inputs.size() != 1 ||
+      Name(matmul_outputs[0]) != Name(activation_inputs[0])) {
+    throw std::runtime_error("invalid MatMulActivation fused graph");
   }
 
   auto fused_input_indices = FusedInputIndices(fused_node);
@@ -414,9 +624,7 @@ std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
   return std::make_unique<LinearFusionCompute>(
       GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[0])),
       GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[1])),
-      GetFusedInputIndex(fused_input_indices,
-                         Name(add_inputs[static_cast<size_t>(bias_input_idx)])),
-      false, false, 1.0f, 1.0f, true, std::move(activation),
+      kNoBiasInput, false, false, 1.0f, 1.0f, true, std::move(activation),
       activation_alpha);
 }
 
@@ -427,14 +635,18 @@ bool IsLinearFusionGraph(Ort::ConstGraph graph) {
   bool has_matmul = false;
   bool has_add = false;
   bool has_activation = false;
+  int reshape_count = 0;
   for (Ort::ConstNode node : graph.GetNodes()) {
     has_gemm = has_gemm || IsOnnxOp(node, "Gemm");
     has_matmul = has_matmul || IsOnnxOp(node, "MatMul");
     has_add = has_add || IsOnnxOp(node, "Add");
     has_activation = has_activation || IsActivationOp(node);
+    reshape_count += IsOnnxOp(node, "Reshape") ? 1 : 0;
   }
   return (has_gemm && has_activation) ||
-         (has_matmul && has_add && has_activation);
+         (has_matmul && (has_add || has_activation)) ||
+         (has_matmul && reshape_count >= 2 && !has_add && !has_activation &&
+          !has_gemm);
 }
 
 std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
@@ -458,11 +670,19 @@ std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
   if (gemm_node && activation_node) {
     return CreateGemmActivationFusion(gemm_node, activation_node, fused_node);
   }
-  if (matmul_node && add_node && activation_node) {
+  if (matmul_node && add_node) {
     return CreateMatMulAddActivationFusion(matmul_node, add_node, activation_node,
                                       fused_node);
   }
+  if (matmul_node && activation_node) {
+    return CreateMatMulActivationFusion(matmul_node, activation_node,
+                                        fused_node);
+  }
+  if (matmul_node) {
+    return CreateReshapeMatMulReshapeFusion(graph, fused_node);
+  }
 
   throw std::runtime_error(
-      "FusedGemm fusion expects Gemm+activation or MatMul+Add+activation");
+      "FusedGemm fusion expects Gemm+activation, MatMul+Add(+activation), "
+      "MatMul+activation, or Reshape+MatMul+Reshape");
 }

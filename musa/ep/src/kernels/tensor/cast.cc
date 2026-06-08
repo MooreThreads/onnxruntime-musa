@@ -7,7 +7,48 @@
 namespace {
 constexpr int64_t kMaxCpuMetadataCastElements = kMusaMaxBroadcastRank;
 
-OrtStatus* CastCpuIntMetadata(Ort::ConstValue input, Ort::UnownedValue output,
+template <typename SrcT, typename DstT>
+OrtStatus* CastCpuMetadataTyped(Ort::ConstValue input,
+                                Ort::UnownedValue output) {
+  std::vector<SrcT> src = ReadTyped<SrcT>(input);
+  std::vector<DstT> dst;
+  dst.reserve(src.size());
+  for (SrcT value : src) {
+    if constexpr (std::is_integral_v<SrcT> && std::is_integral_v<DstT>) {
+      long double v = static_cast<long double>(value);
+      if (v > static_cast<long double>(std::numeric_limits<DstT>::max()) ||
+          v < static_cast<long double>(std::numeric_limits<DstT>::min())) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT, "Cast metadata integer value overflows");
+      }
+    }
+    dst.push_back(static_cast<DstT>(value));
+  }
+  return WriteTyped<DstT>(output, dst);
+}
+
+template <typename SrcT>
+OrtStatus* CastCpuMetadataFromSrc(Ort::ConstValue input,
+                                  Ort::UnownedValue output,
+                                  ONNXTensorElementDataType dst_type) {
+  switch (dst_type) {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32:
+      return CastCpuMetadataTyped<SrcT, int32_t>(input, output);
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64:
+      return CastCpuMetadataTyped<SrcT, int64_t>(input, output);
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+      return CastCpuMetadataTyped<SrcT, float>(input, output);
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE:
+      return CastCpuMetadataTyped<SrcT, double>(input, output);
+    default:
+      return Ort::GetApi().CreateStatus(
+          ORT_NOT_IMPLEMENTED,
+          "Cast CPU metadata path unsupported destination dtype");
+  }
+}
+
+OrtStatus* CastCpuIntMetadata(Ort::ConstValue input,
+                              Ort::UnownedValue output,
                               ONNXTensorElementDataType src_type,
                               ONNXTensorElementDataType dst_type,
                               int64_t count) {
@@ -16,49 +57,15 @@ OrtStatus* CastCpuIntMetadata(Ort::ConstValue input, Ort::UnownedValue output,
         ORT_NOT_IMPLEMENTED,
         "Cast CPU metadata path only supports small shape tensors");
   }
-  if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 &&
-      dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
-    std::vector<int64_t> src = ReadTyped<int64_t>(input);
-    std::vector<int32_t> dst;
-    dst.reserve(src.size());
-    for (int64_t value : src) {
-      if (value > std::numeric_limits<int32_t>::max() ||
-          value < std::numeric_limits<int32_t>::min()) {
-        return Ort::GetApi().CreateStatus(
-            ORT_INVALID_ARGUMENT, "Cast metadata int64 value overflows int32");
-      }
-      dst.push_back(static_cast<int32_t>(value));
-    }
-    return WriteTyped<int32_t>(output, dst);
+  if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+    return CastCpuMetadataFromSrc<int64_t>(input, output, dst_type);
   }
-  if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 &&
-      dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-    std::vector<int32_t> src = ReadTyped<int32_t>(input);
-    std::vector<int64_t> dst(src.begin(), src.end());
-    return WriteTyped<int64_t>(output, dst);
-  }
-  if (dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    std::vector<float> dst;
-    if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-      std::vector<int64_t> src = ReadTyped<int64_t>(input);
-      dst.reserve(src.size());
-      for (int64_t value : src) {
-        dst.push_back(static_cast<float>(value));
-      }
-      return WriteTyped<float>(output, dst);
-    }
-    if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
-      std::vector<int32_t> src = ReadTyped<int32_t>(input);
-      dst.reserve(src.size());
-      for (int32_t value : src) {
-        dst.push_back(static_cast<float>(value));
-      }
-      return WriteTyped<float>(output, dst);
-    }
+  if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    return CastCpuMetadataFromSrc<int32_t>(input, output, dst_type);
   }
   return Ort::GetApi().CreateStatus(
       ORT_NOT_IMPLEMENTED,
-      "Cast CPU metadata path only supports int32/int64 casts");
+      "Cast CPU metadata path only supports int32/int64 sources");
 }
 
 class Cast : public OpKernelBase<Cast> {

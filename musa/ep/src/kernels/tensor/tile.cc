@@ -82,6 +82,20 @@ OrtStatus* Tile::Compute(Ort::KernelContext& ctx) const {
                                       "Tile requires MUSA output");
   }
 
+  if (output_shape == input_shape) {
+    return CopyRawTensor(input, y, input.GetTensorSizeInBytes());
+  }
+
+  if (!input_shape.empty() && input_shape.back() > 0 && repeats.back() > 1 &&
+      std::all_of(repeats.begin(), repeats.end() - 1,
+                  [](int64_t repeat) { return repeat == 1; })) {
+    const int64_t cols = input_shape.back();
+    const int64_t rows = NumElements(input_shape) / cols;
+    return LaunchStatus(LaunchMusaTileLastDimKernel(
+        input.GetTensorRawData(), y.GetTensorMutableRawData(),
+        static_cast<int32_t>(elem_size), rows, cols, repeats.back(), nullptr));
+  }
+
   return LaunchStatus(LaunchMusaTileKernel(
       input.GetTensorRawData(), y.GetTensorMutableRawData(),
       static_cast<int32_t>(elem_size),

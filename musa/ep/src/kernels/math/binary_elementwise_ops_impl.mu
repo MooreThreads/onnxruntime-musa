@@ -91,23 +91,6 @@ __global__ void BinaryFloatKernel(const float* lhs,
   }
 }
 
-__global__ void BinaryScalarInt32Kernel(const int32_t* lhs,
-                                        const int32_t* rhs,
-                                        int32_t* output,
-                                        int64_t count,
-                                        bool scalar_lhs,
-                                        MusaBinaryOp op) {
-  const int64_t thread_id = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  const int64_t total_threads = static_cast<int64_t>(gridDim.x) * blockDim.x;
-  const int32_t scalar = scalar_lhs ? lhs[0] : rhs[0];
-  const int32_t* tensor = scalar_lhs ? rhs : lhs;
-  for (int64_t index = thread_id; index < count; index += total_threads) {
-    const int32_t value = tensor[index];
-    output[index] = BinaryValueTyped(scalar_lhs ? scalar : value,
-                                     scalar_lhs ? value : scalar, op);
-  }
-}
-
 template <typename T>
 __global__ void BinaryFloatLikeKernel(const T* lhs,
                                       const T* rhs,
@@ -258,21 +241,6 @@ musaError_t LaunchMusaBinaryFloatKernel(const float* lhs,
                                         musaStream_t stream) {
   return LaunchMusaBinaryKernel(lhs, rhs, output, params, op,
                                 MusaElementType::Float, stream);
-}
-
-musaError_t LaunchMusaBinaryScalarInt32Kernel(const int32_t* lhs,
-                                              const int32_t* rhs,
-                                              int32_t* output,
-                                              int64_t count,
-                                              bool scalar_lhs,
-                                              MusaBinaryOp op,
-                                              musaStream_t stream) {
-  if (count == 0) {
-    return musaSuccess;
-  }
-  BinaryScalarInt32Kernel<<<BlocksForCount(count), kThreadsPerBlock, 0,
-                            stream>>>(lhs, rhs, output, count, scalar_lhs, op);
-  return musaGetLastError();
 }
 
 template <typename T, typename TExponent>

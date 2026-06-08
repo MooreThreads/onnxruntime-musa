@@ -8,11 +8,3 @@ musaError_t LaunchMusaSplitCopies(const void* input, void* const* outputs,
                                   int64_t inner, int64_t input_axis,
                                   int32_t element_size,
                                   musaStream_t stream);
-
-musaError_t LaunchMusaSplitBatchedCopy(const void* input, void* const* outputs,
-                                       const int64_t* split_sizes,
-                                       const int64_t* split_offsets,
-                                       int64_t output_count, int64_t outer,
-                                       int64_t inner, int64_t input_axis,
-                                       int32_t element_size,
-                                       musaStream_t stream);

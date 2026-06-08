@@ -79,16 +79,3 @@ def test_split_uint8_three_outputs():
         ],
         attrs={"axis": 1},
     )
-
-
-def test_split_many_single_column_outputs():
-    output_count = 64
-    x = np.arange(5 * output_count, dtype=np.float32).reshape(5, output_count)
-    split = np.ones(output_count, dtype=np.int64)
-    outputs = [(f"Y{i}", TensorProto.FLOAT) for i in range(output_count)]
-    run_and_compare(
-        "Split",
-        inputs={"X": x, "split": split},
-        outputs=outputs,
-        attrs={"axis": 1},
-    )

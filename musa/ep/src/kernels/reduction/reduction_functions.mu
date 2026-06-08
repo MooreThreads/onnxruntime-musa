@@ -236,39 +236,6 @@ __global__ void ReduceSingleAxisKernel(const T* input,
 }
 
 template <typename T, typename AccT>
-__global__ void ReduceSingleAxisPower2InnerKernel(const T* input,
-                                                  T* output,
-                                                  MusaReduceParams params,
-                                                  MusaReduceOp op,
-                                                  int32_t inner_shift) {
-  const int64_t thread_id = static_cast<int64_t>(blockIdx.x) * blockDim.x +
-                            threadIdx.x;
-  const int64_t total_threads = static_cast<int64_t>(gridDim.x) * blockDim.x;
-  const int64_t inner_size = params.inner_size;
-  const int64_t inner_mask = inner_size - 1;
-  const int64_t reduce_dim = params.reduce_dim;
-  for (int64_t output_index = thread_id; output_index < params.output_elements;
-       output_index += total_threads) {
-    const int64_t outer = output_index >> inner_shift;
-    const int64_t inner = output_index & inner_mask;
-    const int64_t input_base = (outer * reduce_dim) * inner_size + inner;
-
-    AccT acc = ReduceInitValue<AccT>(op);
-    for (int64_t r = 0; r < reduce_dim; ++r) {
-      acc = ReduceUpdateValue(
-          acc, ReduceToAccum<AccT>(input[input_base + r * inner_size]), op);
-    }
-    if (op == MusaReduceOp::Mean) {
-      acc /= static_cast<AccT>(reduce_dim);
-    }
-    if (op == MusaReduceOp::L2) {
-      acc = sqrt(acc);
-    }
-    output[output_index] = ReduceFromAccum<T, AccT>(acc);
-  }
-}
-
-template <typename T, typename AccT>
 __global__ void ReduceLastAxisBlockKernel(const T* input,
                                           T* output,
                                           MusaReduceParams params,
@@ -359,47 +326,7 @@ __global__ void ReduceLastAxisMultiOutputBlockKernel(const T* input,
   }
 }
 
-__global__ void ReduceSumInt64ScalarKernel(const int64_t* input,
-                                           int64_t* output,
-                                           int64_t count) {
-  int64_t sum = 0;
-  const int64_t thread_id = static_cast<int64_t>(blockIdx.x) * blockDim.x +
-                            threadIdx.x;
-  const int64_t total_threads = static_cast<int64_t>(gridDim.x) * blockDim.x;
-  for (int64_t index = thread_id; index < count; index += total_threads) {
-    sum += input[index];
-  }
-
-  __shared__ int64_t shared[kThreadsPerBlock];
-  shared[threadIdx.x] = sum;
-  __syncthreads();
-  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      shared[threadIdx.x] += shared[threadIdx.x + stride];
-    }
-    __syncthreads();
-  }
-
-  if (threadIdx.x == 0) {
-    atomicAdd(reinterpret_cast<unsigned long long*>(output),
-              static_cast<unsigned long long>(shared[0]));
-  }
-}
-
 }  // namespace
-
-bool IsPositivePowerOfTwo(int64_t value) {
-  return value > 0 && (value & (value - 1)) == 0;
-}
-
-int32_t Log2PowerOfTwo(int64_t value) {
-  int32_t shift = 0;
-  while (value > 1) {
-    value >>= 1;
-    ++shift;
-  }
-  return shift;
-}
 
 template <typename T, typename AccT>
 musaError_t LaunchMusaReduceTyped(const void* input,
@@ -425,30 +352,10 @@ musaError_t LaunchMusaReduceTyped(const void* input,
                 params, op, group_size, outputs_per_block);
         return musaGetLastError();
       }
-      if (params.reduce_dim <= 1024 && params.output_elements >= 1024) {
-        const int group_size = 128;
-        const int outputs_per_block = kThreadsPerBlock / group_size;
-        ReduceLastAxisMultiOutputBlockKernel<T, AccT>
-            <<<static_cast<int>((params.output_elements + outputs_per_block -
-                                 1) /
-                                outputs_per_block),
-               kThreadsPerBlock, 0, stream>>>(
-                reinterpret_cast<const T*>(input), reinterpret_cast<T*>(output),
-                params, op, group_size, outputs_per_block);
-        return musaGetLastError();
-      }
       ReduceLastAxisBlockKernel<T, AccT>
           <<<static_cast<int>(params.output_elements), kThreadsPerBlock, 0,
              stream>>>(reinterpret_cast<const T*>(input),
                        reinterpret_cast<T*>(output), params, op);
-      return musaGetLastError();
-    }
-    if (params.inner_size > 1 && IsPositivePowerOfTwo(params.inner_size)) {
-      ReduceSingleAxisPower2InnerKernel<T, AccT>
-          <<<BlocksForCount(params.output_elements), kThreadsPerBlock, 0,
-             stream>>>(reinterpret_cast<const T*>(input),
-                       reinterpret_cast<T*>(output), params, op,
-                       Log2PowerOfTwo(params.inner_size));
       return musaGetLastError();
     }
     ReduceSingleAxisKernel<T, AccT>
@@ -478,21 +385,6 @@ musaError_t LaunchMusaReduceKernel(const void* input,
                                    MusaReduceOp op,
                                    MusaElementType elem_type,
                                    musaStream_t stream) {
-  if (elem_type == MusaElementType::Int64 && op == MusaReduceOp::Sum &&
-      params.output_elements == 1 && params.reduction_elements >= 1024) {
-    musaError_t memset_status =
-        musaMemsetAsync(output, 0, sizeof(int64_t), stream);
-    if (memset_status != musaSuccess) {
-      return memset_status;
-    }
-    const int64_t blocks64 =
-        (params.reduction_elements + kThreadsPerBlock - 1) / kThreadsPerBlock;
-    const int blocks = static_cast<int>(blocks64 > 4096 ? 4096 : blocks64);
-    ReduceSumInt64ScalarKernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-        reinterpret_cast<const int64_t*>(input),
-        reinterpret_cast<int64_t*>(output), params.reduction_elements);
-    return musaGetLastError();
-  }
   switch (elem_type) {
     case MusaElementType::Uint8:
       if (op == MusaReduceOp::Mean) return musaErrorNotSupported;

@@ -5,14 +5,11 @@
 #include "tensor/slice_impl.h"
 
 namespace {
-constexpr size_t kMinSliceMemcpy2DWidthBytes = 256;
-
 class Slice : public OpKernelBase<Slice> {
  public:
   Slice(const OrtKernelInfo* /*info*/, void* /*state*/) {}
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
 };
-
 
 OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
   Ort::ConstValue input0 = ctx.GetInput(0);
@@ -84,7 +81,7 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
       const size_t src_offset =
           static_cast<size_t>(norm_starts[0] * shape0[1] + norm_starts[1]) *
           elem_size;
-      if (width_bytes >= kMinSliceMemcpy2DWidthBytes) {
+      if (width_bytes >= 256) {
         return DeviceMemcpy2D(dst_base, dst_pitch, src_base + src_offset,
                               src_pitch, width_bytes,
                               static_cast<size_t>(height));
@@ -97,30 +94,6 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
                   [](int64_t step) { return step == 1; });
   if (all_unit_steps && IsGpuMemory(input0.GetTensorMemoryInfo()) &&
       IsGpuMemory(y.GetTensorMemoryInfo())) {
-    const size_t last_dim = shape0.empty() ? 0 : shape0.size() - 1;
-    const bool last_axis_slice =
-        shape0.size() >= 2 && norm_steps[last_dim] == 1 &&
-        out_shape[last_dim] > 0 &&
-        norm_starts[last_dim] + out_shape[last_dim] <= shape0[last_dim] &&
-        [&]() {
-          for (size_t dim = 0; dim < last_dim; ++dim) {
-            if (norm_starts[dim] != 0 || out_shape[dim] != shape0[dim]) {
-              return false;
-            }
-          }
-          return true;
-        }();
-    if (last_axis_slice) {
-      musaError_t status = LaunchMusaSliceLastAxisKernel(
-          input0.GetTensorRawData(), y.GetTensorMutableRawData(),
-          static_cast<int32_t>(elem_size), NumElements(out_shape),
-          shape0[last_dim], out_shape[last_dim], norm_starts[last_dim],
-          nullptr);
-      if (status != musaErrorNotSupported) {
-        return LaunchStatus(status);
-      }
-    }
-
     size_t copy_dim = shape0.size();
     for (size_t dim = 0; dim < shape0.size(); ++dim) {
       if (norm_starts[dim] != 0 || out_shape[dim] != shape0[dim]) {
@@ -154,7 +127,7 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
               static_cast<size_t>(width_elems) * elem_size;
           const size_t src_offset =
               static_cast<size_t>(norm_starts[copy_dim] * suffix) * elem_size;
-          if (width_bytes >= kMinSliceMemcpy2DWidthBytes) {
+          if (width_bytes >= 256) {
             return DeviceMemcpy2D(dst_base, dst_pitch, src_base + src_offset,
                                   src_pitch, width_bytes,
                                   static_cast<size_t>(height));
@@ -185,7 +158,6 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
   return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                     "Slice requires MUSA input and output");
 }
-
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(

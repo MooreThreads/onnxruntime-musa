@@ -213,17 +213,12 @@ OrtStatus* ORT_API_CALL MusaEpFactory::CreateEpImpl(
   }
 
   std::string enable_prepack_weight_sharing;
-  std::string enable_cpu_preferred_metadata;
   RETURN_IF_ERROR(GetSessionConfigEntryOrDefault(
       *session_options, "ep.musa.enable_prepack_weight_sharing", "0",
       enable_prepack_weight_sharing));
-  RETURN_IF_ERROR(GetSessionConfigEntryOrDefault(
-      *session_options, "ep.musa.enable_cpu_preferred_metadata", "0",
-      enable_cpu_preferred_metadata));
 
   MusaEp::Config config = {};
   config.enable_prepack_weight_sharing = enable_prepack_weight_sharing == "1";
-  config.enable_cpu_preferred_metadata = enable_cpu_preferred_metadata == "1";
 
   auto actual_ep = std::make_unique<MusaEp>(*factory, config, *logger);
   *ep = actual_ep.release();

@@ -33,18 +33,6 @@ def test_min_int64_binary_broadcast():
     run_and_compare("Min", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.INT64)])
 
 
-def test_min_int32_tensor_scalar():
-    a = np.arange(32, dtype=np.int32).reshape(8, 4)
-    b = np.array(17, dtype=np.int32)
-    run_and_compare("Min", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.INT32)])
-
-
-def test_min_int32_scalar_tensor():
-    a = np.array(17, dtype=np.int32)
-    b = np.arange(32, dtype=np.int32).reshape(8, 4)
-    run_and_compare("Min", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.INT32)])
-
-
 def test_min_float_three_inputs_broadcast():
     a = np.random.default_rng(2).standard_normal((2, 3, 1)).astype(np.float32)
     b = np.random.default_rng(3).standard_normal((1, 3, 4)).astype(np.float32)

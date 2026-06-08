@@ -29,17 +29,6 @@ def test_pad_constant_float():
     )
 
 
-def test_pad_zero_right_last_axis_2d():
-    data = np.random.default_rng(0).normal(size=(4, 7)).astype(np.float32)
-    pads = np.array([0, 0, 0, 3], dtype=np.int64)
-    run_and_compare(
-        "Pad",
-        inputs={"data": data, "pads": pads},
-        outputs=[("output", TensorProto.FLOAT)],
-        attrs={"mode": "constant"},
-    )
-
-
 @pytest.mark.parametrize(
     ("np_dtype", "tensor_type", "data", "value"),
     [

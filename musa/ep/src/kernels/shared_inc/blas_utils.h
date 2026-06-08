@@ -29,27 +29,16 @@ inline OrtStatus* EnsureMublasHandle(mublasHandle_t* handle) {
   return nullptr;
 }
 
-inline bool IsEnvEnabled(const char* name, bool default_value = false) {
-  const char* tf32_env = std::getenv(name);
-  if (tf32_env == nullptr) {
-    return default_value;
-  }
-  return std::atoi(tf32_env) != 0;
-}
-
-inline bool ResolveTF32EnabledForMudnn() {
-  return IsEnvEnabled("MUSA_ENABLE_MUDNN_TF32", true);
-}
-
-inline bool ResolveTF32EnabledForMublas() {
-  return IsEnvEnabled("MUSA_ENABLE_MUBLAS_TF32");
+inline bool ResolveTF32EnabledForGemm() {
+  const char* tf32_env = std::getenv("MUSA_ENABLE_TF32");
+  return tf32_env != nullptr && std::atoi(tf32_env) != 0;
 }
 
 inline OrtStatus* EnsureMudnnHandle(::musa::dnn::Handle** handle) {
   static thread_local std::unique_ptr<::musa::dnn::Handle> g_handle;
   if (!g_handle) {
     g_handle = std::make_unique<::musa::dnn::Handle>();
-    auto status = g_handle->SetAllowTF32(ResolveTF32EnabledForMudnn());
+    auto status = g_handle->SetAllowTF32(ResolveTF32EnabledForGemm());
     if (status != ::musa::dnn::Status::SUCCESS) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                         "mudnn Handle SetAllowTF32 failed");
@@ -168,9 +157,7 @@ inline bool MublasDataType(ONNXTensorElementDataType elem_type,
   switch (elem_type) {
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
       data_type = MUSA_R_32F;
-      compute_type = ResolveTF32EnabledForMublas()
-                         ? MUBLAS_COMPUTE_32F_FAST_TF32
-                         : MUBLAS_COMPUTE_32F;
+      compute_type = MUBLAS_COMPUTE_32F;
       return true;
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE:
       data_type = MUSA_R_64F;
@@ -439,10 +426,9 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
   const void* b_data = ctx.GetInput(1).GetTensorRawData();
   void* y_data = y.GetTensorMutableRawData();
 
-  if (bias_is_gpu && !ResolveTF32EnabledForMublas() &&
-      TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape, b_shape, c_shape,
-                   out_shape, trans_a, trans_b, alpha, beta, has_bias,
-                   elem_type)) {
+  if (bias_is_gpu && TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape,
+                                  b_shape, c_shape, out_shape, trans_a, trans_b,
+                                  alpha, beta, has_bias, elem_type)) {
     if (!has_activation) {
       return nullptr;
     }

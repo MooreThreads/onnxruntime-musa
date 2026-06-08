@@ -2,48 +2,9 @@
 // Licensed under the MIT License.
 
 #include "shared_inc/op_kernel_common.h"
-#include "shared_inc/blas_utils.h"
 #include "tensor/transpose_impl.h"
 
 namespace {
-bool TryMudnnTranspose(Ort::KernelContext& ctx, Ort::ConstValue input,
-                       Ort::UnownedValue output,
-                       const std::vector<int64_t>& input_shape,
-                       const std::vector<int64_t>& output_shape,
-                       const std::vector<int64_t>& perm,
-                       ONNXTensorElementDataType elem_type) {
-  if (!IsGpuMemory(input.GetTensorMemoryInfo()) ||
-      !IsGpuMemory(output.GetTensorMemoryInfo()) || input_shape.size() > 8 ||
-      input_shape.size() != perm.size()) {
-    return false;
-  }
-
-  ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
-  if (handle_status != nullptr) {
-    Ort::GetApi().ReleaseStatus(handle_status);
-    return false;
-  }
-
-  ::musa::dnn::Tensor input_tensor;
-  ::musa::dnn::Tensor output_tensor;
-  if (!SetMudnnTensor(input_tensor, input.GetTensorRawData(), input_shape,
-                      elem_type) ||
-      !SetMudnnTensor(output_tensor, output.GetTensorMutableRawData(),
-                      output_shape, elem_type)) {
-    return false;
-  }
-
-  ::musa::dnn::Permute op;
-  if (op.ConfigDimStride(output_tensor, input_tensor,
-                         static_cast<int>(perm.size()), perm.data()) !=
-      ::musa::dnn::Status::SUCCESS) {
-    return false;
-  }
-  return op.Run(*handle, output_tensor, input_tensor) ==
-         ::musa::dnn::Status::SUCCESS;
-}
-
 class Transpose : public OpKernelBase<Transpose> {
  public:
   Transpose(const OrtKernelInfo* info, void* /*state*/) {
@@ -73,9 +34,6 @@ OrtStatus* Transpose::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Transpose unsupported dtype");
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-  if (TryMudnnTranspose(ctx, input0, y, shape0, out_shape, perm, elem_type)) {
-    return nullptr;
-  }
   if (shape0.size() <= kMusaMaxBroadcastRank &&
       IsGpuMemory(input0.GetTensorMemoryInfo()) &&
       IsGpuMemory(y.GetTensorMemoryInfo())) {

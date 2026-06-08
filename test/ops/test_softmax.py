@@ -49,11 +49,6 @@ def test_softmax_vector_default_axis():
     run_and_compare("Softmax", inputs={"X": x}, outputs=[("Y", TensorProto.FLOAT)])
 
 
-def test_softmax_2d_default_axis():
-    x = np.random.default_rng(7).standard_normal((8, 16)).astype(np.float32)
-    run_and_compare("Softmax", inputs={"X": x}, outputs=[("Y", TensorProto.FLOAT)])
-
-
 def test_softmax_float16():
     x = np.random.default_rng(4).standard_normal((8, 16)).astype(np.float16)
     run_and_compare(

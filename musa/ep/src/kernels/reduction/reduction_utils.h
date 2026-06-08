@@ -4,7 +4,6 @@
 #pragma once
 
 #include "reduction/reduction_functions.h"
-#include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
 
 enum class ReduceMode { kProd, kSum, kMean, kSumSquare, kMax, kL2 };
@@ -20,91 +19,6 @@ inline MusaReduceOp ToMusaReduceOp(ReduceMode mode) {
 
 inline OrtStatus* UnsupportedReduceStatus(const char* message) {
   return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED, message);
-}
-
-inline bool TryMudnnReduce(Ort::ConstValue input, Ort::UnownedValue output,
-                           const std::vector<int64_t>& input_shape,
-                           const std::vector<int64_t>& output_shape,
-                           const std::set<int64_t>& axes_set,
-                           ONNXTensorElementDataType elem_type,
-                           ReduceMode mode) {
-  if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-      axes_set.size() != 1 || mode == ReduceMode::kSumSquare ||
-      mode == ReduceMode::kL2 || !IsGpuMemory(input.GetTensorMemoryInfo()) ||
-      !IsGpuMemory(output.GetTensorMemoryInfo())) {
-    return false;
-  }
-
-  ::musa::dnn::Reduce::Mode mudnn_mode;
-  switch (mode) {
-    case ReduceMode::kProd:
-      mudnn_mode = ::musa::dnn::Reduce::Mode::PROD;
-      break;
-    case ReduceMode::kSum:
-      mudnn_mode = ::musa::dnn::Reduce::Mode::ADD;
-      break;
-    case ReduceMode::kMean:
-      mudnn_mode = ::musa::dnn::Reduce::Mode::MEAN;
-      break;
-    case ReduceMode::kMax:
-      mudnn_mode = ::musa::dnn::Reduce::Mode::MAX;
-      break;
-    default:
-      return false;
-  }
-
-  std::vector<int> axes;
-  axes.reserve(axes_set.size());
-  for (int64_t axis : axes_set) {
-    axes.push_back(static_cast<int>(axis));
-  }
-
-  std::vector<int64_t> mudnn_output_shape;
-  mudnn_output_shape.reserve(input_shape.size());
-  for (size_t dim = 0; dim < input_shape.size(); ++dim) {
-    mudnn_output_shape.push_back(
-        axes_set.count(static_cast<int64_t>(dim)) != 0 ? 1 : input_shape[dim]);
-  }
-  if (NumElements(mudnn_output_shape) != NumElements(output_shape)) {
-    return false;
-  }
-
-  ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
-  if (handle_status != nullptr) {
-    Ort::GetApi().ReleaseStatus(handle_status);
-    return false;
-  }
-
-  ::musa::dnn::Tensor input_tensor;
-  ::musa::dnn::Tensor output_tensor;
-  if (!SetMudnnFloatTensor(input_tensor, input.GetTensorRawData(),
-                           input_shape) ||
-      !SetMudnnFloatTensor(output_tensor, output.GetTensorMutableRawData(),
-                           mudnn_output_shape)) {
-    return false;
-  }
-
-  ::musa::dnn::Reduce op;
-  if (op.SetMode(mudnn_mode) != ::musa::dnn::Status::SUCCESS ||
-      op.SetDim(static_cast<int>(axes.size()), axes.data()) !=
-          ::musa::dnn::Status::SUCCESS) {
-    return false;
-  }
-
-  size_t workspace_size = 0;
-  if (op.GetWorkspaceSize(*handle, workspace_size, output_tensor,
-                          input_tensor) != ::musa::dnn::Status::SUCCESS ||
-      workspace_size != 0) {
-    return false;
-  }
-
-  ::musa::dnn::MemoryMaintainer maintainer =
-      [](size_t /*bytes*/) -> ::musa::dnn::MemoryHandler {
-    return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
-  };
-  return op.Run(*handle, output_tensor, input_tensor, maintainer) ==
-         ::musa::dnn::Status::SUCCESS;
 }
 
 inline MusaReduceParams MakeReduceParams(
@@ -167,6 +81,7 @@ inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
       output_shape.push_back(input_shape[i]);
     }
   }
+  if (output_shape.empty()) output_shape.push_back(1);
 
   if (input_shape.size() > kMusaMaxBroadcastRank) {
     return UnsupportedReduceStatus("Reduce rank exceeds MUSA device limit");
@@ -198,11 +113,6 @@ inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 &&
       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
     return UnsupportedReduceStatus("unsupported ReduceL2 dtype");
-  }
-
-  if (TryMudnnReduce(input0, y, input_shape, output_shape, axes_set, elem_type,
-                     mode)) {
-    return nullptr;
   }
 
   MusaReduceParams params =

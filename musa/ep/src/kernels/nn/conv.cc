@@ -52,11 +52,6 @@ bool Conv::TryMudnnConv(Ort::KernelContext& ctx,
   if (x_shape[2] == 1 && w_shape[2] == 1) {
     return false;
   }
-  if (x_shape[1] == 1 && w_shape[0] == 1 && w_shape[1] == 1 &&
-      w_shape[3] == 1 && strides_[0] == 1 && strides_[1] == 1 &&
-      dilations_[0] == 1 && dilations_[1] == 1) {
-    return false;
-  }
 
   Ort::ConstValue x = ctx.GetInput(0);
   Ort::ConstValue w = ctx.GetInput(1);

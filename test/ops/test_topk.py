@@ -5,7 +5,7 @@
 import numpy as np
 import pytest
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import TensorProto, build_model, run, run_and_compare
 
 
 @pytest.mark.parametrize(
@@ -49,4 +49,25 @@ def test_topk_smallest_axis1_opset13():
         opset=13,
         rtol=1e-5,
         atol=1e-6,
+    )
+
+
+def test_topk_sorted0_tie_keeps_lower_indices_opset13():
+    x = np.array([[[0.5, 0.1, 0.5, 0.4, 0.5]]], dtype=np.float32)
+    k = np.array([2], dtype=np.int64)
+    model = build_model(
+        "TopK",
+        inputs={"X": x, "K": k},
+        outputs=[("Values", TensorProto.FLOAT), ("Indices", TensorProto.INT64)],
+        attrs={"axis": -1, "largest": 1, "sorted": 0},
+        opset=13,
+    )
+
+    values, indices = run(model, {"X": x, "K": k}, use_musa=True)
+
+    np.testing.assert_allclose(
+        np.sort(values.reshape(-1)), np.array([0.5, 0.5], dtype=np.float32)
+    )
+    np.testing.assert_array_equal(
+        np.sort(indices.reshape(-1)), np.array([0, 2], dtype=np.int64)
     )

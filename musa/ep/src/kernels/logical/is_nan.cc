@@ -27,10 +27,9 @@ OrtStatus* IsNaN::Compute(Ort::KernelContext& ctx) const {
     return UnsupportedDeviceElementwiseStatus("IsNaN", elem_type);
   }
 
-  musaError_t status =
-      LaunchMusaIsNaNKernel(input.GetTensorRawData(),
-                            y.GetTensorMutableData<uint8_t>(),
-                            NumElements(shape), musa_elem_type, nullptr);
+  musaError_t status = LaunchMusaIsNaNKernel(
+      input.GetTensorRawData(), y.GetTensorMutableData<uint8_t>(),
+      NumElements(shape), musa_elem_type, GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus("IsNaN", elem_type);
   }
@@ -42,6 +41,6 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     IsNaN, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T1", FloatBoolTensorTypes())
-         .AddTypeConstraint(
-             "T2", GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL))),
+         .AddTypeConstraint("T2",
+                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL))),
     IsNaN)

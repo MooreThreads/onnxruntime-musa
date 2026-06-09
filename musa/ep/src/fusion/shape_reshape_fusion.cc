@@ -94,8 +94,8 @@ struct ShapeReshapeFusionCompute : FusionNodeCompute {
             data_info.GetShape(), std::move(target), reshape.allowzero);
         Ort::UnownedValue output =
             ctx.GetOutput(reshape.output_index, output_shape);
-        RETURN_IF_ERROR(
-            CopyRawTensor(data, output, data.GetTensorSizeInBytes()));
+        RETURN_IF_ERROR(CopyRawTensor(data, output, data.GetTensorSizeInBytes(),
+                                      GetComputeStream(ctx)));
       }
 
       return nullptr;

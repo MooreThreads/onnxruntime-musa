@@ -38,9 +38,11 @@ OrtStatus* BitwiseAnd::Compute(Ort::KernelContext& ctx) const {
     return UnsupportedDeviceElementwiseStatus("BitwiseAnd", elem_type);
   }
 
-  musaError_t status = LaunchMusaBitwiseAndKernel(
-      lhs.GetTensorRawData(), rhs.GetTensorRawData(), y.GetTensorMutableRawData(),
-      MakeBroadcastParams(out_shape, shape0, shape1), musa_elem_type, nullptr);
+  musaError_t status =
+      LaunchMusaBitwiseAndKernel(lhs.GetTensorRawData(), rhs.GetTensorRawData(),
+                                 y.GetTensorMutableRawData(),
+                                 MakeBroadcastParams(out_shape, shape0, shape1),
+                                 musa_elem_type, GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus("BitwiseAnd", elem_type);
   }
@@ -48,8 +50,7 @@ OrtStatus* BitwiseAnd::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    BitwiseAnd, kOnnxDomain, 18, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint(
-        "T", BitwiseIntegerTensorTypes())),
-    BitwiseAnd)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(BitwiseAnd, kOnnxDomain, 18, 19,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T", BitwiseIntegerTensorTypes())),
+                                  BitwiseAnd)

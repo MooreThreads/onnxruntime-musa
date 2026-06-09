@@ -53,7 +53,8 @@ OrtStatus* Reshape::Compute(Ort::KernelContext& ctx) const {
   std::vector<int64_t> out_shape =
       ResolveReshapeOutputShape(shape0, ReadIntTensor(ctx, 1), allowzero_);
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-  return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes());
+  return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes(),
+                       GetComputeStream(ctx));
 }
 
 OrtStatus* ReshapeString::Compute(Ort::KernelContext& ctx) const {

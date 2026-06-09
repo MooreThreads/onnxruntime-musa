@@ -85,7 +85,7 @@ OrtStatus* Tile::Compute(Ort::KernelContext& ctx) const {
   return LaunchStatus(LaunchMusaTileKernel(
       input.GetTensorRawData(), y.GetTensorMutableRawData(),
       static_cast<int32_t>(elem_size),
-      MakeTileParams(input_shape, output_shape), nullptr));
+      MakeTileParams(input_shape, output_shape), GetComputeStream(ctx)));
 }
 }  // namespace
 

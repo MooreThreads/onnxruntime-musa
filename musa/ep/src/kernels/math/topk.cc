@@ -108,7 +108,8 @@ OrtStatus* TopK::Compute(Ort::KernelContext& ctx) const {
 
   musaError_t status = LaunchMusaTopKKernel(
       input.GetTensorRawData(), values.GetTensorMutableRawData(),
-      indices.GetTensorMutableData<int64_t>(), params, musa_elem_type, nullptr);
+      indices.GetTensorMutableData<int64_t>(), params, musa_elem_type,
+      GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "TopK unsupported dtype");

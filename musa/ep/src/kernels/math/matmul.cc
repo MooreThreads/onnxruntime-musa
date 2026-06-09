@@ -241,9 +241,9 @@ OrtStatus* RunMudnnMatMul(void* y_data, const void* a_data, const void* b_data,
                           const std::vector<int64_t>& b_shape,
                           const std::vector<int64_t>& y_shape,
                           ONNXTensorElementDataType elem_type, bool trans_a,
-                          bool trans_b, float alpha) {
+                          bool trans_b, float alpha, musaStream_t stream) {
   ::musa::dnn::Handle* handle = nullptr;
-  RETURN_IF_ERROR(EnsureMudnnHandle(&handle));
+  RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
 
   ::musa::dnn::Tensor a_tensor;
   ::musa::dnn::Tensor b_tensor;
@@ -269,13 +269,11 @@ OrtStatus* RunMudnnMatMul(void* y_data, const void* a_data, const void* b_data,
                      "muDNN MatMul execution failed");
 }
 
-OrtStatus* RunMudnnBatchMatMul(void* y_data, const void* a_data,
-                               const void* b_data,
-                               const std::vector<int64_t>& a_shape,
-                               const std::vector<int64_t>& b_shape,
-                               const MatMulShapeInfo& shape_info,
-                               ONNXTensorElementDataType elem_type,
-                               bool trans_a, bool trans_b, float alpha) {
+OrtStatus* RunMudnnBatchMatMul(
+    void* y_data, const void* a_data, const void* b_data,
+    const std::vector<int64_t>& a_shape, const std::vector<int64_t>& b_shape,
+    const MatMulShapeInfo& shape_info, ONNXTensorElementDataType elem_type,
+    bool trans_a, bool trans_b, float alpha, musaStream_t stream) {
   const int64_t batch_total = NumElementsLocal(shape_info.batch_shape);
   long long int stride_a = 0;
   long long int stride_b = 0;
@@ -291,7 +289,7 @@ OrtStatus* RunMudnnBatchMatMul(void* y_data, const void* a_data,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  RETURN_IF_ERROR(EnsureMudnnHandle(&handle));
+  RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
 
   ::musa::dnn::Tensor a_tensor;
   ::musa::dnn::Tensor b_tensor;
@@ -337,7 +335,7 @@ OrtStatus* RunMudnnBatchMatMul(void* y_data, const void* a_data,
   RETURN_IF_ERROR(MudnnStatus(
       batch_op.Run(*handle, y_tensor, a_tensor, b_tensor, maintainer),
       "muDNN BatchMatMul execution failed"));
-  if (used_workspace && musaDeviceSynchronize() != musaSuccess) {
+  if (used_workspace && musaStreamSynchronize(stream) != musaSuccess) {
     return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                       "muDNN BatchMatMul synchronize failed");
   }
@@ -349,7 +347,7 @@ OrtStatus* ComputeMusaMatMulDeviceImpl(
     ONNXTensorElementDataType elem_type, const std::vector<int64_t>& a_shape,
     const std::vector<int64_t>& b_shape, const std::vector<int64_t>& y_shape,
     bool trans_a, bool trans_b, bool trans_batch_a, bool trans_batch_b,
-    float alpha) {
+    float alpha, musaStream_t stream) {
   if (!IsMatMulType(elem_type)) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "unsupported MatMul dtype");
@@ -379,7 +377,7 @@ OrtStatus* ComputeMusaMatMulDeviceImpl(
   }
   if (shape_info.lhs.cols == 0) {
     musaError_t status = musaMemsetAsync(
-        y_data, 0, NumElementsLocal(y_shape) * ElementSize(elem_type), nullptr);
+        y_data, 0, NumElementsLocal(y_shape) * ElementSize(elem_type), stream);
     return LaunchStatus(status);
   }
   if (a_data == nullptr || b_data == nullptr) {
@@ -400,11 +398,12 @@ OrtStatus* ComputeMusaMatMulDeviceImpl(
   if (shape_info.batch_shape.empty()) {
     return RunMudnnMatMul(y_data, a_data, b_data, a_shape, b_shape,
                           shape_info.compute_shape, elem_type, trans_a, trans_b,
-                          alpha);
+                          alpha, stream);
   }
 
   return RunMudnnBatchMatMul(y_data, a_data, b_data, a_shape, b_shape,
-                             shape_info, elem_type, trans_a, trans_b, alpha);
+                             shape_info, elem_type, trans_a, trans_b, alpha,
+                             stream);
 }
 
 OrtStatus* ComputeMudnnMatMul(Ort::KernelContext& kernel_context,
@@ -431,10 +430,10 @@ OrtStatus* ComputeMudnnMatMul(Ort::KernelContext& kernel_context,
                                       "MatMul requires MUSA output");
   }
 
-  return ComputeMusaMatMulDeviceImpl(a.GetTensorRawData(), b.GetTensorRawData(),
-                                     y.GetTensorMutableRawData(), elem_type,
-                                     a_shape, b_shape, shape_info.output_shape,
-                                     false, false, false, false, 1.0f);
+  return ComputeMusaMatMulDeviceImpl(
+      a.GetTensorRawData(), b.GetTensorRawData(), y.GetTensorMutableRawData(),
+      elem_type, a_shape, b_shape, shape_info.output_shape, false, false, false,
+      false, 1.0f, GetComputeStream(kernel_context));
 }
 }  // namespace
 
@@ -458,20 +457,21 @@ OrtStatus* ComputeMusaMatMulDevice(
     ONNXTensorElementDataType elem_type, const std::vector<int64_t>& a_shape,
     const std::vector<int64_t>& b_shape, const std::vector<int64_t>& y_shape,
     bool trans_a, bool trans_b, bool trans_batch_a, bool trans_batch_b,
-    float alpha) {
-  return ComputeMusaMatMulDeviceImpl(a_data, b_data, y_data, elem_type, a_shape,
-                                     b_shape, y_shape, trans_a, trans_b,
-                                     trans_batch_a, trans_batch_b, alpha);
+    float alpha, musaStream_t stream) {
+  return ComputeMusaMatMulDeviceImpl(
+      a_data, b_data, y_data, elem_type, a_shape, b_shape, y_shape, trans_a,
+      trans_b, trans_batch_a, trans_batch_b, alpha, stream);
 }
 
 OrtStatus* ComputeMusaMatMulDevice(const float* a_data, const float* b_data,
                                    float* y_data,
                                    const std::vector<int64_t>& a_shape,
                                    const std::vector<int64_t>& b_shape,
-                                   const std::vector<int64_t>& y_shape) {
+                                   const std::vector<int64_t>& y_shape,
+                                   musaStream_t stream) {
   return ComputeMusaMatMulDeviceImpl(
       a_data, b_data, y_data, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, a_shape,
-      b_shape, y_shape, false, false, false, false, 1.0f);
+      b_shape, y_shape, false, false, false, false, 1.0f, stream);
 }
 
 MatMul::MatMul(const OrtKernelInfo* info, void* /*state*/, PrivateTag)

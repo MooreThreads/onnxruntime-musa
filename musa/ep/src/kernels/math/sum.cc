@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#include "math/variadic_elementwise_ops_impl.h"
 #include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
-#include "math/variadic_elementwise_ops_impl.h"
 
 namespace {
 // Combines ORT CUDA EP's variadic_elementwise_ops Sum control flow with
@@ -60,9 +60,9 @@ size_t FindSameShapeInput(const std::vector<std::vector<int64_t>>& input_shapes,
 bool TryMudnnAdd(const void* lhs_data, const std::vector<int64_t>& lhs_shape,
                  const void* rhs_data, const std::vector<int64_t>& rhs_shape,
                  void* output_data, const std::vector<int64_t>& output_shape,
-                 ONNXTensorElementDataType elem_type) {
+                 ONNXTensorElementDataType elem_type, musaStream_t stream) {
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, stream);
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -88,21 +88,21 @@ bool TryMudnnAdd(const void* lhs_data, const std::vector<int64_t>& lhs_shape,
 
 bool TryMudnnSum(Ort::KernelContext& ctx,
                  const std::vector<std::vector<int64_t>>& input_shapes,
-                 const std::vector<int64_t>& output_shape,
-                 Ort::UnownedValue y,
+                 const std::vector<int64_t>& output_shape, Ort::UnownedValue y,
                  ONNXTensorElementDataType elem_type) {
   const size_t input_count = ctx.GetInputCount();
   if (input_count < 2 || !CanUseMudnnSumShapes(input_shapes, output_shape)) {
     return false;
   }
 
+  musaStream_t stream = GetComputeStream(ctx);
   void* output_data = y.GetTensorMutableRawData();
   std::vector<bool> consumed(input_count, false);
 
   if (AllSameShape(input_shapes)) {
     if (!TryMudnnAdd(ctx.GetInput(0).GetTensorRawData(), input_shapes[0],
                      ctx.GetInput(1).GetTensorRawData(), input_shapes[1],
-                     output_data, output_shape, elem_type)) {
+                     output_data, output_shape, elem_type, stream)) {
       return false;
     }
     consumed[0] = true;
@@ -115,7 +115,7 @@ bool TryMudnnSum(Ort::KernelContext& ctx,
                        input_shapes[same_shape_input],
                        ctx.GetInput(other_input).GetTensorRawData(),
                        input_shapes[other_input], output_data, output_shape,
-                       elem_type)) {
+                       elem_type, stream)) {
         return false;
       }
       consumed[same_shape_input] = true;
@@ -123,7 +123,7 @@ bool TryMudnnSum(Ort::KernelContext& ctx,
     } else {
       if (!TryMudnnAdd(ctx.GetInput(0).GetTensorRawData(), input_shapes[0],
                        ctx.GetInput(1).GetTensorRawData(), input_shapes[1],
-                       output_data, output_shape, elem_type)) {
+                       output_data, output_shape, elem_type, stream)) {
         return false;
       }
       consumed[0] = true;
@@ -138,7 +138,7 @@ bool TryMudnnSum(Ort::KernelContext& ctx,
     if (!TryMudnnAdd(y.GetTensorRawData(), output_shape,
                      ctx.GetInput(input_index).GetTensorRawData(),
                      input_shapes[input_index], output_data, output_shape,
-                     elem_type)) {
+                     elem_type, stream)) {
       return false;
     }
   }
@@ -146,13 +146,11 @@ bool TryMudnnSum(Ort::KernelContext& ctx,
   return true;
 }
 
-OrtStatus* LaunchBroadcastAdd(const void* lhs_data,
-                              const std::vector<int64_t>& lhs_shape,
-                              const void* rhs_data,
-                              const std::vector<int64_t>& rhs_shape,
-                              void* output_data,
-                              const std::vector<int64_t>& output_shape,
-                              ONNXTensorElementDataType elem_type) {
+OrtStatus* LaunchBroadcastAdd(
+    const void* lhs_data, const std::vector<int64_t>& lhs_shape,
+    const void* rhs_data, const std::vector<int64_t>& rhs_shape,
+    void* output_data, const std::vector<int64_t>& output_shape,
+    ONNXTensorElementDataType elem_type, musaStream_t stream) {
   MusaElementType musa_elem_type;
   if (!ToMusaElementType(elem_type, musa_elem_type)) {
     return UnsupportedDeviceElementwiseStatus("Sum", elem_type);
@@ -160,7 +158,7 @@ OrtStatus* LaunchBroadcastAdd(const void* lhs_data,
   MusaBroadcastParams params =
       MakeBroadcastParams(output_shape, lhs_shape, rhs_shape);
   musaError_t status = LaunchMusaVariadicSumKernel(
-      lhs_data, rhs_data, output_data, params, musa_elem_type, nullptr);
+      lhs_data, rhs_data, output_data, params, musa_elem_type, stream);
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus("Sum", elem_type);
   }
@@ -179,16 +177,17 @@ OrtStatus* ComputeDeviceSumFallback(
 
   handled = true;
   void* output_data = y.GetTensorMutableRawData();
-  RETURN_IF_ERROR(LaunchBroadcastAdd(
-      ctx.GetInput(0).GetTensorRawData(), input_shapes[0],
-      ctx.GetInput(1).GetTensorRawData(), input_shapes[1], output_data,
-      output_shape, elem_type));
+  musaStream_t stream = GetComputeStream(ctx);
+  RETURN_IF_ERROR(
+      LaunchBroadcastAdd(ctx.GetInput(0).GetTensorRawData(), input_shapes[0],
+                         ctx.GetInput(1).GetTensorRawData(), input_shapes[1],
+                         output_data, output_shape, elem_type, stream));
   for (size_t input_index = 2; input_index < ctx.GetInputCount();
        ++input_index) {
     RETURN_IF_ERROR(LaunchBroadcastAdd(
         y.GetTensorRawData(), output_shape,
-        ctx.GetInput(input_index).GetTensorRawData(),
-        input_shapes[input_index], output_data, output_shape, elem_type));
+        ctx.GetInput(input_index).GetTensorRawData(), input_shapes[input_index],
+        output_data, output_shape, elem_type, stream));
   }
   return nullptr;
 }
@@ -202,7 +201,8 @@ OrtStatus* ComputeDeviceSum(
   if (ctx.GetInputCount() == 1) {
     handled = true;
     Ort::ConstValue input0 = ctx.GetInput(0);
-    return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes());
+    return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes(),
+                         GetComputeStream(ctx));
   }
 
   if (TryMudnnSum(ctx, input_shapes, output_shape, y, elem_type)) {
@@ -248,9 +248,8 @@ OrtStatus* Sum::Compute(Ort::KernelContext& ctx) const {
     Ort::UnownedValue y = ctx.GetOutput(0, device_out_shape);
     if (IsGpuMemory(y.GetTensorMemoryInfo())) {
       bool handled = false;
-      RETURN_IF_ERROR(
-          ComputeDeviceSum(ctx, input_shapes, device_out_shape, y, handled,
-                           elem_type));
+      RETURN_IF_ERROR(ComputeDeviceSum(ctx, input_shapes, device_out_shape, y,
+                                       handled, elem_type));
       if (handled) {
         return nullptr;
       }

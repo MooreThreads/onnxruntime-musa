@@ -92,8 +92,8 @@ OrtStatus* Pad::Compute(Ort::KernelContext& ctx) const {
     int64_t axis = NormalizeAxis(axes[i], input_shape.size());
     if (axis < 0 || axis >= static_cast<int64_t>(input_shape.size()) ||
         pads[i] < 0 || pads[i + axes.size()] < 0) {
-      return Ort::GetApi().CreateStatus(
-          ORT_NOT_IMPLEMENTED, "Pad only supports non-negative pads");
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "Pad only supports non-negative pads");
     }
     pads_begin[axis] = pads[i];
     pads_end[axis] = pads[i + axes.size()];
@@ -118,7 +118,8 @@ OrtStatus* Pad::Compute(Ort::KernelContext& ctx) const {
   return LaunchStatus(LaunchMusaPadKernel(
       input.GetTensorRawData(), output.GetTensorMutableRawData(),
       ScalarInputOrZero(ctx, 2, elem_size), static_cast<int32_t>(elem_size),
-      MakePadParams(input_shape, output_shape, pads_begin), nullptr));
+      MakePadParams(input_shape, output_shape, pads_begin),
+      GetComputeStream(ctx)));
 }
 }  // namespace
 

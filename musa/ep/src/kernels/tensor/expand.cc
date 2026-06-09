@@ -49,7 +49,8 @@ OrtStatus* Expand::Compute(Ort::KernelContext& ctx) const {
   return LaunchStatus(LaunchMusaExpandKernel(
       input.GetTensorRawData(), y.GetTensorMutableRawData(),
       static_cast<int32_t>(elem_size),
-      MakeBroadcastParams(out_shape, input_shape, out_shape), nullptr));
+      MakeBroadcastParams(out_shape, input_shape, out_shape),
+      GetComputeStream(ctx)));
 }
 }  // namespace
 

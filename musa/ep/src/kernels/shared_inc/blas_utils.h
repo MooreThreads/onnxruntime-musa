@@ -17,13 +17,25 @@
 
 // Shared GEMM implementation used by Gemm and FusedGemm. MatMul keeps its
 // own implementation because it also handles batched MatMul shapes.
-inline OrtStatus* EnsureMublasHandle(mublasHandle_t* handle) {
+inline OrtStatus* EnsureMublasHandle(mublasHandle_t* handle,
+                                     musaStream_t stream = nullptr) {
   static thread_local mublasHandle_t g_handle = nullptr;
+  static thread_local musaStream_t g_stream = nullptr;
+  if (g_handle != nullptr && g_stream != stream) {
+    mublasDestroy(g_handle);
+    g_handle = nullptr;
+  }
   if (g_handle == nullptr) {
     mublasStatus status = mublasCreate(&g_handle);
     if (status != MUBLAS_STATUS_SUCCESS) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasCreate failed");
     }
+    g_stream = stream;
+  }
+  mublasStatus stream_status =
+      mublasSetStream(g_handle, reinterpret_cast<MUstream>(stream));
+  if (stream_status != MUBLAS_STATUS_SUCCESS) {
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSetStream failed");
   }
   *handle = g_handle;
   return nullptr;
@@ -34,15 +46,26 @@ inline bool ResolveTF32EnabledForGemm() {
   return tf32_env != nullptr && std::atoi(tf32_env) != 0;
 }
 
-inline OrtStatus* EnsureMudnnHandle(::musa::dnn::Handle** handle) {
+inline OrtStatus* EnsureMudnnHandle(::musa::dnn::Handle** handle,
+                                    musaStream_t stream = nullptr) {
   static thread_local std::unique_ptr<::musa::dnn::Handle> g_handle;
+  static thread_local musaStream_t g_stream = nullptr;
+  if (g_handle && g_stream != stream) {
+    g_handle.reset();
+  }
   if (!g_handle) {
     g_handle = std::make_unique<::musa::dnn::Handle>();
+    g_stream = stream;
     auto status = g_handle->SetAllowTF32(ResolveTF32EnabledForGemm());
     if (status != ::musa::dnn::Status::SUCCESS) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                         "mudnn Handle SetAllowTF32 failed");
     }
+  }
+  auto stream_status = g_handle->SetStream(stream);
+  if (stream_status != ::musa::dnn::Status::SUCCESS) {
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                      "mudnn Handle SetStream failed");
   }
   *handle = g_handle.get();
   return nullptr;
@@ -228,14 +251,12 @@ inline mublasStatus MublasGemmStridedBatchedEx(
       batch_count, compute_type, MUBLAS_GEMM_DEFAULT);
 }
 
-inline bool TryMudnnGemm(void* y_data, const void* a_data, const void* b_data,
-                         const void* c_data,
-                         const std::vector<int64_t>& a_shape,
-                         const std::vector<int64_t>& b_shape,
-                         const std::vector<int64_t>& c_shape,
-                         const std::vector<int64_t>& out_shape, bool trans_a,
-                         bool trans_b, float alpha, float beta, bool has_bias,
-                         ONNXTensorElementDataType elem_type) {
+inline bool TryMudnnGemm(
+    void* y_data, const void* a_data, const void* b_data, const void* c_data,
+    const std::vector<int64_t>& a_shape, const std::vector<int64_t>& b_shape,
+    const std::vector<int64_t>& c_shape, const std::vector<int64_t>& out_shape,
+    bool trans_a, bool trans_b, float alpha, float beta, bool has_bias,
+    ONNXTensorElementDataType elem_type, musaStream_t stream = nullptr) {
   const std::string key =
       MudnnGemmKey(a_shape, b_shape, c_shape, out_shape, trans_a, trans_b,
                    alpha, beta, has_bias, elem_type);
@@ -244,8 +265,17 @@ inline bool TryMudnnGemm(void* y_data, const void* a_data, const void* b_data,
     return false;
   }
 
+  // muDNN MatMul::RunWithBiasAdd reports NOT_SUPPORTED for DOUBLE on this
+  // stack. Avoid issuing the unsupported library call; the caller will use
+  // muBLAS/MatMul followed by the device post kernel for bias/activation.
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE && has_bias &&
+      beta != 0.0f) {
+    unsupported_keys.insert(key);
+    return false;
+  }
+
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, stream);
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -345,6 +375,7 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
                               bool trans_b, float alpha, float beta,
                               const std::string& activation,
                               float activation_alpha) {
+  musaStream_t stream = GetComputeStream(ctx);
   auto a_info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto b_info = ctx.GetInput(1).GetTensorTypeAndShapeInfo();
   const auto elem_type = a_info.GetElementType();
@@ -428,7 +459,7 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
 
   if (bias_is_gpu && TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape,
                                   b_shape, c_shape, out_shape, trans_a, trans_b,
-                                  alpha, beta, has_bias, elem_type)) {
+                                  alpha, beta, has_bias, elem_type, stream)) {
     if (!has_activation) {
       return nullptr;
     }
@@ -440,13 +471,13 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
     MusaBroadcastParams params = MakeBroadcastParams(out_shape, out_shape, {1});
     return LaunchStatus(LaunchMusaGemmPostKernel(
         y_data, nullptr, params, false, 0.0f, activation_op, true,
-        activation_alpha, musa_elem_type, nullptr));
+        activation_alpha, musa_elem_type, stream));
   }
 
   bool gemm_done = false;
   if (m <= INT32_MAX && k <= INT32_MAX && n <= INT32_MAX) {
     mublasHandle_t handle = nullptr;
-    RETURN_IF_ERROR(EnsureMublasHandle(&handle));
+    RETURN_IF_ERROR(EnsureMublasHandle(&handle, stream));
     mublasOperation_t op_a = trans_a ? MUBLAS_OP_T : MUBLAS_OP_N;
     mublasOperation_t op_b = trans_b ? MUBLAS_OP_T : MUBLAS_OP_N;
     int lda = static_cast<int>(a_shape[1]);
@@ -462,7 +493,7 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
   if (!gemm_done) {
     RETURN_IF_ERROR(ComputeMusaMatMulDevice(
         a_data, b_data, y_data, elem_type, a_shape, b_shape, out_shape, trans_a,
-        trans_b, false, false, alpha));
+        trans_b, false, false, alpha, stream));
   }
 
   if (!has_bias && !has_activation) {
@@ -483,5 +514,5 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
       MakeBroadcastParams(out_shape, out_shape, c_shape);
   return LaunchStatus(LaunchMusaGemmPostKernel(
       y_data, c_data, params, has_bias, beta, activation_op, has_activation,
-      activation_alpha, musa_elem_type, nullptr));
+      activation_alpha, musa_elem_type, stream));
 }

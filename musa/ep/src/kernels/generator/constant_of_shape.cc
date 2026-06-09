@@ -69,7 +69,8 @@ OrtStatus* ConstantOfShape::Compute(Ort::KernelContext& ctx) const {
   }
   return LaunchStatus(LaunchMusaConstantOfShapeKernel(
       output.GetTensorMutableRawData(), value_bits_,
-      static_cast<int32_t>(value_size_), NumElements(output_shape), nullptr));
+      static_cast<int32_t>(value_size_), NumElements(output_shape),
+      GetComputeStream(ctx)));
 }
 }  // namespace
 

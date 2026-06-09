@@ -102,12 +102,14 @@ OrtStatus* Cast::Compute(Ort::KernelContext& ctx) const {
   const int64_t n = NumElements(shape0);
   if (static_cast<int64_t>(elem_type) == to_) {
     return DeviceMemcpy(y.GetTensorMutableRawData(), input0.GetTensorRawData(),
-                        static_cast<size_t>(n) * src_elem_size);
+                        static_cast<size_t>(n) * src_elem_size,
+                        GetComputeStream(ctx));
   }
 
   return LaunchStatus(LaunchMusaCastKernel(
       input0.GetTensorRawData(), y.GetTensorMutableRawData(),
-      static_cast<int32_t>(elem_type), static_cast<int32_t>(to_), n, nullptr));
+      static_cast<int32_t>(elem_type), static_cast<int32_t>(to_), n,
+      GetComputeStream(ctx)));
 }
 }  // namespace
 

@@ -62,7 +62,7 @@ bool Conv::TryMudnnConv(Ort::KernelContext& ctx,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -117,8 +117,8 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
                                       "Conv only supports 2D NCHW tensors");
   }
   if (group_ != 1 || w_shape[1] != x_shape[1]) {
-    return Ort::GetApi().CreateStatus(
-        ORT_NOT_IMPLEMENTED, "Conv only supports group=1");
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Conv only supports group=1");
   }
 
   std::vector<int64_t> pads = pads_;
@@ -126,18 +126,16 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
     pads = {0, 0, 0, 0};
   }
   if (pads.size() != 4 || pads[0] != pads[2] || pads[1] != pads[3]) {
-    return Ort::GetApi().CreateStatus(
-        ORT_NOT_IMPLEMENTED, "Conv only supports symmetric 2D pads");
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Conv only supports symmetric 2D pads");
   }
 
   const int64_t out_h =
-      (x_shape[2] + pads[0] + pads[2] -
-       dilations_[0] * (w_shape[2] - 1) - 1) /
+      (x_shape[2] + pads[0] + pads[2] - dilations_[0] * (w_shape[2] - 1) - 1) /
           strides_[0] +
       1;
   const int64_t out_w =
-      (x_shape[3] + pads[1] + pads[3] -
-       dilations_[1] * (w_shape[3] - 1) - 1) /
+      (x_shape[3] + pads[1] + pads[3] - dilations_[1] * (w_shape[3] - 1) - 1) /
           strides_[1] +
       1;
   if (out_h < 0 || out_w < 0) {
@@ -190,12 +188,11 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
   params.total_elements = NumElements(y_shape);
   return LaunchStatus(LaunchMusaConv2DFloatKernel(
       x.GetTensorData<float>(), w.GetTensorData<float>(), bias,
-      output.GetTensorMutableData<float>(), params, nullptr));
+      output.GetTensorMutableData<float>(), params, GetComputeStream(ctx)));
 }
 
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Conv, kOnnxDomain, 11, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
-    Conv)
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), Conv)

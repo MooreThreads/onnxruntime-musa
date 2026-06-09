@@ -122,8 +122,8 @@ float ReadFloatAttribute(Ort::ConstNode node, const std::string& name,
 void ValidateFloatTensor(Ort::ConstValue value, const char* name) {
   auto info = value.GetTensorTypeAndShapeInfo();
   if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    throw std::runtime_error(std::string("FusedGemm only supports float tensors for ") +
-                             name);
+    throw std::runtime_error(
+        std::string("FusedGemm only supports float tensors for ") + name);
   }
 }
 
@@ -142,15 +142,13 @@ std::vector<int64_t> BiasShapeForOutput(
   throw std::runtime_error("FusedGemm bias broadcast shape mismatch");
 }
 
-OrtStatus* RunDeviceFusedGemm(float* y_data, const float* a_data,
-                              const float* b_data, const float* c_data,
-                              const std::vector<int64_t>& a_shape,
-                              const std::vector<int64_t>& b_shape,
-                              const std::vector<int64_t>& c_shape,
-                              const std::vector<int64_t>& y_shape,
-                              bool trans_a, bool trans_b, float alpha,
-                              float beta, const std::string& activation,
-                              float activation_alpha, bool has_bias) {
+OrtStatus* RunDeviceFusedGemm(
+    float* y_data, const float* a_data, const float* b_data,
+    const float* c_data, const std::vector<int64_t>& a_shape,
+    const std::vector<int64_t>& b_shape, const std::vector<int64_t>& c_shape,
+    const std::vector<int64_t>& y_shape, bool trans_a, bool trans_b,
+    float alpha, float beta, const std::string& activation,
+    float activation_alpha, bool has_bias, musaStream_t stream) {
   const int64_t m = trans_a ? a_shape[1] : a_shape[0];
   const int64_t k = trans_a ? a_shape[0] : a_shape[1];
   const int64_t n = trans_b ? b_shape[0] : b_shape[1];
@@ -161,7 +159,7 @@ OrtStatus* RunDeviceFusedGemm(float* y_data, const float* a_data,
 
   if (TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape, b_shape, c_shape,
                    y_shape, trans_a, trans_b, alpha, beta, has_bias,
-                   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)) {
+                   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, stream)) {
     if (activation.empty()) {
       return nullptr;
     }
@@ -174,11 +172,11 @@ OrtStatus* RunDeviceFusedGemm(float* y_data, const float* a_data,
     MusaBroadcastParams params = MakeBroadcastParams(y_shape, y_shape, {1});
     return LaunchStatus(LaunchMusaGemmPostFloatKernel(
         y_data, nullptr, params, false, 0.0f, activation_op, true,
-        activation_alpha, nullptr));
+        activation_alpha, stream));
   }
 
   mublasHandle_t handle = nullptr;
-  RETURN_IF_ERROR(EnsureMublasHandle(&handle));
+  RETURN_IF_ERROR(EnsureMublasHandle(&handle, stream));
   mublasOperation_t op_a = trans_a ? MUBLAS_OP_T : MUBLAS_OP_N;
   mublasOperation_t op_b = trans_b ? MUBLAS_OP_T : MUBLAS_OP_N;
   int lda = static_cast<int>(a_shape[1]);
@@ -188,8 +186,8 @@ OrtStatus* RunDeviceFusedGemm(float* y_data, const float* a_data,
   int ni = static_cast<int>(n);
   float zero = 0.0f;
   mublasStatus status =
-      mublasSgemm(handle, op_b, op_a, ni, mi, ki, &alpha, b_data, ldb,
-                  a_data, lda, &zero, y_data, ni);
+      mublasSgemm(handle, op_b, op_a, ni, mi, ki, &alpha, b_data, ldb, a_data,
+                  lda, &zero, y_data, ni);
   if (status != MUBLAS_STATUS_SUCCESS) {
     return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSgemm failed");
   }
@@ -204,14 +202,14 @@ OrtStatus* RunDeviceFusedGemm(float* y_data, const float* a_data,
   MusaBroadcastParams params = MakeBroadcastParams(y_shape, y_shape, c_shape);
   return LaunchStatus(LaunchMusaGemmPostFloatKernel(
       y_data, c_data, params, has_bias, beta, activation_op, has_activation,
-      activation_alpha, nullptr));
+      activation_alpha, stream));
 }
 
 struct LinearFusionCompute : FusionNodeCompute {
   LinearFusionCompute(size_t a_input_index, size_t b_input_index,
-                    size_t bias_input_index, bool trans_a, bool trans_b,
-                    float alpha, float beta, bool flatten_a,
-                    std::string activation, float activation_alpha)
+                      size_t bias_input_index, bool trans_a, bool trans_b,
+                      float alpha, float beta, bool flatten_a,
+                      std::string activation, float activation_alpha)
       : a_input_index(a_input_index),
         b_input_index(b_input_index),
         bias_input_index(bias_input_index),
@@ -228,6 +226,7 @@ struct LinearFusionCompute : FusionNodeCompute {
       Ort::KernelContext ctx(kernel_context);
       Ort::ConstValue a = ctx.GetInput(a_input_index);
       Ort::ConstValue b = ctx.GetInput(b_input_index);
+      musaStream_t stream = GetComputeStream(ctx);
       ValidateFloatTensor(a, "A");
       ValidateFloatTensor(b, "B");
 
@@ -292,9 +291,9 @@ struct LinearFusionCompute : FusionNodeCompute {
           IsGpuMemory(y.GetTensorMemoryInfo())) {
         return RunDeviceFusedGemm(
             y.GetTensorMutableData<float>(), a.GetTensorData<float>(),
-            b.GetTensorData<float>(), c_data, compute_a_shape, b_shape,
-            c_shape, y_shape, trans_a, trans_b, alpha, beta, activation,
-            activation_alpha, has_bias);
+            b.GetTensorData<float>(), c_data, compute_a_shape, b_shape, c_shape,
+            y_shape, trans_a, trans_b, alpha, beta, activation,
+            activation_alpha, has_bias, stream);
       }
 
       return Ort::GetApi().CreateStatus(
@@ -355,7 +354,8 @@ std::unique_ptr<FusionNodeCompute> CreateGemmActivationFusion(
     Ort::ConstNode fused_node) {
   std::vector<Ort::ConstValueInfo> gemm_inputs = gemm_node.GetInputs();
   std::vector<Ort::ConstValueInfo> gemm_outputs = gemm_node.GetOutputs();
-  std::vector<Ort::ConstValueInfo> activation_inputs = activation_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> activation_inputs =
+      activation_node.GetInputs();
   if ((gemm_inputs.size() != 2 && gemm_inputs.size() != 3) ||
       gemm_outputs.size() != 1 || activation_inputs.size() != 1 ||
       Name(gemm_outputs[0]) != Name(activation_inputs[0])) {
@@ -364,20 +364,20 @@ std::unique_ptr<FusionNodeCompute> CreateGemmActivationFusion(
 
   auto fused_input_indices = FusedInputIndices(fused_node);
   float activation_alpha = 0.01f;
-  std::string activation = ActivationNameAndAlpha(activation_node,
-                                                  activation_alpha);
+  std::string activation =
+      ActivationNameAndAlpha(activation_node, activation_alpha);
   size_t bias_index = kNoBiasInput;
   if (gemm_inputs.size() == 3) {
     bias_index = GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[2]));
   }
   return std::make_unique<LinearFusionCompute>(
       GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[0])),
-      GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[1])),
-      bias_index, ReadIntAttribute(gemm_node, "transA", 0) != 0,
+      GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[1])), bias_index,
+      ReadIntAttribute(gemm_node, "transA", 0) != 0,
       ReadIntAttribute(gemm_node, "transB", 0) != 0,
       ReadFloatAttribute(gemm_node, "alpha", 1.0f),
-      ReadFloatAttribute(gemm_node, "beta", 1.0f), false,
-      std::move(activation), activation_alpha);
+      ReadFloatAttribute(gemm_node, "beta", 1.0f), false, std::move(activation),
+      activation_alpha);
 }
 
 std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
@@ -387,7 +387,8 @@ std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
   std::vector<Ort::ConstValueInfo> matmul_outputs = matmul_node.GetOutputs();
   std::vector<Ort::ConstValueInfo> add_inputs = add_node.GetInputs();
   std::vector<Ort::ConstValueInfo> add_outputs = add_node.GetOutputs();
-  std::vector<Ort::ConstValueInfo> activation_inputs = activation_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> activation_inputs =
+      activation_node.GetInputs();
   if (matmul_inputs.size() != 2 || matmul_outputs.size() != 1 ||
       add_inputs.size() != 2 || add_outputs.size() != 1 ||
       activation_inputs.size() != 1) {
@@ -409,15 +410,14 @@ std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
 
   auto fused_input_indices = FusedInputIndices(fused_node);
   float activation_alpha = 0.01f;
-  std::string activation = ActivationNameAndAlpha(activation_node,
-                                                  activation_alpha);
+  std::string activation =
+      ActivationNameAndAlpha(activation_node, activation_alpha);
   return std::make_unique<LinearFusionCompute>(
       GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[0])),
       GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[1])),
       GetFusedInputIndex(fused_input_indices,
                          Name(add_inputs[static_cast<size_t>(bias_input_idx)])),
-      false, false, 1.0f, 1.0f, true, std::move(activation),
-      activation_alpha);
+      false, false, 1.0f, 1.0f, true, std::move(activation), activation_alpha);
 }
 
 }  // namespace
@@ -459,8 +459,8 @@ std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
     return CreateGemmActivationFusion(gemm_node, activation_node, fused_node);
   }
   if (matmul_node && add_node && activation_node) {
-    return CreateMatMulAddActivationFusion(matmul_node, add_node, activation_node,
-                                      fused_node);
+    return CreateMatMulAddActivationFusion(matmul_node, add_node,
+                                           activation_node, fused_node);
   }
 
   throw std::runtime_error(

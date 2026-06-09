@@ -33,8 +33,8 @@ OrtStatus* And::Compute(Ort::KernelContext& ctx) const {
           MakeBroadcastParams(out_shape, shape0, shape1);
       return LaunchStatus(LaunchMusaAndBoolKernel(
           lhs_value.GetTensorData<uint8_t>(),
-          rhs_value.GetTensorData<uint8_t>(),
-          y.GetTensorMutableData<uint8_t>(), params, nullptr));
+          rhs_value.GetTensorData<uint8_t>(), y.GetTensorMutableData<uint8_t>(),
+          params, GetComputeStream(ctx)));
     }
   }
   return UnsupportedDeviceElementwiseStatus("And",

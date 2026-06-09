@@ -12,8 +12,7 @@ OrtStatus* GatherCpuMetadataTyped(Ort::ConstValue input,
                                   Ort::ConstValue indices_value,
                                   Ort::UnownedValue output,
                                   ONNXTensorElementDataType index_type,
-                                  int64_t input_count,
-                                  int64_t output_count) {
+                                  int64_t input_count, int64_t output_count) {
   std::vector<T> input_data = ReadTyped<T>(input);
   std::vector<int64_t> indices;
   if (index_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
@@ -31,8 +30,8 @@ OrtStatus* GatherCpuMetadataTyped(Ort::ConstValue input,
   for (int64_t index : indices) {
     int64_t normalized = index < 0 ? index + input_count : index;
     if (normalized < 0 || normalized >= input_count) {
-      return Ort::GetApi().CreateStatus(
-          ORT_INVALID_ARGUMENT, "Gather metadata index out of range");
+      return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                        "Gather metadata index out of range");
     }
     output_data.push_back(input_data[static_cast<size_t>(normalized)]);
   }
@@ -123,10 +122,11 @@ OrtStatus* Gather::Compute(Ort::KernelContext& ctx) const {
         y.GetTensorMutableRawData(), static_cast<int32_t>(elem_size),
         static_cast<int32_t>(index_elem_size), input_block_size, indices_max,
         output_block_size, block_size, prefix_count * output_block_size,
-        nullptr));
+        GetComputeStream(ctx)));
   }
 
-  // Shape outputs are CPU metadata; small constant indices may be placed on MUSA.
+  // Shape outputs are CPU metadata; small constant indices may be placed on
+  // MUSA.
   if (!IsGpuMemory(input0.GetTensorMemoryInfo())) {
     return GatherCpuMetadata(input0, indices_value, y, elem_type,
                              indices_info.GetElementType(), shape0,

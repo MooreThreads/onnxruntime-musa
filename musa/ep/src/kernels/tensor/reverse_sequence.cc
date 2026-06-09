@@ -91,7 +91,7 @@ OrtStatus* ReverseSequence::Compute(Ort::KernelContext& ctx) const {
   return LaunchStatus(LaunchMusaReverseSequenceKernel(
       input.GetTensorRawData(), sequence_lens.GetTensorData<int64_t>(),
       output.GetTensorMutableRawData(), static_cast<int32_t>(elem_size), params,
-      nullptr));
+      GetComputeStream(ctx)));
 }
 
 }  // namespace

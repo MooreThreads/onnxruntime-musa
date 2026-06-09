@@ -30,7 +30,8 @@ OrtStatus* Unsqueeze::Compute(Ort::KernelContext& ctx) const {
     out_shape.push_back(ax.count(i) ? 1 : shape0[src++]);
   }
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-  return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes());
+  return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes(),
+                       GetComputeStream(ctx));
 }
 }  // namespace
 

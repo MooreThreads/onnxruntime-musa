@@ -15,7 +15,7 @@ bool TryMudnnBatchNormalization(Ort::KernelContext& ctx,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -148,7 +148,7 @@ OrtStatus* BatchNormalization::Compute(Ort::KernelContext& ctx) const {
         ctx.GetInput(0).GetTensorRawData(), ctx.GetInput(1).GetTensorRawData(),
         ctx.GetInput(2).GetTensorRawData(), ctx.GetInput(3).GetTensorRawData(),
         ctx.GetInput(4).GetTensorRawData(), y.GetTensorMutableRawData(), params,
-        musa_elem_type, nullptr));
+        musa_elem_type, GetComputeStream(ctx)));
   }
 
   return Ort::GetApi().CreateStatus(

@@ -48,7 +48,7 @@ OrtStatus* Transpose::Compute(Ort::KernelContext& ctx) const {
     }
     return LaunchStatus(LaunchMusaTransposeKernel(
         input0.GetTensorRawData(), y.GetTensorMutableRawData(),
-        static_cast<int32_t>(elem_size), params, nullptr));
+        static_cast<int32_t>(elem_size), params, GetComputeStream(ctx)));
   }
   return Ort::GetApi().CreateStatus(
       ORT_NOT_IMPLEMENTED,

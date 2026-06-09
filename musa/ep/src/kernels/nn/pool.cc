@@ -77,7 +77,7 @@ bool TryMudnnPool(const void* input_data, void* output_data,
                   const std::vector<int64_t>& strides,
                   const std::vector<int64_t>& dilations,
                   ONNXTensorElementDataType elem_type,
-                  ::musa::dnn::Pooling::Mode mode) {
+                  ::musa::dnn::Pooling::Mode mode, musaStream_t stream) {
   const size_t spatial_rank = input_shape.size() - 2;
   if (spatial_rank == 0 || spatial_rank > kMudnnMaxPoolSpatialRank ||
       input_shape.size() < 4) {
@@ -102,7 +102,7 @@ bool TryMudnnPool(const void* input_data, void* output_data,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, stream);
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -138,7 +138,8 @@ bool TryMudnnPool(const void* input_data, void* output_data,
 bool TryMudnnGlobalAveragePool(const void* input_data, void* output_data,
                                const std::vector<int64_t>& input_shape,
                                const std::vector<int64_t>& output_shape,
-                               ONNXTensorElementDataType elem_type) {
+                               ONNXTensorElementDataType elem_type,
+                               musaStream_t stream) {
   const size_t spatial_rank = input_shape.size() - 2;
   std::vector<int64_t> kernel_shape(input_shape.begin() + 2, input_shape.end());
   std::vector<int64_t> pads(spatial_rank * 2, 0);
@@ -146,7 +147,7 @@ bool TryMudnnGlobalAveragePool(const void* input_data, void* output_data,
   std::vector<int64_t> dilations(spatial_rank, 1);
   return TryMudnnPool(input_data, output_data, input_shape, output_shape,
                       kernel_shape, pads, strides, dilations, elem_type,
-                      ::musa::dnn::Pooling::Mode::GLOBAL_AVGPOOL);
+                      ::musa::dnn::Pooling::Mode::GLOBAL_AVGPOOL, stream);
 }
 
 bool TryMudnnMaxPool(const void* input_data, void* output_data,
@@ -156,10 +157,10 @@ bool TryMudnnMaxPool(const void* input_data, void* output_data,
                      const std::vector<int64_t>& pads,
                      const std::vector<int64_t>& strides,
                      const std::vector<int64_t>& dilations,
-                     ONNXTensorElementDataType elem_type) {
+                     ONNXTensorElementDataType elem_type, musaStream_t stream) {
   return TryMudnnPool(input_data, output_data, input_shape, output_shape,
                       kernel_shape, pads, strides, dilations, elem_type,
-                      ::musa::dnn::Pooling::Mode::MAXPOOL);
+                      ::musa::dnn::Pooling::Mode::MAXPOOL, stream);
 }
 
 bool HfdType(ONNXTensorElementDataType elem_type) {
@@ -278,6 +279,7 @@ class GlobalAveragePool : public OpKernelBase<GlobalAveragePool> {
 };
 
 OrtStatus* GlobalAveragePool::Compute(Ort::KernelContext& ctx) const {
+  musaStream_t stream = GetComputeStream(ctx);
   Ort::ConstValue input = ctx.GetInput(0);
   auto input_info = input.GetTensorTypeAndShapeInfo();
   const auto elem_type = input_info.GetElementType();
@@ -324,7 +326,7 @@ OrtStatus* GlobalAveragePool::Compute(Ort::KernelContext& ctx) const {
 
   if (TryMudnnGlobalAveragePool(input.GetTensorRawData(),
                                 output.GetTensorMutableRawData(), input_shape,
-                                output_shape, elem_type)) {
+                                output_shape, elem_type, stream)) {
     return nullptr;
   }
 
@@ -334,7 +336,7 @@ OrtStatus* GlobalAveragePool::Compute(Ort::KernelContext& ctx) const {
   params.output_elements = NumElements(output_shape);
   musaError_t status = LaunchMusaGlobalAveragePoolKernel(
       input.GetTensorRawData(), output.GetTensorMutableRawData(), params,
-      musa_elem_type, nullptr);
+      musa_elem_type, stream);
   if (status == musaErrorNotSupported) {
     return PoolStatus("GlobalAveragePool", "unsupported dtype");
   }
@@ -348,6 +350,7 @@ class GlobalMaxPool : public OpKernelBase<GlobalMaxPool> {
 };
 
 OrtStatus* GlobalMaxPool::Compute(Ort::KernelContext& ctx) const {
+  musaStream_t stream = GetComputeStream(ctx);
   Ort::ConstValue input = ctx.GetInput(0);
   auto input_info = input.GetTensorTypeAndShapeInfo();
   const auto elem_type = input_info.GetElementType();
@@ -389,7 +392,7 @@ OrtStatus* GlobalMaxPool::Compute(Ort::KernelContext& ctx) const {
       input.GetTensorRawData(), output.GetTensorMutableRawData(), nullptr,
       MakeMaxPoolParams(input_shape, output_shape, kernel_shape, pads, strides,
                         dilations, false),
-      musa_elem_type, nullptr);
+      musa_elem_type, stream);
   if (status == musaErrorNotSupported) {
     return PoolStatus("GlobalMaxPool", "unsupported dtype");
   }
@@ -421,6 +424,7 @@ class MaxPool : public OpKernelBase<MaxPool> {
 };
 
 OrtStatus* MaxPool::Compute(Ort::KernelContext& ctx) const {
+  musaStream_t stream = GetComputeStream(ctx);
   Ort::ConstValue input = ctx.GetInput(0);
   auto input_info = input.GetTensorTypeAndShapeInfo();
   const auto elem_type = input_info.GetElementType();
@@ -480,7 +484,7 @@ OrtStatus* MaxPool::Compute(Ort::KernelContext& ctx) const {
       TryMudnnMaxPool(input.GetTensorRawData(),
                       output.GetTensorMutableRawData(), input_shape,
                       output_shape, kernel_shape_, pads, strides, dilations,
-                      elem_type)) {
+                      elem_type, stream)) {
     return nullptr;
   }
 
@@ -488,7 +492,7 @@ OrtStatus* MaxPool::Compute(Ort::KernelContext& ctx) const {
       input.GetTensorRawData(), output.GetTensorMutableRawData(), indices_data,
       MakeMaxPoolParams(input_shape, output_shape, kernel_shape_, pads, strides,
                         dilations, has_indices),
-      musa_elem_type, nullptr);
+      musa_elem_type, stream);
   if (status == musaErrorNotSupported) {
     return PoolStatus("MaxPool", "unsupported dtype");
   }

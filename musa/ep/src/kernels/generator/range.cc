@@ -54,9 +54,10 @@ OrtStatus* ComputeRangeTyped(Ort::KernelContext& ctx,
   }
   MusaRangeParams params{};
   params.count = count;
-  return LaunchStatus(LaunchMusaRangeKernel(
-      output.GetTensorMutableRawData(), params, musa_elem_type,
-      static_cast<double>(start), static_cast<double>(delta), nullptr));
+  return LaunchStatus(
+      LaunchMusaRangeKernel(output.GetTensorMutableRawData(), params,
+                            musa_elem_type, static_cast<double>(start),
+                            static_cast<double>(delta), GetComputeStream(ctx)));
 }
 
 class Range : public OpKernelBase<Range> {

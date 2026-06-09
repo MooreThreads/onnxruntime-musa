@@ -63,8 +63,8 @@ OrtStatus* Where::Compute(Ort::KernelContext& ctx) const {
   auto condition_shape = condition_info.GetShape();
   auto x_shape = x_info.GetShape();
   auto y_shape = y_info.GetShape();
-  auto out_shape = BroadcastShape(BroadcastShape(condition_shape, x_shape),
-                                  y_shape);
+  auto out_shape =
+      BroadcastShape(BroadcastShape(condition_shape, x_shape), y_shape);
   if (out_shape.size() > kMusaMaxBroadcastRank ||
       condition_shape.size() > kMusaMaxBroadcastRank ||
       x_shape.size() > kMusaMaxBroadcastRank ||
@@ -81,8 +81,8 @@ OrtStatus* Where::Compute(Ort::KernelContext& ctx) const {
   if (!IsGpuMemory(condition.GetTensorMemoryInfo()) ||
       !IsGpuMemory(x.GetTensorMemoryInfo()) ||
       !IsGpuMemory(y_value.GetTensorMemoryInfo())) {
-    return Ort::GetApi().CreateStatus(
-        ORT_NOT_IMPLEMENTED, "Where requires MUSA device inputs");
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Where requires MUSA device inputs");
   }
 
   Ort::UnownedValue output = ctx.GetOutput(0, out_shape);
@@ -95,22 +95,23 @@ OrtStatus* Where::Compute(Ort::KernelContext& ctx) const {
       condition.GetTensorData<uint8_t>(), x.GetTensorRawData(),
       y_value.GetTensorRawData(), output.GetTensorMutableRawData(),
       static_cast<int32_t>(elem_size),
-      MakeWhereParams(out_shape, condition_shape, x_shape, y_shape), nullptr));
+      MakeWhereParams(out_shape, condition_shape, x_shape, y_shape),
+      GetComputeStream(ctx)));
 }
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Where, kOnnxDomain, 9, 15,
     (Ort::KernelDefBuilder()
-         .AddTypeConstraint(
-             "B", GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL))
+         .AddTypeConstraint("B",
+                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL))
          .AddTypeConstraint("T", WhereOpset9TensorTypes())),
     Where)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Where, kOnnxDomain, 16, 19,
     (Ort::KernelDefBuilder()
-         .AddTypeConstraint(
-             "B", GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL))
+         .AddTypeConstraint("B",
+                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL))
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())),
     Where)

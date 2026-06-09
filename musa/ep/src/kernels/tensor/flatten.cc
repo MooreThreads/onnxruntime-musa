@@ -43,7 +43,8 @@ OrtStatus* Flatten::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Flatten requires MUSA device tensors");
   }
-  return CopyRawTensor(input, output, input.GetTensorSizeInBytes());
+  return CopyRawTensor(input, output, input.GetTensorSizeInBytes(),
+                       GetComputeStream(ctx));
 }
 }  // namespace
 

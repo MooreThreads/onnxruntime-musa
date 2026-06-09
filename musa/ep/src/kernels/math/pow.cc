@@ -26,7 +26,7 @@ bool TryMudnnPow(Ort::KernelContext& ctx, const std::vector<int64_t>& shape0,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -78,8 +78,9 @@ OrtStatus* PowDeviceCompute(Ort::KernelContext& ctx,
 
   musaError_t status = LaunchMusaPowKernel(
       lhs.GetTensorRawData(), rhs.GetTensorRawData(),
-      y.GetTensorMutableRawData(), MakeBroadcastParams(out_shape, shape0, shape1),
-      lhs_musa_elem_type, rhs_musa_elem_type, nullptr);
+      y.GetTensorMutableRawData(),
+      MakeBroadcastParams(out_shape, shape0, shape1), lhs_musa_elem_type,
+      rhs_musa_elem_type, GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus("Pow", elem_type);
   }
@@ -117,9 +118,9 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
          .AddTypeConstraint("T1", PowExponentOpset13TensorTypes())),
     Pow)
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Pow, kOnnxDomain, 15, 19,
-    (Ort::KernelDefBuilder()
-         .AddTypeConstraint("T", PowTensorTypes())
-         .AddTypeConstraint("T1", PowTensorTypes())),
-    Pow)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Pow, kOnnxDomain, 15, 19,
+                                  (Ort::KernelDefBuilder()
+                                       .AddTypeConstraint("T", PowTensorTypes())
+                                       .AddTypeConstraint("T1",
+                                                          PowTensorTypes())),
+                                  Pow)

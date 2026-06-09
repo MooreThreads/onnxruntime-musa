@@ -63,6 +63,10 @@ class OpKernelBase : public OrtKernelImpl {
   }
 };
 
+inline musaStream_t GetComputeStream(const Ort::KernelContext& ctx) {
+  return static_cast<musaStream_t>(ctx.GetGPUComputeStream());
+}
+
 // ---------------------------------------------------------------------------
 // Type-constraint helpers. The names are also parsed by
 // scripts/gen_supported_ops.py to render musa/docs/supported_ops.md.
@@ -558,7 +562,8 @@ inline OrtStatus* CopyFromHost(Ort::UnownedValue value, const void* src,
 }
 
 inline OrtStatus* CopyRawTensor(Ort::ConstValue src_value,
-                                Ort::UnownedValue dst_value, size_t num_bytes) {
+                                Ort::UnownedValue dst_value, size_t num_bytes,
+                                musaStream_t stream = nullptr) {
   if (num_bytes == 0) {
     return nullptr;
   }
@@ -572,7 +577,7 @@ inline OrtStatus* CopyRawTensor(Ort::ConstValue src_value,
   const bool dst_gpu = IsGpuMemory(dst_value.GetTensorMemoryInfo());
   if (src_gpu && dst_gpu) {
     musaError_t status =
-        musaMemcpyAsync(dst, src, num_bytes, musaMemcpyDeviceToDevice, nullptr);
+        musaMemcpyAsync(dst, src, num_bytes, musaMemcpyDeviceToDevice, stream);
     if (status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }
@@ -594,12 +599,13 @@ inline OrtStatus* CopyRawTensor(Ort::ConstValue src_value,
   return nullptr;
 }
 
-inline OrtStatus* DeviceMemcpy(void* dst, const void* src, size_t num_bytes) {
+inline OrtStatus* DeviceMemcpy(void* dst, const void* src, size_t num_bytes,
+                               musaStream_t stream = nullptr) {
   if (num_bytes == 0 || dst == src) {
     return nullptr;
   }
   musaError_t status =
-      musaMemcpyAsync(dst, src, num_bytes, musaMemcpyDeviceToDevice, nullptr);
+      musaMemcpyAsync(dst, src, num_bytes, musaMemcpyDeviceToDevice, stream);
   if (status != musaSuccess) {
     return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
   }
@@ -608,13 +614,13 @@ inline OrtStatus* DeviceMemcpy(void* dst, const void* src, size_t num_bytes) {
 
 inline OrtStatus* DeviceMemcpy2D(void* dst, size_t dst_pitch, const void* src,
                                  size_t src_pitch, size_t width_bytes,
-                                 size_t height) {
+                                 size_t height, musaStream_t stream = nullptr) {
   if (width_bytes == 0 || height == 0) {
     return nullptr;
   }
   musaError_t status =
       musaMemcpy2DAsync(dst, dst_pitch, src, src_pitch, width_bytes, height,
-                        musaMemcpyDeviceToDevice, nullptr);
+                        musaMemcpyDeviceToDevice, stream);
   if (status != musaSuccess) {
     return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
   }
@@ -972,7 +978,8 @@ OrtStatus* BinaryCompute(Ort::KernelContext& ctx,
             MakeBroadcastParams(out_shape, shape0, shape1);
         return LaunchStatus(LaunchMusaBinaryFloatKernel(
             lhs.GetTensorData<float>(), rhs.GetTensorData<float>(),
-            y.GetTensorMutableData<float>(), params, device_op, nullptr));
+            y.GetTensorMutableData<float>(), params, device_op,
+            GetComputeStream(ctx)));
       }
     }
   }
@@ -990,7 +997,7 @@ OrtStatus* UnaryCompute(Ort::KernelContext& ctx,
       if (IsGpuMemory(y.GetTensorMemoryInfo())) {
         return LaunchStatus(LaunchMusaUnaryFloatKernel(
             input.GetTensorData<float>(), y.GetTensorMutableData<float>(),
-            NumElements(shape), device_op, alpha, nullptr));
+            NumElements(shape), device_op, alpha, GetComputeStream(ctx)));
       }
     }
   }
@@ -1023,7 +1030,7 @@ inline OrtStatus* BinaryDeviceCompute(Ort::KernelContext& ctx,
       LaunchMusaBinaryKernel(lhs.GetTensorRawData(), rhs.GetTensorRawData(),
                              y.GetTensorMutableRawData(),
                              MakeBroadcastParams(out_shape, shape0, shape1),
-                             device_op, musa_elem_type, nullptr);
+                             device_op, musa_elem_type, GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
@@ -1049,7 +1056,7 @@ inline OrtStatus* UnaryDeviceCompute(Ort::KernelContext& ctx,
 
   musaError_t status = LaunchMusaUnaryKernel(
       input.GetTensorRawData(), y.GetTensorMutableRawData(), NumElements(shape),
-      device_op, alpha, musa_elem_type, nullptr);
+      device_op, alpha, musa_elem_type, GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
@@ -1082,7 +1089,7 @@ inline OrtStatus* CompareDeviceCompute(Ort::KernelContext& ctx,
       LaunchMusaCompareKernel(lhs.GetTensorRawData(), rhs.GetTensorRawData(),
                               y.GetTensorMutableData<uint8_t>(),
                               MakeBroadcastParams(out_shape, shape0, shape1),
-                              device_op, musa_elem_type, nullptr);
+                              device_op, musa_elem_type, GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }

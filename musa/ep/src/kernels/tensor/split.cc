@@ -71,7 +71,7 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
       input0.GetTensorRawData(), output_data.data(), splits.data(),
       static_cast<int64_t>(output_data.size()), outer, inner,
       shape0[static_cast<size_t>(axis)], static_cast<int32_t>(elem_size),
-      nullptr));
+      GetComputeStream(ctx)));
 }
 }  // namespace
 

@@ -7,8 +7,7 @@
 namespace {
 constexpr size_t kMudnnMaxElementwiseRank = 5;
 
-bool TryMudnnSigmoid(Ort::KernelContext& ctx,
-                     const std::vector<int64_t>& shape,
+bool TryMudnnSigmoid(Ort::KernelContext& ctx, const std::vector<int64_t>& shape,
                      ONNXTensorElementDataType elem_type) {
   Ort::ConstValue input = ctx.GetInput(0);
   if (shape.size() > kMudnnMaxElementwiseRank ||
@@ -22,7 +21,7 @@ bool TryMudnnSigmoid(Ort::KernelContext& ctx,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;

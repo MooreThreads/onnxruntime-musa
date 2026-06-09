@@ -22,7 +22,7 @@ bool TryMudnnLeakyRelu(Ort::KernelContext& ctx,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -40,8 +40,7 @@ bool TryMudnnLeakyRelu(Ort::KernelContext& ctx,
   ::musa::dnn::Unary op;
   if (op.SetMode(::musa::dnn::Unary::Mode::LEAKY_RELU) !=
           ::musa::dnn::Status::SUCCESS ||
-      op.SetAlpha(static_cast<double>(alpha)) !=
-          ::musa::dnn::Status::SUCCESS) {
+      op.SetAlpha(static_cast<double>(alpha)) != ::musa::dnn::Status::SUCCESS) {
     return false;
   }
   return op.Run(*handle, output_tensor, input_tensor) ==

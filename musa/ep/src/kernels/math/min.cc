@@ -10,10 +10,10 @@ constexpr size_t kMudnnMaxElementwiseRank = 5;
 bool TryMudnnMinBinary(const void* lhs_data,
                        const std::vector<int64_t>& lhs_shape,
                        const void* rhs_data,
-                       const std::vector<int64_t>& rhs_shape,
-                       void* output_data,
+                       const std::vector<int64_t>& rhs_shape, void* output_data,
                        const std::vector<int64_t>& output_shape,
-                       ONNXTensorElementDataType elem_type) {
+                       ONNXTensorElementDataType elem_type,
+                       musaStream_t stream) {
   if (output_shape.size() > kMudnnMaxElementwiseRank ||
       lhs_shape.size() > kMudnnMaxElementwiseRank ||
       rhs_shape.size() > kMudnnMaxElementwiseRank) {
@@ -21,7 +21,7 @@ bool TryMudnnMinBinary(const void* lhs_data,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, stream);
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -58,10 +58,11 @@ bool TryMudnnMin(Ort::KernelContext& ctx,
     return false;
   }
 
+  musaStream_t stream = GetComputeStream(ctx);
   void* output_data = y.GetTensorMutableRawData();
   if (!TryMudnnMinBinary(ctx.GetInput(0).GetTensorRawData(), shapes[0],
                          ctx.GetInput(1).GetTensorRawData(), shapes[1],
-                         output_data, output_shape, elem_type)) {
+                         output_data, output_shape, elem_type, stream)) {
     return false;
   }
   for (size_t input_index = 2; input_index < ctx.GetInputCount();
@@ -69,7 +70,7 @@ bool TryMudnnMin(Ort::KernelContext& ctx,
     if (!TryMudnnMinBinary(y.GetTensorRawData(), output_shape,
                            ctx.GetInput(input_index).GetTensorRawData(),
                            shapes[input_index], output_data, output_shape,
-                           elem_type)) {
+                           elem_type, stream)) {
       return false;
     }
   }
@@ -91,26 +92,28 @@ OrtStatus* ComputeDeviceMinFallback(
   }
 
   Ort::UnownedValue y = ctx.GetOutput(0, output_shape);
+  musaStream_t stream = GetComputeStream(ctx);
   if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
     return UnsupportedDeviceElementwiseStatus("Min", elem_type);
   }
   if (ctx.GetInputCount() == 1) {
     return CopyRawTensor(ctx.GetInput(0), y,
-                         NumElements(output_shape) * ElementSize(elem_type));
+                         NumElements(output_shape) * ElementSize(elem_type),
+                         stream);
   }
 
-  auto launch_binary = [&](const void* lhs, const std::vector<int64_t>& lhs_shape,
-                           const void* rhs,
-                           const std::vector<int64_t>& rhs_shape) {
-    musaError_t status = LaunchMusaBinaryKernel(
-        lhs, rhs, y.GetTensorMutableRawData(),
-        MakeBroadcastParams(output_shape, lhs_shape, rhs_shape),
-        MusaBinaryOp::Min, musa_elem_type, nullptr);
-    if (status == musaErrorNotSupported) {
-      return UnsupportedDeviceElementwiseStatus("Min", elem_type);
-    }
-    return LaunchStatus(status);
-  };
+  auto launch_binary =
+      [&](const void* lhs, const std::vector<int64_t>& lhs_shape,
+          const void* rhs, const std::vector<int64_t>& rhs_shape) {
+        musaError_t status = LaunchMusaBinaryKernel(
+            lhs, rhs, y.GetTensorMutableRawData(),
+            MakeBroadcastParams(output_shape, lhs_shape, rhs_shape),
+            MusaBinaryOp::Min, musa_elem_type, stream);
+        if (status == musaErrorNotSupported) {
+          return UnsupportedDeviceElementwiseStatus("Min", elem_type);
+        }
+        return LaunchStatus(status);
+      };
 
   RETURN_IF_ERROR(launch_binary(ctx.GetInput(0).GetTensorRawData(), shapes[0],
                                 ctx.GetInput(1).GetTensorRawData(), shapes[1]));
@@ -148,7 +151,7 @@ OrtStatus* Min::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Min, kOnnxDomain, 13, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", VariadicMinMaxTensorTypes())),
-    Min)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Min, kOnnxDomain, 13, 19,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T", VariadicMinMaxTensorTypes())),
+                                  Min)

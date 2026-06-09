@@ -45,7 +45,7 @@ OrtStatus* Einsum::ComputeDiagonal(Ort::KernelContext& ctx) const {
   }
   return LaunchStatus(LaunchMusaEinsumDiagonalKernel(
       input.GetTensorRawData(), output.GetTensorMutableRawData(), shape[0],
-      static_cast<int32_t>(elem_size), nullptr));
+      static_cast<int32_t>(elem_size), GetComputeStream(ctx)));
 }
 
 OrtStatus* Einsum::ComputeBhijHk(Ort::KernelContext& ctx) const {
@@ -62,8 +62,8 @@ OrtStatus* Einsum::ComputeBhijHk(Ort::KernelContext& ctx) const {
   auto rhs_shape = rhs_info.GetShape();
   if (lhs_shape.size() != 4 || rhs_shape.size() != 2 ||
       lhs_shape[1] != rhs_shape[0]) {
-    return Ort::GetApi().CreateStatus(
-        ORT_NOT_IMPLEMENTED, "Einsum bhij,hk->bkij shape mismatch");
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Einsum bhij,hk->bkij shape mismatch");
   }
   if (!IsGpuMemory(lhs.GetTensorMemoryInfo()) ||
       !IsGpuMemory(rhs.GetTensorMemoryInfo())) {
@@ -71,8 +71,8 @@ OrtStatus* Einsum::ComputeBhijHk(Ort::KernelContext& ctx) const {
                                       "Einsum requires MUSA inputs");
   }
 
-  std::vector<int64_t> output_shape = {
-      lhs_shape[0], rhs_shape[1], lhs_shape[2], lhs_shape[3]};
+  std::vector<int64_t> output_shape = {lhs_shape[0], rhs_shape[1], lhs_shape[2],
+                                       lhs_shape[3]};
   Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
   if (!IsGpuMemory(output.GetTensorMemoryInfo())) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
@@ -81,7 +81,7 @@ OrtStatus* Einsum::ComputeBhijHk(Ort::KernelContext& ctx) const {
   return LaunchStatus(LaunchMusaEinsumBhijHkKernel(
       lhs.GetTensorData<float>(), rhs.GetTensorData<float>(),
       output.GetTensorMutableData<float>(), lhs_shape[0], lhs_shape[1],
-      rhs_shape[1], lhs_shape[2], lhs_shape[3], nullptr));
+      rhs_shape[1], lhs_shape[2], lhs_shape[3], GetComputeStream(ctx)));
 }
 
 OrtStatus* Einsum::Compute(Ort::KernelContext& ctx) const {

@@ -55,7 +55,7 @@ bool TryMudnnConcatFloat(Ort::KernelContext& ctx,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -140,14 +140,13 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
     for (size_t input_idx = 0; input_idx < shapes.size(); ++input_idx) {
       Ort::ConstValue v = ctx.GetInput(input_idx);
       input_data[input_idx] = v.GetTensorRawData();
-      input_axis_dims[input_idx] =
-          shapes[input_idx][static_cast<size_t>(axis)];
+      input_axis_dims[input_idx] = shapes[input_idx][static_cast<size_t>(axis)];
     }
     return LaunchStatus(LaunchMusaConcatCopies(
         y.GetTensorMutableRawData(), input_data.data(), input_axis_dims.data(),
         static_cast<int64_t>(input_data.size()), outer, inner,
         out_shape[static_cast<size_t>(axis)], static_cast<int32_t>(elem_size),
-        nullptr));
+        GetComputeStream(ctx)));
   }
 
   return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,

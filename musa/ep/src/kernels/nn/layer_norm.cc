@@ -63,10 +63,8 @@ class LayerNormalization : public OpKernelBase<LayerNormalization> {
                 const std::vector<int64_t>& input_shape,
                 const std::vector<int64_t>& scale_shape,
                 const std::vector<int64_t>& mean_shape,
-                ONNXTensorElementDataType elem_type,
-                int64_t axis,
-                Ort::UnownedValue output,
-                Ort::UnownedValue mean,
+                ONNXTensorElementDataType elem_type, int64_t axis,
+                Ort::UnownedValue output, Ort::UnownedValue mean,
                 Ort::UnownedValue inv_std) const;
 
   int64_t axis_ = -1;
@@ -74,12 +72,14 @@ class LayerNormalization : public OpKernelBase<LayerNormalization> {
   int64_t stash_type_ = 1;
 };
 
-bool LayerNormalization::TryMudnn(
-    Ort::KernelContext& ctx, const std::vector<int64_t>& input_shape,
-    const std::vector<int64_t>& scale_shape,
-    const std::vector<int64_t>& mean_shape, ONNXTensorElementDataType elem_type,
-    int64_t axis, Ort::UnownedValue output, Ort::UnownedValue mean,
-    Ort::UnownedValue inv_std) const {
+bool LayerNormalization::TryMudnn(Ort::KernelContext& ctx,
+                                  const std::vector<int64_t>& input_shape,
+                                  const std::vector<int64_t>& scale_shape,
+                                  const std::vector<int64_t>& mean_shape,
+                                  ONNXTensorElementDataType elem_type,
+                                  int64_t axis, Ort::UnownedValue output,
+                                  Ort::UnownedValue mean,
+                                  Ort::UnownedValue inv_std) const {
   Ort::ConstValue input = ctx.GetInput(0);
   Ort::ConstValue scale = ctx.GetInput(1);
   Ort::ConstValue bias =
@@ -92,16 +92,17 @@ bool LayerNormalization::TryMudnn(
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
   }
 
   const int64_t rows =
-      axis == 0 ? 1
-                : std::accumulate(input_shape.begin(), input_shape.begin() + axis,
-                                  int64_t{1}, std::multiplies<int64_t>());
+      axis == 0
+          ? 1
+          : std::accumulate(input_shape.begin(), input_shape.begin() + axis,
+                            int64_t{1}, std::multiplies<int64_t>());
   const size_t mean_bytes = static_cast<size_t>(rows) * sizeof(float);
   DeviceTempBuffer mean_tmp(mean == nullptr ? mean_bytes : 0);
   DeviceTempBuffer inv_tmp(inv_std == nullptr ? mean_bytes : 0);
@@ -110,8 +111,9 @@ bool LayerNormalization::TryMudnn(
   }
   void* mean_data =
       mean == nullptr ? mean_tmp.Get() : mean.GetTensorMutableData<float>();
-  void* inv_std_data =
-      inv_std == nullptr ? inv_tmp.Get() : inv_std.GetTensorMutableData<float>();
+  void* inv_std_data = inv_std == nullptr
+                           ? inv_tmp.Get()
+                           : inv_std.GetTensorMutableData<float>();
   if (mean_data == nullptr || inv_std_data == nullptr) {
     return false;
   }
@@ -157,12 +159,11 @@ bool LayerNormalization::TryMudnn(
     if (bytes != 0 && musaMalloc(&ptr, bytes) != musaSuccess) {
       ptr = nullptr;
     }
-    return ::musa::dnn::MemoryHandler(
-        ptr, [](void* p) {
-          if (p != nullptr) {
-            musaFree(p);
-          }
-        });
+    return ::musa::dnn::MemoryHandler(ptr, [](void* p) {
+      if (p != nullptr) {
+        musaFree(p);
+      }
+    });
   };
 
   auto status = op.Run(*handle, output_tensor, mean_tensor, inv_std_tensor,
@@ -171,7 +172,7 @@ bool LayerNormalization::TryMudnn(
     return false;
   }
   if (mean == nullptr || inv_std == nullptr || used_workspace) {
-    return musaDeviceSynchronize() == musaSuccess;
+    return musaStreamSynchronize(GetComputeStream(ctx)) == musaSuccess;
   }
   return true;
 }
@@ -189,8 +190,8 @@ OrtStatus* LayerNormalization::Compute(Ort::KernelContext& ctx) const {
   auto input_shape = input_info.GetShape();
   auto scale_shape = scale_info.GetShape();
   if (input_shape.empty()) {
-    return Ort::GetApi().CreateStatus(
-        ORT_NOT_IMPLEMENTED, "LayerNormalization requires rank >= 1");
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "LayerNormalization requires rank >= 1");
   }
   int64_t axis = NormalizeAxis(axis_, input_shape.size());
   if (axis < 0 || axis >= static_cast<int64_t>(input_shape.size())) {
@@ -230,17 +231,17 @@ OrtStatus* LayerNormalization::Compute(Ort::KernelContext& ctx) const {
       !IsGpuMemory(scale.GetTensorMemoryInfo()) ||
       (bias != nullptr && !IsGpuMemory(bias.GetTensorMemoryInfo()))) {
     return Ort::GetApi().CreateStatus(
-        ORT_NOT_IMPLEMENTED,
-        "LayerNormalization requires MUSA device inputs");
+        ORT_NOT_IMPLEMENTED, "LayerNormalization requires MUSA device inputs");
   }
 
   const int64_t rows =
-      axis == 0 ? 1
-                : std::accumulate(input_shape.begin(), input_shape.begin() + axis,
-                                  int64_t{1}, std::multiplies<int64_t>());
+      axis == 0
+          ? 1
+          : std::accumulate(input_shape.begin(), input_shape.begin() + axis,
+                            int64_t{1}, std::multiplies<int64_t>());
   const int64_t norm_size =
-      std::accumulate(input_shape.begin() + axis, input_shape.end(),
-                      int64_t{1}, std::multiplies<int64_t>());
+      std::accumulate(input_shape.begin() + axis, input_shape.end(), int64_t{1},
+                      std::multiplies<int64_t>());
   if (rows > INT32_MAX) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED, "LayerNormalization row count exceeds limit");
@@ -248,17 +249,16 @@ OrtStatus* LayerNormalization::Compute(Ort::KernelContext& ctx) const {
   Ort::UnownedValue output = ctx.GetOutput(0, input_shape);
   if (!IsGpuMemory(output.GetTensorMemoryInfo())) {
     return Ort::GetApi().CreateStatus(
-        ORT_NOT_IMPLEMENTED,
-        "LayerNormalization requires MUSA device output");
+        ORT_NOT_IMPLEMENTED, "LayerNormalization requires MUSA device output");
   }
 
   std::vector<int64_t> mean_shape = MeanShape(input_shape, axis);
-  Ort::UnownedValue mean =
-      ctx.GetOutputCount() > 1 ? ctx.GetOutput(1, mean_shape)
+  Ort::UnownedValue mean = ctx.GetOutputCount() > 1
+                               ? ctx.GetOutput(1, mean_shape)
                                : Ort::UnownedValue{nullptr};
-  Ort::UnownedValue inv_std =
-      ctx.GetOutputCount() > 2 ? ctx.GetOutput(2, mean_shape)
-                               : Ort::UnownedValue{nullptr};
+  Ort::UnownedValue inv_std = ctx.GetOutputCount() > 2
+                                  ? ctx.GetOutput(2, mean_shape)
+                                  : Ort::UnownedValue{nullptr};
   if ((mean != nullptr && !IsGpuMemory(mean.GetTensorMemoryInfo())) ||
       (inv_std != nullptr && !IsGpuMemory(inv_std.GetTensorMemoryInfo()))) {
     return Ort::GetApi().CreateStatus(
@@ -281,7 +281,7 @@ OrtStatus* LayerNormalization::Compute(Ort::KernelContext& ctx) const {
       output.GetTensorMutableRawData(),
       mean == nullptr ? nullptr : mean.GetTensorMutableData<float>(),
       inv_std == nullptr ? nullptr : inv_std.GetTensorMutableData<float>(),
-      params, epsilon_, musa_elem_type, nullptr);
+      params, epsilon_, musa_elem_type, GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED,
@@ -293,6 +293,5 @@ OrtStatus* LayerNormalization::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     LayerNormalization, kOnnxDomain, 17, 19,
-    (Ort::KernelDefBuilder()
-         .AddTypeConstraint("T", FloatTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
     LayerNormalization)

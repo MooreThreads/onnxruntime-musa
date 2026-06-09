@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#include "shared_inc/op_kernel_common.h"
 #include "logical/logical_ops_impl.h"
+#include "shared_inc/op_kernel_common.h"
 
 namespace {
 class Not : public OpKernelBase<Not> {
@@ -23,8 +23,8 @@ OrtStatus* Not::Compute(Ort::KernelContext& ctx) const {
   if (IsGpuMemory(input_value.GetTensorMemoryInfo()) &&
       IsGpuMemory(y.GetTensorMemoryInfo())) {
     return LaunchStatus(LaunchMusaNotBoolKernel(
-        input_value.GetTensorData<uint8_t>(),
-        y.GetTensorMutableData<uint8_t>(), NumElements(shape), nullptr));
+        input_value.GetTensorData<uint8_t>(), y.GetTensorMutableData<uint8_t>(),
+        NumElements(shape), GetComputeStream(ctx)));
   }
   return UnsupportedDeviceElementwiseStatus("Not",
                                             ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL);

@@ -67,9 +67,9 @@ OrtStatus* Clip::Compute(Ort::KernelContext& ctx) const {
                                       "Clip requires MUSA output");
   }
 
-  musaError_t status = LaunchMusaClipKernel(input.GetTensorRawData(),
-                                            output.GetTensorMutableRawData(),
-                                            params, musa_elem_type, nullptr);
+  musaError_t status = LaunchMusaClipKernel(
+      input.GetTensorRawData(), output.GetTensorMutableRawData(), params,
+      musa_elem_type, GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Clip unsupported dtype");

@@ -125,9 +125,9 @@ namespace {
 
 void NoOpDelete(void*) {}
 
-::musa::dnn::Handle* MudnnHandleOrThrow() {
+::musa::dnn::Handle* MudnnHandleOrThrow(musaStream_t stream) {
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* status = EnsureMudnnHandle(&handle);
+  OrtStatus* status = EnsureMudnnHandle(&handle, stream);
   if (status != nullptr) {
     Ort::GetApi().ReleaseStatus(status);
     throw std::runtime_error("mudnn Handle SetAllowTF32 failed");
@@ -359,7 +359,8 @@ OrtStatus* RunMudnnConcatMatMulBatched(const float* a_data, const float* b_data,
                                        const std::vector<int64_t>& lhs_shape,
                                        const std::vector<int64_t>& rhs_shape,
                                        const std::vector<int64_t>& output_shape,
-                                       ConcatMatMulScratch& scratch) {
+                                       ConcatMatMulScratch& scratch,
+                                       musaStream_t stream) {
   if (lhs_shape.size() <= 2 && rhs_shape.size() <= 2) {
     return Ort::GetApi().CreateStatus(
         ORT_INVALID_ARGUMENT,
@@ -375,7 +376,7 @@ OrtStatus* RunMudnnConcatMatMulBatched(const float* a_data, const float* b_data,
       reshape_4d_to_3d ? Reshape4DTo3D(output_shape) : output_shape;
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, stream);
   if (handle_status != nullptr) {
     return handle_status;
   }
@@ -423,8 +424,8 @@ OrtStatus* RunMudnnConcatMatMulBatched(const float* a_data, const float* b_data,
 
 void RunMudnnConcat(const std::vector<Ort::ConstValue>& concat_inputs,
                     const std::vector<int64_t>& concat_shape, int64_t axis,
-                    float* concat_data) {
-  ::musa::dnn::Handle* handle = MudnnHandleOrThrow();
+                    float* concat_data, musaStream_t stream) {
+  ::musa::dnn::Handle* handle = MudnnHandleOrThrow(stream);
   std::vector<::musa::dnn::Tensor> input_tensors(concat_inputs.size());
   for (size_t i = 0; i < concat_inputs.size(); ++i) {
     SetupMudnnTensor(input_tensors[i], concat_inputs[i].GetTensorData<float>(),
@@ -448,7 +449,7 @@ OrtStatus* ComputeDeviceConcatMatMul(
     Ort::ConstValue other_input, const std::vector<int64_t>& concat_shape,
     const std::vector<int64_t>& other_shape, int64_t axis,
     int64_t concat_input_idx, const std::vector<int64_t>& output_shape,
-    ConcatMatMulScratch& scratch) {
+    ConcatMatMulScratch& scratch, musaStream_t stream) {
   scratch.concat_buffer.Resize(static_cast<size_t>(NumElements(concat_shape)) *
                                sizeof(float));
   DeviceBuffer& concat_buffer = scratch.concat_buffer;
@@ -456,8 +457,8 @@ OrtStatus* ComputeDeviceConcatMatMul(
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED, "ConcatMatMul requires MUSA concat inputs");
   }
-  RunMudnnConcat(concat_inputs, concat_shape, axis,
-                 concat_buffer.data<float>());
+  RunMudnnConcat(concat_inputs, concat_shape, axis, concat_buffer.data<float>(),
+                 stream);
 
   if (!IsGpuValue(other_input)) {
     return Ort::GetApi().CreateStatus(
@@ -490,9 +491,10 @@ OrtStatus* ComputeDeviceConcatMatMul(
   OrtStatus* matmul_status =
       used_mudnn_batched
           ? RunMudnnConcatMatMulBatched(a_data, b_data, y_data, lhs_shape,
-                                        rhs_shape, output_shape, scratch)
+                                        rhs_shape, output_shape, scratch,
+                                        stream)
           : ComputeMusaMatMulDevice(a_data, b_data, y_data, lhs_shape,
-                                    rhs_shape, output_shape);
+                                    rhs_shape, output_shape, stream);
   if (matmul_status != nullptr) {
     return matmul_status;
   }
@@ -583,6 +585,7 @@ OrtStatus* ConcatMatMulFusionCompute::Compute(
     OrtKernelContext* kernel_context) const {
   try {
     Ort::KernelContext ctx(kernel_context);
+    musaStream_t stream = GetComputeStream(ctx);
     std::vector<Ort::ConstValue> concat_inputs;
     concat_inputs.reserve(concat_input_indices.size());
     for (size_t index : concat_input_indices) {
@@ -613,9 +616,9 @@ OrtStatus* ConcatMatMulFusionCompute::Compute(
     if (!scratch) {
       scratch = std::make_unique<ConcatMatMulScratch>();
     }
-    return ComputeDeviceConcatMatMul(y, concat_inputs, other_input,
-                                     concat_shape, other_shape, normalized_axis,
-                                     concat_input_idx, output_shape, *scratch);
+    return ComputeDeviceConcatMatMul(
+        y, concat_inputs, other_input, concat_shape, other_shape,
+        normalized_axis, concat_input_idx, output_shape, *scratch, stream);
   } catch (const Ort::Exception& ex) {
     Ort::Status status(ex);
     return status.release();

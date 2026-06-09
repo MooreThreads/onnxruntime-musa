@@ -123,7 +123,7 @@ OrtStatus* GatherND::Compute(Ort::KernelContext& ctx) const {
   return LaunchStatus(LaunchMusaGatherNDKernel(
       input.GetTensorRawData(), indices.GetTensorData<int64_t>(),
       output.GetTensorMutableRawData(), static_cast<int32_t>(elem_size), params,
-      nullptr));
+      GetComputeStream(ctx)));
 }
 
 }  // namespace

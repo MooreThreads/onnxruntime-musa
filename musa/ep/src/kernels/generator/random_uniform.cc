@@ -12,15 +12,16 @@ class RandomUniformBase {
     Ort::ConstKernelInfo kernel_info(info);
     low_ = AttrOrDefault<float>(kernel_info, "low", 0.0f);
     high_ = AttrOrDefault<float>(kernel_info, "high", 1.0f);
-    dtype_ = AttrOrDefault<int64_t>(
-        kernel_info, "dtype", ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
-    seed_ = static_cast<uint64_t>(
-        AttrOrDefault<float>(kernel_info, "seed", 0.0f));
+    dtype_ = AttrOrDefault<int64_t>(kernel_info, "dtype",
+                                    ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
+    seed_ =
+        static_cast<uint64_t>(AttrOrDefault<float>(kernel_info, "seed", 0.0f));
   }
 
   OrtStatus* FillOutput(Ort::UnownedValue output,
                         const std::vector<int64_t>& shape,
-                        ONNXTensorElementDataType elem_type) const {
+                        ONNXTensorElementDataType elem_type,
+                        musaStream_t stream) const {
     if (!IsGpuMemory(output.GetTensorMemoryInfo())) {
       return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                         "RandomUniform requires MUSA output");
@@ -32,7 +33,7 @@ class RandomUniformBase {
     }
     musaError_t status = LaunchMusaRandomUniformKernel(
         output.GetTensorMutableRawData(), NumElements(shape), low_, high_,
-        seed_, musa_elem_type, nullptr);
+        seed_, musa_elem_type, stream);
     if (status == musaErrorNotSupported) {
       return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                         "RandomUniform unsupported dtype");
@@ -57,7 +58,7 @@ class RandomUniform : public OpKernelBase<RandomUniform>,
   OrtStatus* Compute(Ort::KernelContext& ctx) const {
     auto elem_type = static_cast<ONNXTensorElementDataType>(dtype_);
     Ort::UnownedValue output = ctx.GetOutput(0, shape_);
-    return FillOutput(output, shape_, elem_type);
+    return FillOutput(output, shape_, elem_type, GetComputeStream(ctx));
   }
 
  private:
@@ -76,12 +77,11 @@ class RandomUniformLike : public OpKernelBase<RandomUniformLike>,
     Ort::ConstValue input = ctx.GetInput(0);
     auto input_info = input.GetTensorTypeAndShapeInfo();
     auto output_shape = input_info.GetShape();
-    auto elem_type =
-        has_dtype_attr_
-            ? static_cast<ONNXTensorElementDataType>(dtype_)
-            : input_info.GetElementType();
+    auto elem_type = has_dtype_attr_
+                         ? static_cast<ONNXTensorElementDataType>(dtype_)
+                         : input_info.GetElementType();
     Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
-    return FillOutput(output, output_shape, elem_type);
+    return FillOutput(output, output_shape, elem_type, GetComputeStream(ctx));
   }
 
  private:

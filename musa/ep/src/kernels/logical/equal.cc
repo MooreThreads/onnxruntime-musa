@@ -27,7 +27,7 @@ bool TryMudnnEqual(Ort::KernelContext& ctx, const std::vector<int64_t>& shape0,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -117,13 +117,12 @@ OrtStatus* EqualString::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Equal, kOnnxDomain, 13, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", EqualTensorTypes())),
-    Equal)
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", EqualTensorTypes())), Equal)
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Equal, kOnnxDomain, 19, 19,
-    (Ort::KernelDefBuilder()
-         .AddTypeConstraint("T", StringTensorTypes())
-         .SetInputMemType(0, OrtMemTypeCPUInput)
-         .SetInputMemType(1, OrtMemTypeCPUInput)),
-    EqualString)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Equal, kOnnxDomain, 19, 19,
+                                  (Ort::KernelDefBuilder()
+                                       .AddTypeConstraint("T",
+                                                          StringTensorTypes())
+                                       .SetInputMemType(0, OrtMemTypeCPUInput)
+                                       .SetInputMemType(1, OrtMemTypeCPUInput)),
+                                  EqualString)

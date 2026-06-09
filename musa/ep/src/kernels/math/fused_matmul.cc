@@ -57,7 +57,7 @@ OrtStatus* FusedMatMul::Compute(Ort::KernelContext& ctx) const {
   return ComputeMusaMatMulDevice(
       a.GetTensorRawData(), b.GetTensorRawData(), y.GetTensorMutableRawData(),
       elem_type, a_shape, b_shape, out_shape, trans_a_ != 0, trans_b_ != 0,
-      trans_batch_a_ != 0, trans_batch_b_ != 0, alpha_);
+      trans_batch_a_ != 0, trans_batch_b_ != 0, alpha_, GetComputeStream(ctx));
 }
 }  // namespace
 

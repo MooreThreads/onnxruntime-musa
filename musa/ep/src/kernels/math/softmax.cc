@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#include "math/softmax_impl.h"
 #include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
-#include "math/softmax_impl.h"
 
 namespace {
 bool IsSoftmaxDeviceType(MusaElementType elem_type) {
@@ -13,10 +13,8 @@ bool IsSoftmaxDeviceType(MusaElementType elem_type) {
          elem_type == MusaElementType::BFloat16;
 }
 
-bool TryMudnnSoftmax(Ort::KernelContext& ctx,
-                     const std::vector<int64_t>& shape,
-                     int64_t axis,
-                     ONNXTensorElementDataType elem_type,
+bool TryMudnnSoftmax(Ort::KernelContext& ctx, const std::vector<int64_t>& shape,
+                     int64_t axis, ONNXTensorElementDataType elem_type,
                      Ort::UnownedValue y) {
   Ort::ConstValue input = ctx.GetInput(0);
   if (!IsGpuMemory(input.GetTensorMemoryInfo()) ||
@@ -25,7 +23,7 @@ bool TryMudnnSoftmax(Ort::KernelContext& ctx,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -102,8 +100,8 @@ OrtStatus* Softmax::Compute(Ort::KernelContext& ctx) const {
     return UnsupportedDeviceElementwiseStatus("Softmax", elem_type);
   }
   return LaunchStatus(LaunchMusaSoftmaxKernel(
-      input0.GetTensorRawData(), y.GetTensorMutableRawData(), outer, dim,
-      inner, musa_elem_type, nullptr));
+      input0.GetTensorRawData(), y.GetTensorMutableRawData(), outer, dim, inner,
+      musa_elem_type, GetComputeStream(ctx)));
 }
 }  // namespace
 

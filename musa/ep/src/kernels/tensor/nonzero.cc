@@ -73,9 +73,10 @@ OrtStatus* NonZero::Compute(Ort::KernelContext& ctx) const {
   MusaDeviceBuffer device_counts(
       static_cast<size_t>(NonZeroBlockCount(total_elements)) * sizeof(int));
   if (total_elements > 0) {
-    musaError_t status = LaunchMusaNonZeroCountKernel(
-        input.GetTensorRawData(), total_elements,
-        static_cast<int*>(device_counts.get()), musa_elem_type, nullptr);
+    musaError_t status =
+        LaunchMusaNonZeroCountKernel(input.GetTensorRawData(), total_elements,
+                                     static_cast<int*>(device_counts.get()),
+                                     musa_elem_type, GetComputeStream(ctx));
     if (status == musaErrorNotSupported) {
       return UnsupportedDeviceElementwiseStatus("NonZero", elem_type);
     }
@@ -109,7 +110,7 @@ OrtStatus* NonZero::Compute(Ort::KernelContext& ctx) const {
       input.GetTensorRawData(), static_cast<const int*>(device_counts.get()),
       output.GetTensorMutableData<int64_t>(),
       MakeNonZeroParams(input_shape, nonzero_elements), musa_elem_type,
-      nullptr);
+      GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus("NonZero", elem_type);
   }

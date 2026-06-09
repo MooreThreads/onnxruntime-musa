@@ -25,7 +25,7 @@ bool TryMudnnSub(Ort::KernelContext& ctx, const std::vector<int64_t>& shape0,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -71,14 +71,12 @@ OrtStatus* Sub::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Sub, kOnnxDomain, 13, 13,
-    (Ort::KernelDefBuilder().AddTypeConstraint(
-        "T", BinaryNumericOpset13TensorTypes())),
-    Sub)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Sub, kOnnxDomain, 13, 13,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T", BinaryNumericOpset13TensorTypes())),
+                                  Sub)
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Sub, kOnnxDomain, 14, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint(
-        "T", BinaryNumericOpset14TensorTypes())),
-    Sub)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Sub, kOnnxDomain, 14, 19,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T", BinaryNumericOpset14TensorTypes())),
+                                  Sub)

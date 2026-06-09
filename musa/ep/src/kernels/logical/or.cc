@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#include "shared_inc/op_kernel_common.h"
 #include "logical/logical_ops_impl.h"
+#include "shared_inc/op_kernel_common.h"
 
 namespace {
 class Or : public OpKernelBase<Or> {
@@ -33,8 +33,8 @@ OrtStatus* Or::Compute(Ort::KernelContext& ctx) const {
           MakeBroadcastParams(out_shape, shape0, shape1);
       return LaunchStatus(LaunchMusaOrBoolKernel(
           lhs_value.GetTensorData<uint8_t>(),
-          rhs_value.GetTensorData<uint8_t>(),
-          y.GetTensorMutableData<uint8_t>(), params, nullptr));
+          rhs_value.GetTensorData<uint8_t>(), y.GetTensorMutableData<uint8_t>(),
+          params, GetComputeStream(ctx)));
     }
   }
   return UnsupportedDeviceElementwiseStatus("Or",

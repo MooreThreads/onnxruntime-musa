@@ -118,5 +118,5 @@ inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
       MakeReduceParams(input_shape, output_shape, axes_set, keepdims);
   return LaunchStatus(LaunchMusaReduceKernel(
       input0.GetTensorRawData(), y.GetTensorMutableRawData(), params,
-      ToMusaReduceOp(mode), musa_elem_type, nullptr));
+      ToMusaReduceOp(mode), musa_elem_type, GetComputeStream(ctx)));
 }

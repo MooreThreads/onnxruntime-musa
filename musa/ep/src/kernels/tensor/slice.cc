@@ -60,7 +60,8 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
     const bool src_gpu = IsGpuMemory(input0.GetTensorMemoryInfo());
     const bool dst_gpu = IsGpuMemory(y.GetTensorMemoryInfo());
     if (src_gpu && dst_gpu) {
-      return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes());
+      return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes(),
+                           GetComputeStream(ctx));
     }
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Slice requires MUSA input and output");
@@ -82,9 +83,9 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
           static_cast<size_t>(norm_starts[0] * shape0[1] + norm_starts[1]) *
           elem_size;
       if (width_bytes >= 256) {
-        return DeviceMemcpy2D(dst_base, dst_pitch, src_base + src_offset,
-                              src_pitch, width_bytes,
-                              static_cast<size_t>(height));
+        return DeviceMemcpy2D(
+            dst_base, dst_pitch, src_base + src_offset, src_pitch, width_bytes,
+            static_cast<size_t>(height), GetComputeStream(ctx));
       }
     }
   }
@@ -130,7 +131,8 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
           if (width_bytes >= 256) {
             return DeviceMemcpy2D(dst_base, dst_pitch, src_base + src_offset,
                                   src_pitch, width_bytes,
-                                  static_cast<size_t>(height));
+                                  static_cast<size_t>(height),
+                                  GetComputeStream(ctx));
           }
         }
       }
@@ -152,7 +154,7 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
     }
     return LaunchStatus(LaunchMusaSliceKernel(
         input0.GetTensorRawData(), y.GetTensorMutableRawData(),
-        static_cast<int32_t>(elem_size), params, nullptr));
+        static_cast<int32_t>(elem_size), params, GetComputeStream(ctx)));
   }
 
   return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,

@@ -3,14 +3,36 @@
 
 namespace {
 
+// Treat tiny float32 backend differences as ties so ONNX lower-index
+// tie-breaking remains stable around TopK selection thresholds.
+__device__ __forceinline__ double TopKFloatTolerance(double lhs, double rhs) {
+  return 1.0e-7 * fmax(1.0, fmax(fabs(lhs), fabs(rhs)));
+}
+
+template <typename T>
+__device__ __forceinline__ double TopKComparisonTolerance(T, T) {
+  return 0.0;
+}
+
+template <>
+__device__ __forceinline__ double TopKComparisonTolerance<float>(float lhs,
+                                                                 float rhs) {
+  return TopKFloatTolerance(static_cast<double>(lhs),
+                            static_cast<double>(rhs));
+}
+
 template <typename T>
 __device__ __forceinline__ bool TopKValueGreater(T lhs, T rhs) {
-  return MusaScalarToDouble(lhs) > MusaScalarToDouble(rhs);
+  const double lhs_value = MusaScalarToDouble(lhs);
+  const double rhs_value = MusaScalarToDouble(rhs);
+  return lhs_value > rhs_value + TopKComparisonTolerance(lhs, rhs);
 }
 
 template <typename T>
 __device__ __forceinline__ bool TopKValueLess(T lhs, T rhs) {
-  return MusaScalarToDouble(lhs) < MusaScalarToDouble(rhs);
+  const double lhs_value = MusaScalarToDouble(lhs);
+  const double rhs_value = MusaScalarToDouble(rhs);
+  return lhs_value + TopKComparisonTolerance(lhs, rhs) < rhs_value;
 }
 
 template <typename T>

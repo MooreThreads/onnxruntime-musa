@@ -184,10 +184,10 @@ OrtStatus* RunDeviceFusedGemm(
   int mi = static_cast<int>(m);
   int ki = static_cast<int>(k);
   int ni = static_cast<int>(n);
+  float zero = 0.0f;
   mublasStatus status =
-      MublasGemmEx(handle, op_b, op_a, ni, mi, ki, alpha, b_data, ldb,
-                   a_data, lda, 0.0, y_data, ni,
-                   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
+      mublasSgemm(handle, op_b, op_a, ni, mi, ki, &alpha, b_data, ldb, a_data,
+                  lda, &zero, y_data, ni);
   if (status != MUBLAS_STATUS_SUCCESS) {
     return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSgemm failed");
   }
@@ -388,12 +388,11 @@ std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
   std::vector<Ort::ConstValueInfo> add_inputs = add_node.GetInputs();
   std::vector<Ort::ConstValueInfo> add_outputs = add_node.GetOutputs();
   std::vector<Ort::ConstValueInfo> activation_inputs =
-      activation_node ? activation_node.GetInputs()
-                      : std::vector<Ort::ConstValueInfo>{};
+      activation_node.GetInputs();
   if (matmul_inputs.size() != 2 || matmul_outputs.size() != 1 ||
       add_inputs.size() != 2 || add_outputs.size() != 1 ||
-      (activation_node && activation_inputs.size() != 1)) {
-    throw std::runtime_error("invalid MatMulAdd fused graph");
+      activation_inputs.size() != 1) {
+    throw std::runtime_error("invalid MatMulAddActivation fused graph");
   }
 
   const std::string matmul_output_name = Name(matmul_outputs[0]);
@@ -405,16 +404,14 @@ std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
   } else {
     throw std::runtime_error("MatMul output does not feed Add");
   }
-  if (activation_node && Name(activation_inputs[0]) != Name(add_outputs[0])) {
+  if (Name(activation_inputs[0]) != Name(add_outputs[0])) {
     throw std::runtime_error("Add output does not feed activation");
   }
 
   auto fused_input_indices = FusedInputIndices(fused_node);
   float activation_alpha = 0.01f;
-  std::string activation;
-  if (activation_node) {
-    activation = ActivationNameAndAlpha(activation_node, activation_alpha);
-  }
+  std::string activation =
+      ActivationNameAndAlpha(activation_node, activation_alpha);
   return std::make_unique<LinearFusionCompute>(
       GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[0])),
       GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[1])),
@@ -437,7 +434,7 @@ bool IsLinearFusionGraph(Ort::ConstGraph graph) {
     has_activation = has_activation || IsActivationOp(node);
   }
   return (has_gemm && has_activation) ||
-         (has_matmul && has_add);
+         (has_matmul && has_add && has_activation);
 }
 
 std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
@@ -461,11 +458,11 @@ std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
   if (gemm_node && activation_node) {
     return CreateGemmActivationFusion(gemm_node, activation_node, fused_node);
   }
-  if (matmul_node && add_node) {
-    return CreateMatMulAddActivationFusion(matmul_node, add_node, activation_node,
-                                      fused_node);
+  if (matmul_node && add_node && activation_node) {
+    return CreateMatMulAddActivationFusion(matmul_node, add_node,
+                                           activation_node, fused_node);
   }
 
   throw std::runtime_error(
-      "FusedGemm fusion expects Gemm+activation or MatMul+Add(+activation)");
+      "FusedGemm fusion expects Gemm+activation or MatMul+Add+activation");
 }

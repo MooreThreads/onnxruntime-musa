@@ -95,30 +95,6 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
                   [](int64_t step) { return step == 1; });
   if (all_unit_steps && IsGpuMemory(input0.GetTensorMemoryInfo()) &&
       IsGpuMemory(y.GetTensorMemoryInfo())) {
-    const size_t last_dim = shape0.empty() ? 0 : shape0.size() - 1;
-    const bool last_axis_slice =
-        shape0.size() >= 2 && norm_steps[last_dim] == 1 &&
-        out_shape[last_dim] > 0 &&
-        norm_starts[last_dim] + out_shape[last_dim] <= shape0[last_dim] &&
-        [&]() {
-          for (size_t dim = 0; dim < last_dim; ++dim) {
-            if (norm_starts[dim] != 0 || out_shape[dim] != shape0[dim]) {
-              return false;
-            }
-          }
-          return true;
-        }();
-    if (last_axis_slice) {
-      musaError_t status = LaunchMusaSliceLastAxisKernel(
-          input0.GetTensorRawData(), y.GetTensorMutableRawData(),
-          static_cast<int32_t>(elem_size), NumElements(out_shape),
-          shape0[last_dim], out_shape[last_dim], norm_starts[last_dim],
-          nullptr);
-      if (status != musaErrorNotSupported) {
-        return LaunchStatus(status);
-      }
-    }
-
     size_t copy_dim = shape0.size();
     for (size_t dim = 0; dim < shape0.size(); ++dim) {
       if (norm_starts[dim] != 0 || out_shape[dim] != shape0[dim]) {

@@ -4,8 +4,6 @@
 #include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
 
-#include <string_view>
-
 namespace {
 constexpr size_t kMudnnMaxElementwiseRank = 5;
 
@@ -66,29 +64,6 @@ class EqualString : public OpKernelBase<EqualString> {
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
 };
 
-std::vector<std::string_view> ReadStringTensorViews(
-    Ort::ConstValue value, std::vector<char>& buffer,
-    std::vector<size_t>& offsets) {
-  auto info = value.GetTensorTypeAndShapeInfo();
-  const size_t count = static_cast<size_t>(NumElements(info.GetShape()));
-  const size_t data_length = value.GetStringTensorDataLength();
-  buffer.resize(data_length);
-  offsets.resize(count);
-  if (count > 0) {
-    value.GetStringTensorContent(buffer.data(), buffer.size(), offsets.data(),
-                                 offsets.size());
-  }
-
-  std::vector<std::string_view> views;
-  views.reserve(count);
-  for (size_t i = 0; i < count; ++i) {
-    const size_t begin = offsets[i];
-    const size_t end = i + 1 < count ? offsets[i + 1] : buffer.size();
-    views.emplace_back(buffer.data() + begin, end - begin);
-  }
-  return views;
-}
-
 OrtStatus* Equal::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto elem_type = info.GetElementType();
@@ -127,39 +102,14 @@ OrtStatus* EqualString::Compute(Ort::KernelContext& ctx) const {
   const int64_t total = NumElements(out_shape);
   const std::vector<int64_t> lhs_strides = Strides(lhs_shape);
   const std::vector<int64_t> rhs_strides = Strides(rhs_shape);
-  std::vector<char> lhs_buffer;
-  std::vector<char> rhs_buffer;
-  std::vector<size_t> lhs_offsets;
-  std::vector<size_t> rhs_offsets;
-  std::vector<std::string_view> lhs_values =
-      ReadStringTensorViews(lhs, lhs_buffer, lhs_offsets);
-  std::vector<std::string_view> rhs_values =
-      ReadStringTensorViews(rhs, rhs_buffer, rhs_offsets);
   std::vector<uint8_t> out(static_cast<size_t>(total));
-  bool uniform_output = true;
-  uint8_t first_value = 0;
   for (int64_t i = 0; i < total; ++i) {
     const std::vector<int64_t> coord = Coordinates(i, out_shape);
     const int64_t lhs_offset = BroadcastOffset(coord, lhs_shape, lhs_strides);
     const int64_t rhs_offset = BroadcastOffset(coord, rhs_shape, rhs_strides);
-    const uint8_t value = static_cast<uint8_t>(
-        lhs_values[static_cast<size_t>(lhs_offset)] ==
-        rhs_values[static_cast<size_t>(rhs_offset)]);
-    out[static_cast<size_t>(i)] = value;
-    if (i == 0) {
-      first_value = value;
-    } else if (value != first_value) {
-      uniform_output = false;
-    }
-  }
-  if (uniform_output) {
-    musaError_t status =
-        musaMemsetAsync(output.GetTensorMutableRawData(), first_value,
-                        out.size(), nullptr);
-    if (status != musaSuccess) {
-      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
-    }
-    return nullptr;
+    out[static_cast<size_t>(i)] =
+        lhs.GetStringTensorElement(static_cast<size_t>(lhs_offset)) ==
+        rhs.GetStringTensorElement(static_cast<size_t>(rhs_offset));
   }
   return CopyFromHost(output, out.data(), out.size(), GetComputeStream(ctx));
 }

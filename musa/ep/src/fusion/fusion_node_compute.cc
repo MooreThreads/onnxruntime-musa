@@ -8,13 +8,9 @@
 #include <string>
 
 #include "ep.h"
-#include "fusion/centered_reduce_fusion.h"
 #include "fusion/concat_matmul_fusion.h"
-#include "fusion/concat_split_fusion.h"
 #include "fusion/linear_fusion.h"
 #include "fusion/shape_reshape_fusion.h"
-#include "fusion/slice_concat_fusion.h"
-#include "fusion/split_reduce_fusion.h"
 
 /*
  * Fusion node runtime bridge
@@ -107,24 +103,12 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       }
 
       std::string fused_node_name = fused_node.GetName();
-      if (IsCenteredReduceFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateCenteredReduceFusion(graph, fused_node);
-      } else if (IsShapeReshapeFusionGraph(graph)) {
+      if (IsShapeReshapeFusionGraph(graph)) {
         ep->GetFusionComputes()[fused_node_name] =
             CreateShapeReshapeFusion(graph, fused_node);
-      } else if (IsSplitReduceFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateSplitReduceFusion(graph, fused_node);
       } else if (IsLinearFusionGraph(graph)) {
         ep->GetFusionComputes()[fused_node_name] =
             CreateLinearFusion(graph, fused_node);
-      } else if (IsConcatSplitFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateConcatSplitFusion(graph, fused_node);
-      } else if (IsSliceConcatFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateSliceConcatFusion(graph, fused_node);
       } else {
         ep->GetFusionComputes()[fused_node_name] =
             CreateConcatMatMulFusion(graph, fused_node);

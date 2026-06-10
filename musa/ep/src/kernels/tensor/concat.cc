@@ -6,6 +6,11 @@
 #include "tensor/concat_impl.h"
 
 namespace {
+
+constexpr size_t kConcatManySmallInputCount = 32;
+constexpr size_t kConcatManySmallMaxWidthBytes = 4096;
+constexpr size_t kConcatManySmallMaxMapBytes = 4 * 1024 * 1024;
+
 ::musa::dnn::Tensor::Format MudnnFormatForShape(
     const std::vector<int64_t>& shape) {
   if (shape.empty() || shape.size() == 1 || shape.size() == 3) {
@@ -121,11 +126,6 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
 
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
   if (AllGpuInputs(ctx) && IsGpuMemory(y.GetTensorMemoryInfo())) {
-    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
-        TryMudnnConcatFloat(ctx, shapes, out_shape, axis, y)) {
-      return nullptr;
-    }
-
     const int64_t outer =
         axis == 0 ? 1
                   : std::accumulate(out_shape.begin(), out_shape.begin() + axis,
@@ -137,16 +137,73 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
                               int64_t{1}, std::multiplies<int64_t>());
     std::vector<const void*> input_data(shapes.size());
     std::vector<int64_t> input_axis_dims(shapes.size());
+    int64_t max_input_axis = 0;
     for (size_t input_idx = 0; input_idx < shapes.size(); ++input_idx) {
       Ort::ConstValue v = ctx.GetInput(input_idx);
       input_data[input_idx] = v.GetTensorRawData();
       input_axis_dims[input_idx] = shapes[input_idx][static_cast<size_t>(axis)];
+      max_input_axis = std::max(max_input_axis, input_axis_dims[input_idx]);
     }
+
+    musaStream_t stream = GetComputeStream(ctx);
+    const int64_t output_row_elements = out_shape[static_cast<size_t>(axis)] * inner;
+    const size_t max_width_bytes =
+        static_cast<size_t>(max_input_axis) * static_cast<size_t>(inner) *
+        elem_size;
+    const size_t element_descriptor_bytes =
+        static_cast<size_t>(output_row_elements) * sizeof(MusaConcatElementDesc);
+    if (input_data.size() >= kConcatManySmallInputCount &&
+        max_width_bytes <= kConcatManySmallMaxWidthBytes &&
+        output_row_elements > 0 &&
+        element_descriptor_bytes <= kConcatManySmallMaxMapBytes) {
+      std::vector<MusaConcatElementDesc> element_descriptors(
+          static_cast<size_t>(output_row_elements));
+      int64_t output_offset = 0;
+      for (size_t input_idx = 0; input_idx < input_data.size(); ++input_idx) {
+        const int64_t input_width = input_axis_dims[input_idx] * inner;
+        for (int64_t local_element = 0; local_element < input_width;
+             ++local_element) {
+          element_descriptors[static_cast<size_t>(output_offset +
+                                                  local_element)] =
+              MusaConcatElementDesc{input_data[input_idx], input_width,
+                                    local_element};
+        }
+        output_offset += input_width;
+      }
+
+      MusaConcatElementDesc* device_element_descriptors = nullptr;
+      musaError_t status = musaMalloc(
+          reinterpret_cast<void**>(&device_element_descriptors),
+          element_descriptor_bytes);
+      if (status != musaSuccess) {
+        return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+      }
+
+      OrtStatus* copy_status = CopyTemporaryHostToDevice(
+          device_element_descriptors, element_descriptors.data(),
+          element_descriptor_bytes, stream);
+      if (copy_status != nullptr) {
+        (void)musaFree(device_element_descriptors);
+        return copy_status;
+      }
+
+      OrtStatus* launch_status = LaunchStatus(LaunchMusaConcatManySmallRows(
+          y.GetTensorMutableRawData(), device_element_descriptors, outer,
+          output_row_elements, static_cast<int32_t>(elem_size), stream));
+      FreeDeviceMemoryOnStream(device_element_descriptors, stream);
+      return launch_status;
+    }
+
+    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+        TryMudnnConcatFloat(ctx, shapes, out_shape, axis, y)) {
+      return nullptr;
+    }
+
     return LaunchStatus(LaunchMusaConcatCopies(
         y.GetTensorMutableRawData(), input_data.data(), input_axis_dims.data(),
         static_cast<int64_t>(input_data.size()), outer, inner,
         out_shape[static_cast<size_t>(axis)], static_cast<int32_t>(elem_size),
-        GetComputeStream(ctx)));
+        stream));
   }
 
   return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,

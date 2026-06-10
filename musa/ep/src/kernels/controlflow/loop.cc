@@ -30,6 +30,10 @@ class MusaLoopKernelHelper : public OrtLoopKernelHelper {
 
     size_t copied = 0;
     auto stream = static_cast<musaStream_t>(stream_handle);
+    // Loop body execution may produce per-iteration outputs on the runtime
+    // default stream. MUSA compute streams are non-blocking, so make the
+    // producer/consumer edge explicit before concatenating scan outputs.
+    RETURN_IF_ERROR(WaitForDefaultStream(stream));
     auto* dst = static_cast<uint8_t*>(output);
     for (size_t i = 0; i < num_per_iteration_outputs; ++i) {
       Ort::ConstValue value(per_iteration_outputs[i]);

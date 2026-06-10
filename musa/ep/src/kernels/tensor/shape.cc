@@ -14,7 +14,7 @@ OrtStatus* Shape::Compute(Ort::KernelContext& ctx) const {
   auto shape0 = ctx.GetInput(0).GetTensorTypeAndShapeInfo().GetShape();
   std::vector<int64_t> out(shape0.begin(), shape0.end());
   Ort::UnownedValue y = ctx.GetOutput(0, {static_cast<int64_t>(out.size())});
-  return WriteTyped<int64_t>(y, out);
+  return WriteTyped<int64_t>(y, out, GetComputeStream(ctx));
 }
 }  // namespace
 

@@ -10,7 +10,7 @@ constexpr int64_t kMaxCpuMetadataCastElements = kMusaMaxBroadcastRank;
 OrtStatus* CastCpuIntMetadata(Ort::ConstValue input, Ort::UnownedValue output,
                               ONNXTensorElementDataType src_type,
                               ONNXTensorElementDataType dst_type,
-                              int64_t count) {
+                              int64_t count, musaStream_t stream) {
   if (count > kMaxCpuMetadataCastElements) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED,
@@ -18,7 +18,7 @@ OrtStatus* CastCpuIntMetadata(Ort::ConstValue input, Ort::UnownedValue output,
   }
   if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 &&
       dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
-    std::vector<int64_t> src = ReadTyped<int64_t>(input);
+    std::vector<int64_t> src = ReadTyped<int64_t>(input, stream);
     std::vector<int32_t> dst;
     dst.reserve(src.size());
     for (int64_t value : src) {
@@ -29,31 +29,31 @@ OrtStatus* CastCpuIntMetadata(Ort::ConstValue input, Ort::UnownedValue output,
       }
       dst.push_back(static_cast<int32_t>(value));
     }
-    return WriteTyped<int32_t>(output, dst);
+    return WriteTyped<int32_t>(output, dst, stream);
   }
   if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 &&
       dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-    std::vector<int32_t> src = ReadTyped<int32_t>(input);
+    std::vector<int32_t> src = ReadTyped<int32_t>(input, stream);
     std::vector<int64_t> dst(src.begin(), src.end());
-    return WriteTyped<int64_t>(output, dst);
+    return WriteTyped<int64_t>(output, dst, stream);
   }
   if (dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
     std::vector<float> dst;
     if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-      std::vector<int64_t> src = ReadTyped<int64_t>(input);
+      std::vector<int64_t> src = ReadTyped<int64_t>(input, stream);
       dst.reserve(src.size());
       for (int64_t value : src) {
         dst.push_back(static_cast<float>(value));
       }
-      return WriteTyped<float>(output, dst);
+      return WriteTyped<float>(output, dst, stream);
     }
     if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
-      std::vector<int32_t> src = ReadTyped<int32_t>(input);
+      std::vector<int32_t> src = ReadTyped<int32_t>(input, stream);
       dst.reserve(src.size());
       for (int32_t value : src) {
         dst.push_back(static_cast<float>(value));
       }
-      return WriteTyped<float>(output, dst);
+      return WriteTyped<float>(output, dst, stream);
     }
   }
   return Ort::GetApi().CreateStatus(
@@ -92,7 +92,7 @@ OrtStatus* Cast::Compute(Ort::KernelContext& ctx) const {
     if (!IsGpuMemory(input0.GetTensorMemoryInfo())) {
       return CastCpuIntMetadata(input0, y, elem_type,
                                 static_cast<ONNXTensorElementDataType>(to_),
-                                NumElements(shape0));
+                                NumElements(shape0), GetComputeStream(ctx));
     }
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED,

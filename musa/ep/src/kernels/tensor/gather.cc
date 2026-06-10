@@ -12,13 +12,14 @@ OrtStatus* GatherCpuMetadataTyped(Ort::ConstValue input,
                                   Ort::ConstValue indices_value,
                                   Ort::UnownedValue output,
                                   ONNXTensorElementDataType index_type,
-                                  int64_t input_count, int64_t output_count) {
-  std::vector<T> input_data = ReadTyped<T>(input);
+                                  int64_t input_count, int64_t output_count,
+                                  musaStream_t stream) {
+  std::vector<T> input_data = ReadTyped<T>(input, stream);
   std::vector<int64_t> indices;
   if (index_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-    indices = ReadTyped<int64_t>(indices_value);
+    indices = ReadTyped<int64_t>(indices_value, stream);
   } else if (index_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
-    std::vector<int32_t> vals = ReadTyped<int32_t>(indices_value);
+    std::vector<int32_t> vals = ReadTyped<int32_t>(indices_value, stream);
     indices.assign(vals.begin(), vals.end());
   } else {
     return Ort::GetApi().CreateStatus(
@@ -35,7 +36,7 @@ OrtStatus* GatherCpuMetadataTyped(Ort::ConstValue input,
     }
     output_data.push_back(input_data[static_cast<size_t>(normalized)]);
   }
-  return WriteTyped<T>(output, output_data);
+  return WriteTyped<T>(output, output_data, stream);
 }
 
 OrtStatus* GatherCpuMetadata(Ort::ConstValue input,
@@ -45,7 +46,7 @@ OrtStatus* GatherCpuMetadata(Ort::ConstValue input,
                              ONNXTensorElementDataType index_type,
                              const std::vector<int64_t>& input_shape,
                              const std::vector<int64_t>& indices_shape,
-                             int64_t axis) {
+                             int64_t axis, musaStream_t stream) {
   const int64_t input_count = NumElements(input_shape);
   const int64_t output_count = NumElements(indices_shape);
   if (axis != 0 || input_shape.size() != 1 ||
@@ -57,11 +58,13 @@ OrtStatus* GatherCpuMetadata(Ort::ConstValue input,
   }
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
     return GatherCpuMetadataTyped<int64_t>(
-        input, indices_value, output, index_type, input_count, output_count);
+        input, indices_value, output, index_type, input_count, output_count,
+        stream);
   }
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
     return GatherCpuMetadataTyped<int32_t>(
-        input, indices_value, output, index_type, input_count, output_count);
+        input, indices_value, output, index_type, input_count, output_count,
+        stream);
   }
   return Ort::GetApi().CreateStatus(
       ORT_NOT_IMPLEMENTED,
@@ -130,7 +133,7 @@ OrtStatus* Gather::Compute(Ort::KernelContext& ctx) const {
   if (!IsGpuMemory(input0.GetTensorMemoryInfo())) {
     return GatherCpuMetadata(input0, indices_value, y, elem_type,
                              indices_info.GetElementType(), shape0,
-                             indices_shape, axis);
+                             indices_shape, axis, GetComputeStream(ctx));
   }
 
   return Ort::GetApi().CreateStatus(

@@ -71,7 +71,7 @@ struct ShapeReshapeFusionCompute : FusionNodeCompute {
       Ort::ConstValue shape_source = ctx.GetInput(shape_input_index);
       std::vector<int64_t> source_shape =
           shape_input_is_shape_tensor
-              ? ReadShapeTensor(shape_source)
+              ? ReadShapeTensor(shape_source, GetComputeStream(ctx))
               : shape_source.GetTensorTypeAndShapeInfo().GetShape();
       if (!pre_gather_indices.empty()) {
         source_shape = GatherValues(source_shape, pre_gather_indices);
@@ -137,7 +137,8 @@ struct ShapeReshapeFusionCompute : FusionNodeCompute {
     return result;
   }
 
-  static std::vector<int64_t> ReadShapeTensor(Ort::ConstValue value) {
+  static std::vector<int64_t> ReadShapeTensor(Ort::ConstValue value,
+                                              musaStream_t stream) {
     auto info = value.GetTensorTypeAndShapeInfo();
     const size_t count = static_cast<size_t>(info.GetElementCount());
     if (count > 100) {
@@ -145,7 +146,7 @@ struct ShapeReshapeFusionCompute : FusionNodeCompute {
     }
 
     std::vector<uint8_t> bytes;
-    Ort::Status copy_status{CopyToHost(value, bytes)};
+    Ort::Status copy_status{CopyToHost(value, bytes, stream)};
     if (!copy_status.IsOK()) {
       throw Ort::Exception(copy_status.GetErrorMessage(),
                            copy_status.GetErrorCode());

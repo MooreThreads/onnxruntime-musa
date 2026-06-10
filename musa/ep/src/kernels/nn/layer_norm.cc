@@ -11,14 +11,15 @@ namespace {
 
 class DeviceTempBuffer {
  public:
-  explicit DeviceTempBuffer(size_t bytes) : bytes_(bytes) {
+  DeviceTempBuffer(size_t bytes, musaStream_t stream)
+      : bytes_(bytes), stream_(stream) {
     if (bytes_ != 0) {
       status_ = musaMalloc(&ptr_, bytes_);
     }
   }
   ~DeviceTempBuffer() {
     if (ptr_ != nullptr) {
-      musaFree(ptr_);
+      FreeDeviceMemoryOnStream(ptr_, stream_);
     }
   }
   DeviceTempBuffer(const DeviceTempBuffer&) = delete;
@@ -30,6 +31,7 @@ class DeviceTempBuffer {
  private:
   void* ptr_ = nullptr;
   size_t bytes_ = 0;
+  musaStream_t stream_ = nullptr;
   musaError_t status_ = musaSuccess;
 };
 
@@ -92,7 +94,8 @@ bool LayerNormalization::TryMudnn(Ort::KernelContext& ctx,
   }
 
   ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
+  musaStream_t stream = GetComputeStream(ctx);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, stream);
   if (handle_status != nullptr) {
     Ort::GetApi().ReleaseStatus(handle_status);
     return false;
@@ -104,8 +107,8 @@ bool LayerNormalization::TryMudnn(Ort::KernelContext& ctx,
           : std::accumulate(input_shape.begin(), input_shape.begin() + axis,
                             int64_t{1}, std::multiplies<int64_t>());
   const size_t mean_bytes = static_cast<size_t>(rows) * sizeof(float);
-  DeviceTempBuffer mean_tmp(mean == nullptr ? mean_bytes : 0);
-  DeviceTempBuffer inv_tmp(inv_std == nullptr ? mean_bytes : 0);
+  DeviceTempBuffer mean_tmp(mean == nullptr ? mean_bytes : 0, stream);
+  DeviceTempBuffer inv_tmp(inv_std == nullptr ? mean_bytes : 0, stream);
   if (!mean_tmp.OK() || !inv_tmp.OK()) {
     return false;
   }
@@ -151,18 +154,14 @@ bool LayerNormalization::TryMudnn(Ort::KernelContext& ctx,
     return false;
   }
 
-  bool used_workspace = false;
   ::musa::dnn::MemoryMaintainer maintainer =
-      [&used_workspace](size_t bytes) -> ::musa::dnn::MemoryHandler {
-    used_workspace = used_workspace || bytes != 0;
+      [stream](size_t bytes) -> ::musa::dnn::MemoryHandler {
     void* ptr = nullptr;
     if (bytes != 0 && musaMalloc(&ptr, bytes) != musaSuccess) {
       ptr = nullptr;
     }
-    return ::musa::dnn::MemoryHandler(ptr, [](void* p) {
-      if (p != nullptr) {
-        musaFree(p);
-      }
+    return ::musa::dnn::MemoryHandler(ptr, [stream](void* p) {
+      FreeDeviceMemoryOnStream(p, stream);
     });
   };
 
@@ -170,9 +169,6 @@ bool LayerNormalization::TryMudnn(Ort::KernelContext& ctx,
                        input_tensor, scale_tensor, bias_tensor, maintainer);
   if (status != ::musa::dnn::Status::SUCCESS) {
     return false;
-  }
-  if (mean == nullptr || inv_std == nullptr || used_workspace) {
-    return musaStreamSynchronize(GetComputeStream(ctx)) == musaSuccess;
   }
   return true;
 }

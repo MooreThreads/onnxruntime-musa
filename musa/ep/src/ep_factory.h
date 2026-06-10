@@ -10,6 +10,7 @@
 #undef ORT_API_MANUAL_INIT
 
 #include "ep_data_transfer.h"
+#include "pinned_host_pool.h"
 
 class MusaEp;
 
@@ -88,9 +89,11 @@ class MusaEpFactory : public OrtEpFactory {
       ONNXRUNTIME_MUSA_VERSION};  // EP version (injected from VERSION_NUMBER)
 
   Ort::MemoryInfo default_memory_info_;
+  Ort::MemoryInfo host_accessible_memory_info_;
   Ort::MemoryInfo readonly_memory_info_;
   std::unique_ptr<MusaDataTransfer>
       data_transfer_impl_;  // data transfer implementation for this factory
+  std::shared_ptr<PinnedHostPool> pinned_host_pool_;
 
   // Cached kernel registry used by all OrtEp instances created by this factory.
   // Refer to OrtEp::GetKernelRegistry.

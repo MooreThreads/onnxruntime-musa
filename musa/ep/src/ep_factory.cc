@@ -20,6 +20,7 @@ MusaEpFactory::MusaEpFactory(const OrtApi& ort_api, const OrtEpApi& ep_api,
       ort_api_(ort_api),
       ep_api_(ep_api),
       default_memory_info_{nullptr},
+      host_accessible_memory_info_{nullptr},
       readonly_memory_info_{nullptr} {
   ort_version_supported =
       ORT_API_VERSION;  // set to the ORT version we were compiled with.
@@ -53,11 +54,24 @@ MusaEpFactory::MusaEpFactory(const OrtApi& ort_api, const OrtEpApi& ep_api,
                                          /*alignment*/ 0,
                                          OrtAllocatorType::OrtDeviceAllocator};
 
+  host_accessible_memory_info_ =
+      Ort::MemoryInfo{"MUSAExecutionProvider HOST_ACCESSIBLE",
+                      OrtMemoryInfoDeviceType_GPU,
+                      vendor_id_,
+                      /* device_id */ 0,
+                      OrtDeviceMemoryType_HOST_ACCESSIBLE,
+                      /*alignment*/ 0,
+                      OrtAllocatorType::OrtDeviceAllocator};
+
+  pinned_host_pool_ = std::make_shared<PinnedHostPool>(0);
+
   // create data transfer for the device
-  const OrtMemoryDevice* device =
-      ep_api.MemoryInfo_GetMemoryDevice(default_memory_info_);
-  data_transfer_impl_ =
-      std::make_unique<MusaDataTransfer>(ort_api, ep_api, device);
+  const OrtMemoryDevice* device = ep_api.MemoryInfo_GetMemoryDevice(default_memory_info_);
+  const OrtMemoryDevice* host_accessible_device =
+      ep_api.MemoryInfo_GetMemoryDevice(host_accessible_memory_info_);
+  data_transfer_impl_ = std::make_unique<MusaDataTransfer>(
+      ort_api, ep_api, device, host_accessible_device, vendor_id_,
+      pinned_host_pool_);
 
   // Create read-only allocator for use with initializers. same info as DEFAULT
   // memory apart from the allocator type. This is optional. It is only required
@@ -188,6 +202,8 @@ OrtStatus* ORT_API_CALL MusaEpFactory::GetSupportedDevicesImpl(
       RETURN_IF_ERROR(factory->ep_api_.EpDevice_AddAllocatorInfo(
           ep_device, factory->default_memory_info_));
       RETURN_IF_ERROR(factory->ep_api_.EpDevice_AddAllocatorInfo(
+          ep_device, factory->host_accessible_memory_info_));
+      RETURN_IF_ERROR(factory->ep_api_.EpDevice_AddAllocatorInfo(
           ep_device, factory->readonly_memory_info_));
 
       ep_devices[num_ep_devices++] = ep_device;
@@ -241,9 +257,12 @@ OrtStatus* ORT_API_CALL MusaEpFactory::CreateAllocatorImpl(
   *allocator = nullptr;
 
   bool is_default_allocator = memory_info == factory.default_memory_info_;
+  bool is_host_accessible_allocator =
+      memory_info == factory.host_accessible_memory_info_;
   bool is_readonly_allocator = memory_info == factory.readonly_memory_info_;
 
-  if (!is_default_allocator && !is_readonly_allocator) {
+  if (!is_default_allocator && !is_host_accessible_allocator &&
+      !is_readonly_allocator) {
     return factory.ort_api_.CreateStatus(
         ORT_INVALID_ARGUMENT,
         "INTERNAL ERROR! Unknown memory info provided to CreateAllocator. "
@@ -251,17 +270,23 @@ OrtStatus* ORT_API_CALL MusaEpFactory::CreateAllocatorImpl(
         "factory.");
   }
 
-  // Note: the same allocator handles both default and readonly allocations. A
-  // readonly only allocator would typically be different.
-  auto custom_allocator = std::make_unique<CustomAllocator>(memory_info);
-  *allocator = custom_allocator.release();
+  if (is_host_accessible_allocator) {
+    auto pinned_host_allocator = std::make_unique<PinnedHostAllocator>(
+        memory_info, factory.pinned_host_pool_);
+    *allocator = pinned_host_allocator.release();
+  } else {
+    // Note: the same allocator handles both default and readonly allocations. A
+    // readonly only allocator would typically be different.
+    auto custom_allocator = std::make_unique<CustomAllocator>(memory_info);
+    *allocator = custom_allocator.release();
+  }
   return nullptr;
 }
 
 /*static*/
 void ORT_API_CALL MusaEpFactory::ReleaseAllocatorImpl(
     OrtEpFactory* /*this_ptr*/, OrtAllocator* allocator) noexcept {
-  delete static_cast<CustomAllocator*>(allocator);
+  delete static_cast<BaseAllocator*>(allocator);
 }
 
 /*static*/
@@ -286,8 +311,12 @@ OrtStatus* ORT_API_CALL MusaEpFactory::CreateSyncStreamForDeviceImpl(
   auto& factory = *static_cast<MusaEpFactory*>(this_ptr);
   *stream = nullptr;
 
-  if (factory.ep_api_.MemoryDevice_GetMemoryType(memory_device) !=
-      OrtDeviceMemoryType_DEFAULT) {
+  if (factory.ep_api_.MemoryDevice_GetDeviceType(memory_device) !=
+          OrtMemoryInfoDeviceType_GPU ||
+      factory.ep_api_.MemoryDevice_GetVendorId(memory_device) !=
+          factory.vendor_id_ ||
+      factory.ep_api_.MemoryDevice_GetMemoryType(memory_device) !=
+          OrtDeviceMemoryType_DEFAULT) {
     return nullptr;
   }
 

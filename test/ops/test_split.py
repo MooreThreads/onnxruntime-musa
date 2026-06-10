@@ -79,3 +79,15 @@ def test_split_uint8_three_outputs():
         ],
         attrs={"axis": 1},
     )
+
+
+def test_split_many_small_outputs_axis1():
+    x = np.random.default_rng(3).standard_normal((8, 80)).astype(np.float32)
+    split = np.array([1, 3] * 20, dtype=np.int64)
+    outputs = [(f"Y{i}", TensorProto.FLOAT) for i in range(split.size)]
+    run_and_compare(
+        "Split",
+        inputs={"X": x, "split": split},
+        outputs=outputs,
+        attrs={"axis": 1},
+    )

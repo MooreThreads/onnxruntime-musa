@@ -26,3 +26,9 @@ def test_nonzero_float():
 def test_nonzero_registered_dtypes(np_dtype, values):
     x = np.array(values, dtype=np_dtype)
     run_and_compare("NonZero", inputs={"X": x}, outputs=[("Y", TensorProto.INT64)])
+
+
+def test_nonzero_multi_block_prefix_sum():
+    x = np.zeros((1024,), dtype=np.float32)
+    x[1::3] = np.arange(1, x[1::3].size + 1, dtype=np.float32)
+    run_and_compare("NonZero", inputs={"X": x}, outputs=[("Y", TensorProto.INT64)])

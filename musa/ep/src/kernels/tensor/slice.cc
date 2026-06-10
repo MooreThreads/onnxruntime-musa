@@ -113,7 +113,7 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
           input0.GetTensorRawData(), y.GetTensorMutableRawData(),
           static_cast<int32_t>(elem_size), NumElements(out_shape),
           shape0[last_dim], out_shape[last_dim], norm_starts[last_dim],
-          nullptr);
+          GetComputeStream(ctx));
       if (status != musaErrorNotSupported) {
         return LaunchStatus(status);
       }

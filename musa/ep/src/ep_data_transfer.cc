@@ -135,8 +135,14 @@ OrtStatus* CopyImpl(MusaDataTransfer& impl, const OrtMemoryDevice* src_device,
   }
 
   if (src_is_gpu_default) {
-    return CopyMemcpy(impl.ort_api_, src_data, dst_data, bytes,
-                      musaMemcpyDeviceToHost, stream);
+    RETURN_IF_ERROR(MusaStatus(impl.ort_api_, musaDeviceSynchronize()));
+    RETURN_IF_ERROR(CopyMemcpy(impl.ort_api_, src_data, dst_data, bytes,
+                               musaMemcpyDeviceToHost, stream));
+    if (stream != nullptr) {
+      RETURN_IF_ERROR(
+          MusaStatus(impl.ort_api_, musaStreamSynchronize(stream)));
+    }
+    return nullptr;
   }
 
   if (stream != nullptr &&

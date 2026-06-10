@@ -169,7 +169,7 @@ struct CenteredReduceFusionCompute : FusionNodeCompute {
           input.GetTensorData<float>(),
           first_output.GetTensorMutableData<float>(),
           second_output.GetTensorMutableData<float>(), rows, inner, first_op,
-          second_op, nullptr));
+          second_op, GetComputeStream(ctx)));
     } catch (const Ort::Exception& ex) {
       Ort::Status status(ex);
       return status.release();

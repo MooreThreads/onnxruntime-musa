@@ -368,7 +368,50 @@ inline bool TryMapActivation(const std::string& activation, MusaUnaryOp& op) {
     op = MusaUnaryOp::Tanh;
     return true;
   }
+  if (activation == "Sigmoid") {
+    op = MusaUnaryOp::Sigmoid;
+    return true;
+  }
   return false;
+}
+
+struct GemmShapeInfo {
+  int64_t m = 0;
+  int64_t n = 0;
+  int64_t k = 0;
+  int64_t lda = 0;
+  int64_t ldb = 0;
+  std::vector<int64_t> out_shape;
+};
+
+inline OrtStatus* ResolveGemmShape(const std::vector<int64_t>& a_shape,
+                                   const std::vector<int64_t>& b_shape,
+                                   bool trans_a, bool trans_b,
+                                   GemmShapeInfo& shape_info) {
+  if (a_shape.size() != 2 || b_shape.size() != 2) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Gemm requires rank-2 inputs");
+  }
+
+  shape_info.m = trans_a ? a_shape[1] : a_shape[0];
+  shape_info.k = trans_a ? a_shape[0] : a_shape[1];
+  shape_info.lda = a_shape[1];
+  const int64_t kb = trans_b ? b_shape[1] : b_shape[0];
+  shape_info.n = trans_b ? b_shape[0] : b_shape[1];
+  shape_info.ldb = b_shape[1];
+  shape_info.out_shape = {shape_info.m, shape_info.n};
+  if (shape_info.k != kb) {
+    std::string message = "Gemm K dimension mismatch: A=";
+    AppendShapeKey(message, a_shape);
+    message += " B=";
+    AppendShapeKey(message, b_shape);
+    message += trans_a ? " transA=1" : " transA=0";
+    message += trans_b ? " transB=1" : " transB=0";
+    message += " K=" + std::to_string(shape_info.k);
+    message += " KB=" + std::to_string(kb);
+    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT, message.c_str());
+  }
+  return nullptr;
 }
 
 inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
@@ -392,21 +435,13 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
 
   std::vector<int64_t> a_shape = a_info.GetShape();
   std::vector<int64_t> b_shape = b_info.GetShape();
-  if (a_shape.size() != 2 || b_shape.size() != 2) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "Gemm requires rank-2 inputs");
-  }
-
-  int64_t m = trans_a ? a_shape[1] : a_shape[0];
-  int64_t k = trans_a ? a_shape[0] : a_shape[1];
-  int64_t kb = trans_b ? b_shape[1] : b_shape[0];
-  int64_t n = trans_b ? b_shape[0] : b_shape[1];
-  if (k != kb) {
-    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
-                                      "Gemm K dimension mismatch");
-  }
-
-  std::vector<int64_t> out_shape = {m, n};
+  GemmShapeInfo shape_info;
+  RETURN_IF_ERROR(ResolveGemmShape(a_shape, b_shape, trans_a, trans_b,
+                                   shape_info));
+  const int64_t m = shape_info.m;
+  const int64_t k = shape_info.k;
+  const int64_t n = shape_info.n;
+  const std::vector<int64_t>& out_shape = shape_info.out_shape;
   if (!IsGpuMemory(ctx.GetInput(0).GetTensorMemoryInfo()) ||
       !IsGpuMemory(ctx.GetInput(1).GetTensorMemoryInfo())) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
@@ -445,6 +480,10 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
                                       "Gemm bias requires MUSA input");
   }
 
+  if (NumElements(out_shape) == 0) {
+    return nullptr;
+  }
+
   MusaUnaryOp activation_op = MusaUnaryOp::Relu;
   const bool has_activation = !activation.empty();
   if (has_activation && !TryMapActivation(activation, activation_op)) {
@@ -457,9 +496,10 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
   const void* b_data = ctx.GetInput(1).GetTensorRawData();
   void* y_data = y.GetTensorMutableRawData();
 
-  if (bias_is_gpu && TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape,
-                                  b_shape, c_shape, out_shape, trans_a, trans_b,
-                                  alpha, beta, has_bias, elem_type, stream)) {
+  if (bias_is_gpu && TryMudnnGemm(y_data, a_data, b_data, c_data,
+                                  a_shape, b_shape, c_shape, out_shape,
+                                  trans_a, trans_b, alpha, beta, has_bias,
+                                  elem_type, stream)) {
     if (!has_activation) {
       return nullptr;
     }
@@ -480,8 +520,8 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
     RETURN_IF_ERROR(EnsureMublasHandle(&handle, stream));
     mublasOperation_t op_a = trans_a ? MUBLAS_OP_T : MUBLAS_OP_N;
     mublasOperation_t op_b = trans_b ? MUBLAS_OP_T : MUBLAS_OP_N;
-    int lda = static_cast<int>(a_shape[1]);
-    int ldb = static_cast<int>(b_shape[1]);
+    int lda = static_cast<int>(shape_info.lda);
+    int ldb = static_cast<int>(shape_info.ldb);
     int mi = static_cast<int>(m);
     int ki = static_cast<int>(k);
     int ni = static_cast<int>(n);

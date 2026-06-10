@@ -51,3 +51,19 @@ def test_equal_string_opset19_feeds_cast_control_path():
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 19)])
     model.ir_version = min(model.ir_version, 10)
     run_model_and_compare(model.SerializeToString(), {"X": x})
+
+
+def test_equal_string_opset19_scalar_broadcast():
+    x = np.array([["target"], ["other"], ["target"], [""]], dtype=object)
+    expected = helper.make_tensor("expected", TensorProto.STRING, [1], ["target"])
+    nodes = [helper.make_node("Equal", ["X", "expected"], ["Y"])]
+    graph = helper.make_graph(
+        nodes,
+        "equal_string_scalar_broadcast",
+        [helper.make_tensor_value_info("X", TensorProto.STRING, ["N", 1])],
+        [helper.make_tensor_value_info("Y", TensorProto.BOOL, None)],
+        initializer=[expected],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 19)])
+    model.ir_version = min(model.ir_version, 10)
+    run_model_and_compare(model.SerializeToString(), {"X": x})

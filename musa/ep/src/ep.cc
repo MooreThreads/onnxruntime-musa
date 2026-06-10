@@ -1730,7 +1730,7 @@ std::vector<std::vector<Ort::ConstNode>> FindSplitReduceFusions(
 
 bool IsLinearActivationNode(Ort::ConstNode node) {
   return IsOnnxOp(node, "Relu") || IsOnnxOp(node, "LeakyRelu") ||
-         IsOnnxOp(node, "Tanh");
+         IsOnnxOp(node, "Tanh") || IsOnnxOp(node, "Sigmoid");
 }
 
 bool IsBiasShapeForMatMulN(const std::vector<int64_t>& bias_shape, int64_t n) {

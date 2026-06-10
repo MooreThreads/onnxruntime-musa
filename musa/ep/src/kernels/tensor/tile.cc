@@ -93,7 +93,8 @@ OrtStatus* Tile::Compute(Ort::KernelContext& ctx) const {
     const int64_t rows = NumElements(input_shape) / cols;
     return LaunchStatus(LaunchMusaTileLastDimKernel(
         input.GetTensorRawData(), y.GetTensorMutableRawData(),
-        static_cast<int32_t>(elem_size), rows, cols, repeats.back(), nullptr));
+        static_cast<int32_t>(elem_size), rows, cols, repeats.back(),
+        GetComputeStream(ctx)));
   }
 
   return LaunchStatus(LaunchMusaTileKernel(

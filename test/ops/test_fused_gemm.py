@@ -78,8 +78,24 @@ def test_fused_gemm_tanh_scaled():
     )
 
 
-def test_fused_gemm_double_relu():
+def test_fused_gemm_sigmoid():
     rng = np.random.default_rng(4)
+    a = rng.standard_normal((8, 16)).astype(np.float32)
+    b = rng.standard_normal((16, 12)).astype(np.float32)
+    c = rng.standard_normal((12,)).astype(np.float32)
+    run_and_compare(
+        "FusedGemm",
+        inputs={"A": a, "B": b, "C": c},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"alpha": 1.0, "beta": 1.0, "activation": "Sigmoid"},
+        domain="com.microsoft",
+        rtol=2e-4,
+        atol=2e-5,
+    )
+
+
+def test_fused_gemm_double_relu():
+    rng = np.random.default_rng(5)
     a = rng.standard_normal((4, 8)).astype(np.float64)
     b = rng.standard_normal((8, 5)).astype(np.float64)
     c = rng.standard_normal((5,)).astype(np.float64)

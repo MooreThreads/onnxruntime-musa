@@ -389,6 +389,7 @@ OrtStatus* SliceConcatFusionCompute::Compute(
     OrtKernelContext* kernel_context) const {
   try {
     Ort::KernelContext ctx(kernel_context);
+    musaStream_t stream = GetComputeStream(ctx);
     if (inputs.empty()) {
       return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
                                         "SliceConcat requires inputs");
@@ -530,7 +531,7 @@ OrtStatus* SliceConcatFusionCompute::Compute(
     std::memcpy(scratch->pinned_segments, scratch->host_segments.data(), bytes);
     musaError_t copy_status =
         musaMemcpyAsync(scratch->device_segments, scratch->pinned_segments,
-                        bytes, musaMemcpyHostToDevice, nullptr);
+                        bytes, musaMemcpyHostToDevice, stream);
     if (copy_status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                         MusaErrorString(copy_status));
@@ -539,12 +540,12 @@ OrtStatus* SliceConcatFusionCompute::Compute(
       return LaunchStatus(LaunchMusaSliceConcatEqualWidthKernel(
           scratch->device_segments, static_cast<int64_t>(inputs.size()),
           y.GetTensorMutableData<float>(), rows, output_cols, equal_width,
-          equal_width_shift, nullptr));
+          equal_width_shift, stream));
     }
     return LaunchStatus(LaunchMusaSliceConcatSegmentedKernel(
         scratch->device_segments, static_cast<int64_t>(inputs.size()),
         total_blocks, y.GetTensorMutableData<float>(), rows, output_cols,
-        nullptr));
+        stream));
   } catch (const Ort::Exception& ex) {
     Ort::Status status(ex);
     return status.release();

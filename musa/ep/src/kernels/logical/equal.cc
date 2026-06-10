@@ -155,7 +155,7 @@ OrtStatus* EqualString::Compute(Ort::KernelContext& ctx) const {
   if (uniform_output) {
     musaError_t status =
         musaMemsetAsync(output.GetTensorMutableRawData(), first_value,
-                        out.size(), nullptr);
+                        out.size(), GetComputeStream(ctx));
     if (status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }

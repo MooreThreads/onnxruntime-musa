@@ -168,7 +168,7 @@ struct SplitReduceFusionCompute : FusionNodeCompute {
           input.GetTensorData<float>(), output_data[0], output_data[1], batch,
           axis_dim, inner, outputs[0].offset, outputs[0].width,
           outputs[0].mode, outputs[1].offset, outputs[1].width,
-          outputs[1].mode, nullptr));
+          outputs[1].mode, GetComputeStream(ctx)));
     } catch (const Ort::Exception& ex) {
       Ort::Status status(ex);
       return status.release();

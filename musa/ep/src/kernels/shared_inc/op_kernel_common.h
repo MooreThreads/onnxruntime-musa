@@ -996,6 +996,18 @@ inline int64_t Offset(const std::vector<int64_t>& coord,
   return off;
 }
 
+inline void AppendShapeForError(std::string& message,
+                                const std::vector<int64_t>& shape) {
+  message.push_back('[');
+  for (size_t i = 0; i < shape.size(); ++i) {
+    if (i != 0) {
+      message.push_back(',');
+    }
+    message += std::to_string(shape[i]);
+  }
+  message.push_back(']');
+}
+
 inline std::vector<int64_t> BroadcastShape(const std::vector<int64_t>& a,
                                            const std::vector<int64_t>& b) {
   size_t rank = std::max(a.size(), b.size());
@@ -1004,7 +1016,11 @@ inline std::vector<int64_t> BroadcastShape(const std::vector<int64_t>& a,
     int64_t da = i < rank - a.size() ? 1 : a[i - (rank - a.size())];
     int64_t db = i < rank - b.size() ? 1 : b[i - (rank - b.size())];
     if (da != db && da != 1 && db != 1) {
-      throw std::runtime_error("broadcast shape mismatch");
+      std::string message = "broadcast shape mismatch: lhs=";
+      AppendShapeForError(message, a);
+      message += " rhs=";
+      AppendShapeForError(message, b);
+      throw std::runtime_error(message);
     }
     out[i] = da == 0 || db == 0 ? 0 : std::max(da, db);
   }

@@ -68,7 +68,7 @@ bool IsOnnxOp(const Ort::ConstNode& node, const char* op_type) {
 
 bool IsActivationOp(const Ort::ConstNode& node) {
   return IsOnnxOp(node, "Relu") || IsOnnxOp(node, "LeakyRelu") ||
-         IsOnnxOp(node, "Tanh");
+         IsOnnxOp(node, "Tanh") || IsOnnxOp(node, "Sigmoid");
 }
 
 std::string Name(Ort::ConstValueInfo value_info) {
@@ -149,16 +149,22 @@ OrtStatus* RunDeviceFusedGemm(
     const std::vector<int64_t>& y_shape, bool trans_a, bool trans_b,
     float alpha, float beta, const std::string& activation,
     float activation_alpha, bool has_bias, musaStream_t stream) {
-  const int64_t m = trans_a ? a_shape[1] : a_shape[0];
-  const int64_t k = trans_a ? a_shape[0] : a_shape[1];
-  const int64_t n = trans_b ? b_shape[0] : b_shape[1];
+  GemmShapeInfo shape_info;
+  RETURN_IF_ERROR(ResolveGemmShape(a_shape, b_shape, trans_a, trans_b,
+                                   shape_info));
+  const int64_t m = shape_info.m;
+  const int64_t k = shape_info.k;
+  const int64_t n = shape_info.n;
   if (m > INT32_MAX || k > INT32_MAX || n > INT32_MAX) {
     return Ort::GetApi().CreateStatus(
         ORT_INVALID_ARGUMENT, "FusedGemm dimensions exceed int32 limits");
   }
+  if (m == 0 || n == 0) {
+    return nullptr;
+  }
 
-  if (TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape, b_shape, c_shape,
-                   y_shape, trans_a, trans_b, alpha, beta, has_bias,
+  if (TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape, b_shape,
+                   c_shape, y_shape, trans_a, trans_b, alpha, beta, has_bias,
                    ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, stream)) {
     if (activation.empty()) {
       return nullptr;
@@ -179,8 +185,8 @@ OrtStatus* RunDeviceFusedGemm(
   RETURN_IF_ERROR(EnsureMublasHandle(&handle, stream));
   mublasOperation_t op_a = trans_a ? MUBLAS_OP_T : MUBLAS_OP_N;
   mublasOperation_t op_b = trans_b ? MUBLAS_OP_T : MUBLAS_OP_N;
-  int lda = static_cast<int>(a_shape[1]);
-  int ldb = static_cast<int>(b_shape[1]);
+  int lda = static_cast<int>(shape_info.lda);
+  int ldb = static_cast<int>(shape_info.ldb);
   int mi = static_cast<int>(m);
   int ki = static_cast<int>(k);
   int ni = static_cast<int>(n);
@@ -266,18 +272,10 @@ struct LinearFusionCompute : FusionNodeCompute {
         y_shape = a_shape;
         y_shape.back() = trans_b ? b_shape[0] : b_shape[1];
       } else {
-        if (a_shape.size() != 2) {
-          return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                            "FusedGemm requires A rank 2");
-        }
-        const int64_t k = trans_a ? a_shape[0] : a_shape[1];
-        const int64_t kb = trans_b ? b_shape[1] : b_shape[0];
-        if (k != kb) {
-          return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
-                                            "FusedGemm K dimension mismatch");
-        }
-        y_shape = {trans_a ? a_shape[1] : a_shape[0],
-                   trans_b ? b_shape[0] : b_shape[1]};
+        GemmShapeInfo gemm_shape;
+        RETURN_IF_ERROR(ResolveGemmShape(a_shape, b_shape, trans_a, trans_b,
+                                         gemm_shape));
+        y_shape = gemm_shape.out_shape;
       }
 
       if (has_bias) {

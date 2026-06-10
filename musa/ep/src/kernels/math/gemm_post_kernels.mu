@@ -16,6 +16,8 @@ __device__ __forceinline__ double GemmPostActivation(double x,
       return x >= 0.0 ? x : static_cast<double>(alpha) * x;
     case MusaUnaryOp::Tanh:
       return tanh(x);
+    case MusaUnaryOp::Sigmoid:
+      return 1.0 / (1.0 + exp(-x));
     default:
       return x;
   }

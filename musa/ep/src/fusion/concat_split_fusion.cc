@@ -152,6 +152,7 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
     OrtKernelContext* kernel_context) const {
   try {
     Ort::KernelContext ctx(kernel_context);
+    musaStream_t stream = GetComputeStream(ctx);
     if (outputs.empty() || (segments.empty() && sums.empty())) {
       return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
                                         "ConcatSplit requires outputs");
@@ -334,13 +335,13 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
       const size_t bytes = segments.size() * sizeof(MusaConcatSplitSegment);
       musaError_t copy_status = musaMemcpyAsync(
           scratch->device_segments, scratch->host_segments.data(), bytes,
-          musaMemcpyHostToDevice, nullptr);
+          musaMemcpyHostToDevice, stream);
       if (copy_status == musaSuccess && !scratch->host_copy_blocks.empty()) {
         const size_t block_bytes =
             scratch->host_copy_blocks.size() * sizeof(MusaConcatSplitCopyBlock);
         copy_status = musaMemcpyAsync(
             scratch->device_copy_blocks, scratch->host_copy_blocks.data(),
-            block_bytes, musaMemcpyHostToDevice, nullptr);
+            block_bytes, musaMemcpyHostToDevice, stream);
       }
       if (copy_status != musaSuccess) {
         return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
@@ -350,7 +351,7 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
           scratch->device_segments, static_cast<int64_t>(segments.size()),
           scratch->device_copy_blocks,
           static_cast<int64_t>(scratch->host_copy_blocks.size()), rows,
-          element_size, nullptr)));
+          element_size, stream)));
     }
 
     if (!sums.empty()) {
@@ -418,12 +419,12 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
       const size_t output_bytes = sums.size() * sizeof(MusaConcatSplitSumOutput);
       musaError_t copy_status = musaMemcpyAsync(
           scratch->device_sum_outputs, scratch->host_sum_outputs.data(),
-          output_bytes, musaMemcpyHostToDevice, nullptr);
+          output_bytes, musaMemcpyHostToDevice, stream);
       if (copy_status == musaSuccess) {
         const size_t term_bytes = sum_term_count * sizeof(MusaConcatSplitSumTerm);
         copy_status = musaMemcpyAsync(
             scratch->device_sum_terms, scratch->host_sum_terms.data(),
-            term_bytes, musaMemcpyHostToDevice, nullptr);
+            term_bytes, musaMemcpyHostToDevice, stream);
       }
       if (copy_status != musaSuccess) {
         return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
@@ -431,7 +432,7 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
       }
       RETURN_IF_ERROR(LaunchStatus(LaunchMusaConcatSplitSums(
           scratch->device_sum_outputs, scratch->device_sum_terms,
-          static_cast<int64_t>(sums.size()), rows, max_sum_width, nullptr)));
+          static_cast<int64_t>(sums.size()), rows, max_sum_width, stream)));
     }
 
     return nullptr;

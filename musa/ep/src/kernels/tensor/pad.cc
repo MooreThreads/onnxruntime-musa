@@ -7,13 +7,13 @@
 namespace {
 
 uint64_t ScalarInputOrZero(Ort::KernelContext& ctx, size_t index,
-                           size_t elem_size) {
+                           size_t elem_size, musaStream_t stream) {
   uint64_t bits = 0;
   if (ctx.GetInputCount() <= index || ctx.GetInput(index) == nullptr) {
     return bits;
   }
   std::vector<uint8_t> bytes;
-  Ort::ThrowOnError(CopyToHost(ctx.GetInput(index), bytes));
+  Ort::ThrowOnError(CopyToHost(ctx.GetInput(index), bytes, stream));
   if (bytes.empty()) {
     return bits;
   }
@@ -72,6 +72,7 @@ OrtStatus* Pad::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Pad unsupported dtype");
   }
+  musaStream_t stream = GetComputeStream(ctx);
 
   std::vector<int64_t> pads = ReadIntTensor(ctx, 1);
   std::vector<int64_t> axes;
@@ -117,9 +118,10 @@ OrtStatus* Pad::Compute(Ort::KernelContext& ctx) const {
 
   return LaunchStatus(LaunchMusaPadKernel(
       input.GetTensorRawData(), output.GetTensorMutableRawData(),
-      ScalarInputOrZero(ctx, 2, elem_size), static_cast<int32_t>(elem_size),
+      ScalarInputOrZero(ctx, 2, elem_size, stream),
+      static_cast<int32_t>(elem_size),
       MakePadParams(input_shape, output_shape, pads_begin),
-      GetComputeStream(ctx)));
+      stream));
 }
 }  // namespace
 

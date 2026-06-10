@@ -7,12 +7,12 @@
 namespace {
 
 template <typename T>
-bool ReadScalar(Ort::ConstValue value, T& out) {
+bool ReadScalar(Ort::ConstValue value, T& out, musaStream_t stream) {
   auto info = value.GetTensorTypeAndShapeInfo();
   if (info.GetElementCount() != 1) {
     return false;
   }
-  std::vector<T> data = ReadTyped<T>(value);
+  std::vector<T> data = ReadTyped<T>(value, stream);
   if (data.size() != 1) {
     return false;
   }
@@ -26,9 +26,10 @@ OrtStatus* ComputeRangeTyped(Ort::KernelContext& ctx,
   T start{};
   T limit{};
   T delta{};
-  if (!ReadScalar<T>(ctx.GetInput(0), start) ||
-      !ReadScalar<T>(ctx.GetInput(1), limit) ||
-      !ReadScalar<T>(ctx.GetInput(2), delta)) {
+  musaStream_t stream = GetComputeStream(ctx);
+  if (!ReadScalar<T>(ctx.GetInput(0), start, stream) ||
+      !ReadScalar<T>(ctx.GetInput(1), limit, stream) ||
+      !ReadScalar<T>(ctx.GetInput(2), delta, stream)) {
     return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
                                       "Range inputs must be scalar tensors");
   }
@@ -57,7 +58,7 @@ OrtStatus* ComputeRangeTyped(Ort::KernelContext& ctx,
   return LaunchStatus(
       LaunchMusaRangeKernel(output.GetTensorMutableRawData(), params,
                             musa_elem_type, static_cast<double>(start),
-                            static_cast<double>(delta), GetComputeStream(ctx)));
+                            static_cast<double>(delta), stream));
 }
 
 class Range : public OpKernelBase<Range> {

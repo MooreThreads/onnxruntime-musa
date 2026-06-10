@@ -111,7 +111,7 @@ OrtStatus* EqualString::Compute(Ort::KernelContext& ctx) const {
         lhs.GetStringTensorElement(static_cast<size_t>(lhs_offset)) ==
         rhs.GetStringTensorElement(static_cast<size_t>(rhs_offset));
   }
-  return CopyFromHost(output, out.data(), out.size());
+  return CopyFromHost(output, out.data(), out.size(), GetComputeStream(ctx));
 }
 }  // namespace
 

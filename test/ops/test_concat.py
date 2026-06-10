@@ -83,3 +83,16 @@ def test_concat_uint8_axis0():
         outputs=[("Y", TensorProto.UINT8)],
         attrs={"axis": 0},
     )
+
+def test_concat_many_small_inputs_axis1():
+    inputs = {}
+    rng = np.random.default_rng(6)
+    for i in range(40):
+        width = 1 if i % 2 == 0 else 3
+        inputs[f"X{i}"] = rng.standard_normal((8, width)).astype(np.float32)
+    run_and_compare(
+        "Concat",
+        inputs=inputs,
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"axis": 1},
+    )

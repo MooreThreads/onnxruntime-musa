@@ -51,19 +51,23 @@ class DeviceBuffer {
  public:
   DeviceBuffer() = default;
 
-  explicit DeviceBuffer(size_t bytes) { Resize(bytes); }
+  explicit DeviceBuffer(size_t bytes, musaStream_t stream = nullptr) {
+    Resize(bytes, stream);
+  }
 
-  void Resize(size_t bytes) {
+  void Resize(size_t bytes, musaStream_t stream) {
     if (bytes <= bytes_) {
+      stream_ = stream;
       return;
     }
 
     if (ptr_ != nullptr) {
-      (void)musaFree(ptr_);
+      FreeDeviceMemoryOnStream(ptr_, stream_);
       ptr_ = nullptr;
       bytes_ = 0;
     }
 
+    stream_ = stream;
     if (bytes == 0) {
       return;
     }
@@ -77,6 +81,8 @@ class DeviceBuffer {
 
   ~DeviceBuffer() {
     if (ptr_ != nullptr) {
+      // This scratch buffer can outlive the run compute stream. Do not defer
+      // teardown frees through stream events; the saved stream may be stale.
       (void)musaFree(ptr_);
     }
   }
@@ -95,6 +101,7 @@ class DeviceBuffer {
  private:
   void* ptr_ = nullptr;
   size_t bytes_ = 0;
+  musaStream_t stream_ = nullptr;
 };
 
 struct ConcatMatMulScratch {
@@ -106,7 +113,7 @@ struct ConcatMatMulScratch {
 
   void ResetWorkspace() { workspace_index = 0; }
 
-  void* Workspace(size_t bytes) {
+  void* Workspace(size_t bytes, musaStream_t stream) {
     if (bytes == 0) {
       return nullptr;
     }
@@ -116,7 +123,7 @@ struct ConcatMatMulScratch {
     }
 
     DeviceBuffer& buffer = *workspace_buffers[workspace_index++];
-    buffer.Resize(bytes);
+    buffer.Resize(bytes, stream);
     return buffer.get();
   }
 };
@@ -399,11 +406,12 @@ OrtStatus* RunMudnnConcatMatMulBatched(const float* a_data, const float* b_data,
 
   scratch.ResetWorkspace();
   auto memory_allocator =
-      [&scratch](size_t size) -> ::musa::dnn::MemoryHandler {
+      [&scratch, stream](size_t size) -> ::musa::dnn::MemoryHandler {
     if (size == 0) {
       return ::musa::dnn::MemoryHandler(nullptr, NoOpDelete);
     }
-    return ::musa::dnn::MemoryHandler(scratch.Workspace(size), NoOpDelete);
+    return ::musa::dnn::MemoryHandler(scratch.Workspace(size, stream),
+                                      NoOpDelete);
   };
 
   ::musa::dnn::BatchMatMul batch_op;
@@ -451,7 +459,8 @@ OrtStatus* ComputeDeviceConcatMatMul(
     int64_t concat_input_idx, const std::vector<int64_t>& output_shape,
     ConcatMatMulScratch& scratch, musaStream_t stream) {
   scratch.concat_buffer.Resize(static_cast<size_t>(NumElements(concat_shape)) *
-                               sizeof(float));
+                                   sizeof(float),
+                               stream);
   DeviceBuffer& concat_buffer = scratch.concat_buffer;
   if (!AllGpuValues(concat_inputs)) {
     return Ort::GetApi().CreateStatus(

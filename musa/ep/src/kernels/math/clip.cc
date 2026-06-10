@@ -39,6 +39,7 @@ OrtStatus* Clip::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Clip unsupported dtype");
   }
+  musaStream_t stream = GetComputeStream(ctx);
 
   MusaClipParams params{};
   params.count = NumElements(shape);
@@ -46,13 +47,13 @@ OrtStatus* Clip::Compute(Ort::KernelContext& ctx) const {
   DeviceInputBuffer max_buffer;
   if (ctx.GetInputCount() > 1 && ctx.GetInput(1) != nullptr) {
     RETURN_IF_ERROR(ValidateScalarInput(ctx.GetInput(1), elem_type, "min"));
-    RETURN_IF_ERROR(min_buffer.Bind(ctx.GetInput(1)));
+    RETURN_IF_ERROR(min_buffer.Bind(ctx.GetInput(1), stream));
     params.has_min = 1;
     params.min_data = min_buffer.data();
   }
   if (ctx.GetInputCount() > 2 && ctx.GetInput(2) != nullptr) {
     RETURN_IF_ERROR(ValidateScalarInput(ctx.GetInput(2), elem_type, "max"));
-    RETURN_IF_ERROR(max_buffer.Bind(ctx.GetInput(2)));
+    RETURN_IF_ERROR(max_buffer.Bind(ctx.GetInput(2), stream));
     params.has_max = 1;
     params.max_data = max_buffer.data();
   }
@@ -69,7 +70,7 @@ OrtStatus* Clip::Compute(Ort::KernelContext& ctx) const {
 
   musaError_t status = LaunchMusaClipKernel(
       input.GetTensorRawData(), output.GetTensorMutableRawData(), params,
-      musa_elem_type, GetComputeStream(ctx));
+      musa_elem_type, stream);
   if (status == musaErrorNotSupported) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Clip unsupported dtype");

@@ -4,11 +4,23 @@
 #pragma once
 
 #include "plugin_ep_utils.h"
+#include "pinned_host_pool.h"
+
+#include <memory>
+#include <utility>
 
 struct MusaDataTransfer : OrtDataTransferImpl {
   MusaDataTransfer(const OrtApi& ort_api, const OrtEpApi& ep_api,
-                      const OrtMemoryDevice* device_mem_info_)
-      : ort_api_(ort_api), ep_api_(ep_api), device_mem_info{device_mem_info_} {
+                   const OrtMemoryDevice* device_mem_info_,
+                   const OrtMemoryDevice* host_accessible_mem_info_,
+                   uint32_t vendor_id,
+                   std::shared_ptr<PinnedHostPool> pinned_host_pool)
+      : ort_api_(ort_api),
+        ep_api_(ep_api),
+        device_mem_info{device_mem_info_},
+        host_accessible_mem_info{host_accessible_mem_info_},
+        vendor_id_{vendor_id},
+        pinned_host_pool_{std::move(pinned_host_pool)} {
     CanCopy = CanCopyImpl;
     CopyTensors = CopyTensorsImpl;
     Release = ReleaseImpl;
@@ -27,8 +39,10 @@ struct MusaDataTransfer : OrtDataTransferImpl {
                                                  size_t num_tensors) noexcept;
   static void ORT_API_CALL ReleaseImpl(OrtDataTransferImpl* this_ptr) noexcept;
 
- private:
   const OrtApi& ort_api_;
   const OrtEpApi& ep_api_;
   const OrtMemoryDevice* device_mem_info;  // device our EP runs on
+  const OrtMemoryDevice* host_accessible_mem_info;
+  uint32_t vendor_id_;
+  std::shared_ptr<PinnedHostPool> pinned_host_pool_;
 };

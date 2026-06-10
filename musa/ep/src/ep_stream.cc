@@ -3,6 +3,8 @@
 
 #include "ep_stream.h"
 
+#include "ep_allocator.h"
+
 #include <memory>
 
 namespace {
@@ -95,7 +97,8 @@ MusaSyncStream::MusaSyncStream(const OrtApi& ort_api) : ort_api_(ort_api) {
   Flush = FlushImpl;
   OnSessionRunEnd = OnSessionRunEndImpl;
 
-  musaError_t status = musaStreamCreate(&stream_);
+  musaError_t status =
+      musaStreamCreateWithFlags(&stream_, musaStreamNonBlocking);
   if (status != musaSuccess) {
     stream_ = nullptr;
     throw Ort::Exception(musaGetErrorString(status), ORT_EP_FAIL);
@@ -103,6 +106,7 @@ MusaSyncStream::MusaSyncStream(const OrtApi& ort_api) : ort_api_(ort_api) {
 }
 
 MusaSyncStream::~MusaSyncStream() {
+  CustomAllocator::ResetBlocksUsingStream(this);
   if (stream_ != nullptr) {
     (void)musaStreamDestroy(stream_);
   }
@@ -136,5 +140,8 @@ MusaSyncStream::FlushImpl(OrtSyncStreamImpl* this_ptr) noexcept {
 
 OrtStatus* ORT_API_CALL
 MusaSyncStream::OnSessionRunEndImpl(OrtSyncStreamImpl* this_ptr) noexcept {
-  return FlushImpl(this_ptr);
+  (void)this_ptr;
+  // ORT calls Flush separately when a synchronized Run requires host-visible
+  // completion. Keep same-stream allocator caches intact across runs.
+  return nullptr;
 }

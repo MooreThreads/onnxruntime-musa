@@ -8,14 +8,15 @@ namespace {
 
 class MusaDeviceBuffer {
  public:
-  explicit MusaDeviceBuffer(size_t bytes) {
+  explicit MusaDeviceBuffer(size_t bytes, musaStream_t stream = nullptr)
+      : stream_(stream) {
     if (bytes != 0) {
       Ort::ThrowOnError(LaunchStatus(musaMalloc(&ptr_, bytes)));
     }
   }
   ~MusaDeviceBuffer() {
     if (ptr_ != nullptr) {
-      (void)musaFree(ptr_);
+      FreeDeviceMemoryOnStream(ptr_, stream_);
     }
   }
   MusaDeviceBuffer(const MusaDeviceBuffer&) = delete;
@@ -24,6 +25,7 @@ class MusaDeviceBuffer {
 
  private:
   void* ptr_ = nullptr;
+  musaStream_t stream_ = nullptr;
 };
 
 MusaNonZeroParams MakeNonZeroParams(const std::vector<int64_t>& shape,
@@ -70,30 +72,32 @@ OrtStatus* NonZero::Compute(Ort::KernelContext& ctx) const {
 
   const int64_t total_elements = NumElements(effective_shape);
   int64_t nonzero_elements = 0;
-  MusaDeviceBuffer device_counts(
-      static_cast<size_t>(NonZeroBlockCount(total_elements)) * sizeof(int));
+  musaStream_t stream = GetComputeStream(ctx);
+  const int block_count = NonZeroBlockCount(total_elements);
+  MusaDeviceBuffer device_counts(static_cast<size_t>(block_count) * sizeof(int),
+                                 stream);
   if (total_elements > 0) {
     musaError_t status =
         LaunchMusaNonZeroCountKernel(input.GetTensorRawData(), total_elements,
                                      static_cast<int*>(device_counts.get()),
-                                     musa_elem_type, GetComputeStream(ctx));
+                                     musa_elem_type, stream);
     if (status == musaErrorNotSupported) {
       return UnsupportedDeviceElementwiseStatus("NonZero", elem_type);
     }
     RETURN_IF_ERROR(LaunchStatus(status));
 
-    std::vector<int> prefix_counts(
-        static_cast<size_t>(NonZeroBlockCount(total_elements)));
-    RETURN_IF_ERROR(LaunchStatus(musaMemcpy(
+    std::vector<int> prefix_counts(static_cast<size_t>(block_count));
+    RETURN_IF_ERROR(LaunchStatus(musaMemcpyAsync(
         prefix_counts.data(), device_counts.get(),
-        prefix_counts.size() * sizeof(int), musaMemcpyDeviceToHost)));
+        prefix_counts.size() * sizeof(int), musaMemcpyDeviceToHost, stream)));
+    RETURN_IF_ERROR(LaunchStatus(musaStreamSynchronize(stream)));
     for (size_t i = 1; i < prefix_counts.size(); ++i) {
       prefix_counts[i] += prefix_counts[i - 1];
     }
     nonzero_elements = prefix_counts.empty() ? 0 : prefix_counts.back();
-    RETURN_IF_ERROR(LaunchStatus(musaMemcpy(
+    RETURN_IF_ERROR(CopyTemporaryHostToDevice(
         device_counts.get(), prefix_counts.data(),
-        prefix_counts.size() * sizeof(int), musaMemcpyHostToDevice)));
+        prefix_counts.size() * sizeof(int), stream));
   }
 
   const int64_t rank = static_cast<int64_t>(effective_shape.size());
@@ -110,7 +114,7 @@ OrtStatus* NonZero::Compute(Ort::KernelContext& ctx) const {
       input.GetTensorRawData(), static_cast<const int*>(device_counts.get()),
       output.GetTensorMutableData<int64_t>(),
       MakeNonZeroParams(input_shape, nonzero_elements), musa_elem_type,
-      GetComputeStream(ctx));
+      stream);
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus("NonZero", elem_type);
   }

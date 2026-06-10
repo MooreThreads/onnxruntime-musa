@@ -2,9 +2,19 @@
 
 #include "shared_inc/device_kernel_types.h"
 
+struct MusaConcatElementDesc {
+  const void* input;
+  int64_t input_width;
+  int64_t local_element;
+};
+
 musaError_t LaunchMusaConcatCopies(void* output, const void* const* inputs,
                                    const int64_t* input_axis_dims,
                                    int64_t input_count, int64_t outer,
                                    int64_t inner, int64_t output_axis,
                                    int32_t element_size,
                                    musaStream_t stream);
+
+musaError_t LaunchMusaConcatManySmallRows(
+    void* output, const MusaConcatElementDesc* descriptors, int64_t outer,
+    int64_t output_row_elements, int32_t element_size, musaStream_t stream);

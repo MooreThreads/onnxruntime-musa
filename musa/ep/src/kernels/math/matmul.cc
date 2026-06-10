@@ -317,28 +317,20 @@ OrtStatus* RunMudnnBatchMatMul(
   RETURN_IF_ERROR(
       MudnnStatus(batch_op.SetBeta(0.0), "muDNN BatchMatMul SetBeta failed"));
 
-  bool used_workspace = false;
   ::musa::dnn::MemoryMaintainer maintainer =
-      [&used_workspace](size_t bytes) -> ::musa::dnn::MemoryHandler {
-    used_workspace = used_workspace || bytes != 0;
+      [stream](size_t bytes) -> ::musa::dnn::MemoryHandler {
     void* ptr = nullptr;
     if (bytes != 0 && musaMalloc(&ptr, bytes) != musaSuccess) {
       ptr = nullptr;
     }
-    return ::musa::dnn::MemoryHandler(ptr, [](void* p) {
-      if (p != nullptr) {
-        musaFree(p);
-      }
+    return ::musa::dnn::MemoryHandler(ptr, [stream](void* p) {
+      FreeDeviceMemoryOnStream(p, stream);
     });
   };
 
   RETURN_IF_ERROR(MudnnStatus(
       batch_op.Run(*handle, y_tensor, a_tensor, b_tensor, maintainer),
       "muDNN BatchMatMul execution failed"));
-  if (used_workspace && musaStreamSynchronize(stream) != musaSuccess) {
-    return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                      "muDNN BatchMatMul synchronize failed");
-  }
   return nullptr;
 }
 

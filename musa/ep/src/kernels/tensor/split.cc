@@ -6,8 +6,8 @@
 
 namespace {
 
-constexpr size_t kSplitManySmallOutputCount = 32;
-constexpr size_t kSplitManySmallMaxWidthBytes = 4096;
+constexpr size_t kSplitManySmallOutputCount = 2;
+constexpr size_t kSplitManySmallMaxWidthBytes = 32 * 1024;
 constexpr size_t kSplitManySmallMaxMapBytes = 4 * 1024 * 1024;
 
 class Split : public OpKernelBase<Split> {
@@ -92,18 +92,17 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
         const int64_t output_width = splits[out_idx] * inner;
         for (int64_t local_element = 0; local_element < output_width;
              ++local_element) {
-          element_descriptors[static_cast<size_t>(split_start * inner +
-                                                  local_element)] =
-              MusaSplitElementDesc{output_data[out_idx], output_width,
-                                   local_element};
+          element_descriptors[static_cast<size_t>(
+              split_start * inner + local_element)] = MusaSplitElementDesc{
+              output_data[out_idx], output_width, local_element};
         }
         split_start += splits[out_idx];
       }
 
       MusaSplitElementDesc* device_element_descriptors = nullptr;
-      musaError_t status = musaMalloc(
-          reinterpret_cast<void**>(&device_element_descriptors),
-          element_descriptor_bytes);
+      musaError_t status =
+          musaMalloc(reinterpret_cast<void**>(&device_element_descriptors),
+                     element_descriptor_bytes);
       if (status != musaSuccess) {
         return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
       }
@@ -134,9 +133,8 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
     MusaSplitCopyDesc* device_descriptors = nullptr;
     const size_t descriptor_bytes =
         descriptors.size() * sizeof(MusaSplitCopyDesc);
-    musaError_t status =
-        musaMalloc(reinterpret_cast<void**>(&device_descriptors),
-                   descriptor_bytes);
+    musaError_t status = musaMalloc(
+        reinterpret_cast<void**>(&device_descriptors), descriptor_bytes);
     if (status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }

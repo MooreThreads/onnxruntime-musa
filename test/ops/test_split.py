@@ -91,3 +91,15 @@ def test_split_many_small_outputs_axis1():
         outputs=outputs,
         attrs={"axis": 1},
     )
+
+
+def test_split_thirteen_rank3_outputs_axis1():
+    x = np.random.default_rng(4).standard_normal((4, 13, 768)).astype(np.float32)
+    split = np.ones(13, dtype=np.int64)
+    outputs = [(f"Y{i}", TensorProto.FLOAT) for i in range(split.size)]
+    run_and_compare(
+        "Split",
+        inputs={"X": x, "split": split},
+        outputs=outputs,
+        attrs={"axis": 1},
+    )

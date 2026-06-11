@@ -9,6 +9,8 @@ namespace {
 
 constexpr size_t kConcatManySmallInputCount = 32;
 constexpr size_t kConcatManySmallMaxWidthBytes = 4096;
+constexpr size_t kConcatRelaxedSmallInputCount = 2;
+constexpr size_t kConcatRelaxedSmallMaxWidthBytes = 32 * 1024;
 constexpr size_t kConcatManySmallMaxMapBytes = 4 * 1024 * 1024;
 
 ::musa::dnn::Tensor::Format MudnnFormatForShape(
@@ -91,6 +93,60 @@ bool TryMudnnConcatFloat(Ort::KernelContext& ctx,
                        input_tensors.data()) == ::musa::dnn::Status::SUCCESS;
 }
 
+bool ShouldUseConcatSmallRows(size_t input_count, size_t min_input_count,
+                              size_t max_width_bytes, size_t width_limit_bytes,
+                              int64_t output_row_elements,
+                              size_t element_descriptor_bytes) {
+  return input_count >= min_input_count &&
+         max_width_bytes <= width_limit_bytes && output_row_elements > 0 &&
+         element_descriptor_bytes <= kConcatManySmallMaxMapBytes;
+}
+
+OrtStatus* LaunchConcatSmallRows(void* output,
+                                 const std::vector<const void*>& input_data,
+                                 const std::vector<int64_t>& input_axis_dims,
+                                 int64_t outer, int64_t inner,
+                                 int64_t output_row_elements, int32_t elem_size,
+                                 musaStream_t stream) {
+  std::vector<MusaConcatElementDesc> element_descriptors(
+      static_cast<size_t>(output_row_elements));
+  int64_t output_offset = 0;
+  for (size_t input_idx = 0; input_idx < input_data.size(); ++input_idx) {
+    const int64_t input_width = input_axis_dims[input_idx] * inner;
+    for (int64_t local_element = 0; local_element < input_width;
+         ++local_element) {
+      element_descriptors[static_cast<size_t>(output_offset + local_element)] =
+          MusaConcatElementDesc{input_data[input_idx], input_width,
+                                local_element};
+    }
+    output_offset += input_width;
+  }
+
+  MusaConcatElementDesc* device_element_descriptors = nullptr;
+  const size_t element_descriptor_bytes =
+      static_cast<size_t>(output_row_elements) * sizeof(MusaConcatElementDesc);
+  musaError_t status =
+      musaMalloc(reinterpret_cast<void**>(&device_element_descriptors),
+                 element_descriptor_bytes);
+  if (status != musaSuccess) {
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+  }
+
+  OrtStatus* copy_status = CopyTemporaryHostToDevice(
+      device_element_descriptors, element_descriptors.data(),
+      element_descriptor_bytes, stream);
+  if (copy_status != nullptr) {
+    (void)musaFree(device_element_descriptors);
+    return copy_status;
+  }
+
+  OrtStatus* launch_status = LaunchStatus(
+      LaunchMusaConcatManySmallRows(output, device_element_descriptors, outer,
+                                    output_row_elements, elem_size, stream));
+  FreeDeviceMemoryOnStream(device_element_descriptors, stream);
+  return launch_status;
+}
+
 class Concat : public OpKernelBase<Concat> {
  public:
   Concat(const OrtKernelInfo* info, void* /*state*/) {
@@ -146,57 +202,34 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
     }
 
     musaStream_t stream = GetComputeStream(ctx);
-    const int64_t output_row_elements = out_shape[static_cast<size_t>(axis)] * inner;
-    const size_t max_width_bytes =
-        static_cast<size_t>(max_input_axis) * static_cast<size_t>(inner) *
-        elem_size;
+    const int64_t output_row_elements =
+        out_shape[static_cast<size_t>(axis)] * inner;
+    const size_t max_width_bytes = static_cast<size_t>(max_input_axis) *
+                                   static_cast<size_t>(inner) * elem_size;
     const size_t element_descriptor_bytes =
-        static_cast<size_t>(output_row_elements) * sizeof(MusaConcatElementDesc);
-    if (input_data.size() >= kConcatManySmallInputCount &&
-        max_width_bytes <= kConcatManySmallMaxWidthBytes &&
-        output_row_elements > 0 &&
-        element_descriptor_bytes <= kConcatManySmallMaxMapBytes) {
-      std::vector<MusaConcatElementDesc> element_descriptors(
-          static_cast<size_t>(output_row_elements));
-      int64_t output_offset = 0;
-      for (size_t input_idx = 0; input_idx < input_data.size(); ++input_idx) {
-        const int64_t input_width = input_axis_dims[input_idx] * inner;
-        for (int64_t local_element = 0; local_element < input_width;
-             ++local_element) {
-          element_descriptors[static_cast<size_t>(output_offset +
-                                                  local_element)] =
-              MusaConcatElementDesc{input_data[input_idx], input_width,
-                                    local_element};
-        }
-        output_offset += input_width;
-      }
-
-      MusaConcatElementDesc* device_element_descriptors = nullptr;
-      musaError_t status = musaMalloc(
-          reinterpret_cast<void**>(&device_element_descriptors),
-          element_descriptor_bytes);
-      if (status != musaSuccess) {
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
-      }
-
-      OrtStatus* copy_status = CopyTemporaryHostToDevice(
-          device_element_descriptors, element_descriptors.data(),
-          element_descriptor_bytes, stream);
-      if (copy_status != nullptr) {
-        (void)musaFree(device_element_descriptors);
-        return copy_status;
-      }
-
-      OrtStatus* launch_status = LaunchStatus(LaunchMusaConcatManySmallRows(
-          y.GetTensorMutableRawData(), device_element_descriptors, outer,
-          output_row_elements, static_cast<int32_t>(elem_size), stream));
-      FreeDeviceMemoryOnStream(device_element_descriptors, stream);
-      return launch_status;
+        static_cast<size_t>(output_row_elements) *
+        sizeof(MusaConcatElementDesc);
+    if (ShouldUseConcatSmallRows(input_data.size(), kConcatManySmallInputCount,
+                                 max_width_bytes, kConcatManySmallMaxWidthBytes,
+                                 output_row_elements,
+                                 element_descriptor_bytes)) {
+      return LaunchConcatSmallRows(
+          y.GetTensorMutableRawData(), input_data, input_axis_dims, outer,
+          inner, output_row_elements, static_cast<int32_t>(elem_size), stream);
     }
 
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
         TryMudnnConcatFloat(ctx, shapes, out_shape, axis, y)) {
       return nullptr;
+    }
+
+    if (ShouldUseConcatSmallRows(
+            input_data.size(), kConcatRelaxedSmallInputCount, max_width_bytes,
+            kConcatRelaxedSmallMaxWidthBytes, output_row_elements,
+            element_descriptor_bytes)) {
+      return LaunchConcatSmallRows(
+          y.GetTensorMutableRawData(), input_data, input_axis_dims, outer,
+          inner, output_row_elements, static_cast<int32_t>(elem_size), stream);
     }
 
     return LaunchStatus(LaunchMusaConcatCopies(

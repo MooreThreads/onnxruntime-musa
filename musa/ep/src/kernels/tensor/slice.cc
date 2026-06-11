@@ -67,29 +67,6 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
                                       "Slice requires MUSA input and output");
   }
 
-  if (shape0.size() == 2 && norm_steps[0] == 1 && norm_steps[1] == 1 &&
-      IsGpuMemory(input0.GetTensorMemoryInfo()) &&
-      IsGpuMemory(y.GetTensorMemoryInfo())) {
-    const int64_t width_elems = out_shape[1];
-    const int64_t height = out_shape[0];
-    if (width_elems > 0 && height > 0) {
-      const auto* src_base =
-          static_cast<const uint8_t*>(input0.GetTensorRawData());
-      auto* dst_base = static_cast<uint8_t*>(y.GetTensorMutableRawData());
-      const size_t src_pitch = static_cast<size_t>(shape0[1]) * elem_size;
-      const size_t dst_pitch = static_cast<size_t>(width_elems) * elem_size;
-      const size_t width_bytes = static_cast<size_t>(width_elems) * elem_size;
-      const size_t src_offset =
-          static_cast<size_t>(norm_starts[0] * shape0[1] + norm_starts[1]) *
-          elem_size;
-      if (width_bytes >= 256) {
-        return DeviceMemcpy2D(
-            dst_base, dst_pitch, src_base + src_offset, src_pitch, width_bytes,
-            static_cast<size_t>(height), GetComputeStream(ctx));
-      }
-    }
-  }
-
   const bool all_unit_steps =
       std::all_of(norm_steps.begin(), norm_steps.end(),
                   [](int64_t step) { return step == 1; });

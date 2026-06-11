@@ -14,6 +14,7 @@
 #include "fusion/linear_fusion.h"
 #include "fusion/shape_reshape_fusion.h"
 #include "fusion/slice_concat_fusion.h"
+#include "fusion/split_concat_reorder_fusion.h"
 #include "fusion/split_reduce_fusion.h"
 
 /*
@@ -125,6 +126,9 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       } else if (IsSliceConcatFusionGraph(graph)) {
         ep->GetFusionComputes()[fused_node_name] =
             CreateSliceConcatFusion(graph, fused_node);
+      } else if (IsSplitConcatReorderFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateSplitConcatReorderFusion(graph, fused_node);
       } else {
         ep->GetFusionComputes()[fused_node_name] =
             CreateConcatMatMulFusion(graph, fused_node);

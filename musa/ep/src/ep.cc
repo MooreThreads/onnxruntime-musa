@@ -17,6 +17,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "ep_factory.h"
@@ -700,10 +701,10 @@ std::vector<std::vector<Ort::ConstNode>> FindConcatMatMulFusions(
   return fusions;
 }
 
-bool CanFuseConcatSplit(Ort::ConstNode concat_node, Ort::ConstNode split_node,
-                        const std::unordered_set<std::string>&
-                            graph_output_names,
-                        std::vector<Ort::ConstNode>& fusion_nodes) {
+bool CanFuseConcatSplit(
+    Ort::ConstNode concat_node, Ort::ConstNode split_node,
+    const std::unordered_set<std::string>& graph_output_names,
+    std::vector<Ort::ConstNode>& fusion_nodes) {
   std::vector<Ort::ConstValueInfo> concat_inputs = concat_node.GetInputs();
   std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
   std::vector<Ort::ConstValueInfo> split_inputs = split_node.GetInputs();
@@ -845,12 +846,11 @@ bool CanFuseConcatSplit(Ort::ConstNode concat_node, Ort::ConstNode split_node,
             [](Ort::ConstNode lhs, Ort::ConstNode rhs) {
               return lhs.GetId() < rhs.GetId();
             });
-  fusion_nodes.erase(
-      std::unique(fusion_nodes.begin(), fusion_nodes.end(),
-                  [](Ort::ConstNode lhs, Ort::ConstNode rhs) {
-                    return lhs.GetId() == rhs.GetId();
-                  }),
-      fusion_nodes.end());
+  fusion_nodes.erase(std::unique(fusion_nodes.begin(), fusion_nodes.end(),
+                                 [](Ort::ConstNode lhs, Ort::ConstNode rhs) {
+                                   return lhs.GetId() == rhs.GetId();
+                                 }),
+                     fusion_nodes.end());
   return true;
 }
 
@@ -896,10 +896,198 @@ std::vector<std::vector<Ort::ConstNode>> FindConcatSplitFusions(
   return fusions;
 }
 
-bool CanFuseSliceConcat(Ort::ConstNode concat_node,
-                        const std::unordered_set<std::string>&
-                            graph_output_names,
-                        std::vector<Ort::ConstNode>& fusion_nodes) {
+bool CanFuseSplitConcatReorder(
+    Ort::ConstNode reshape_node, Ort::ConstNode split_node,
+    Ort::ConstNode concat_node,
+    const std::unordered_set<std::string>& graph_output_names) {
+  std::vector<Ort::ConstValueInfo> reshape_inputs = reshape_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> reshape_outputs = reshape_node.GetOutputs();
+  std::vector<Ort::ConstValueInfo> split_inputs = split_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> split_outputs = split_node.GetOutputs();
+  std::vector<Ort::ConstValueInfo> concat_inputs = concat_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
+  if (reshape_inputs.empty() || reshape_outputs.size() != 1 ||
+      split_inputs.empty() || split_inputs.size() > 2 ||
+      split_outputs.size() < 2 ||
+      concat_inputs.size() != split_outputs.size() ||
+      concat_outputs.size() != 1 ||
+      Name(split_inputs[0]) != Name(reshape_outputs[0])) {
+    return false;
+  }
+
+  if (graph_output_names.count(Name(reshape_outputs[0])) != 0) {
+    return false;
+  }
+
+  if (!IsFloatTensorValueInfo(reshape_inputs[0]) ||
+      !IsFloatTensorValueInfo(reshape_outputs[0]) ||
+      !IsFloatTensorValueInfo(concat_outputs[0])) {
+    return false;
+  }
+
+  auto reshape_shape = GetTensorShape(reshape_outputs[0]);
+  if (!reshape_shape.has_value() || reshape_shape->size() != 3 ||
+      (*reshape_shape)[1] <= 0 || (*reshape_shape)[2] <= 0) {
+    return false;
+  }
+  const int64_t batch = (*reshape_shape)[0];
+  const int64_t sequence = (*reshape_shape)[1];
+  const int64_t packed_width = (*reshape_shape)[2];
+
+  auto split_axis_attr = GetIntAttribute(split_node, "axis");
+  int64_t split_axis = 0;
+  if (!NormalizeAxis(split_axis_attr.value_or(0), 3, split_axis) ||
+      split_axis != 2) {
+    return false;
+  }
+
+  auto concat_axis_attr = GetIntAttribute(concat_node, "axis");
+  int64_t concat_axis = 0;
+  if (!concat_axis_attr.has_value() ||
+      !NormalizeAxis(*concat_axis_attr, 3, concat_axis) || concat_axis != 0) {
+    return false;
+  }
+
+  std::vector<int64_t> split_sizes;
+  if (split_inputs.size() == 2) {
+    auto split_initializer = ReadIntInitializerNoLimit(split_inputs[1]);
+    if (!split_initializer.has_value() ||
+        split_initializer->size() != split_outputs.size()) {
+      return false;
+    }
+    split_sizes = std::move(*split_initializer);
+  } else {
+    if (packed_width % static_cast<int64_t>(split_outputs.size()) != 0) {
+      return false;
+    }
+    split_sizes.assign(
+        split_outputs.size(),
+        packed_width / static_cast<int64_t>(split_outputs.size()));
+  }
+
+  if (split_sizes.empty() || split_sizes[0] <= 0) {
+    return false;
+  }
+  const int64_t part_width = split_sizes[0];
+  int64_t split_total = 0;
+  for (int64_t split_size : split_sizes) {
+    if (split_size != part_width) {
+      return false;
+    }
+    split_total += split_size;
+  }
+  if (split_total != packed_width) {
+    return false;
+  }
+
+  for (size_t i = 0; i < split_outputs.size(); ++i) {
+    Ort::ConstValueInfo split_output = split_outputs[i];
+    if (Name(concat_inputs[i]) != Name(split_output) ||
+        graph_output_names.count(Name(split_output)) != 0 ||
+        !IsFloatTensorValueInfo(split_output)) {
+      return false;
+    }
+
+    auto split_shape = GetTensorShape(split_output);
+    if (!split_shape.has_value() || split_shape->size() != 3 ||
+        ((*split_shape)[0] > 0 && batch > 0 && (*split_shape)[0] != batch) ||
+        (*split_shape)[1] != sequence || (*split_shape)[2] != part_width) {
+      return false;
+    }
+
+    std::vector<Ort::ValueInfoConsumerProducerInfo> consumers =
+        split_output.GetConsumers();
+    if (consumers.size() != 1 ||
+        consumers[0].node.GetId() != concat_node.GetId() ||
+        consumers[0].index != static_cast<int64_t>(i)) {
+      return false;
+    }
+  }
+
+  auto concat_shape = GetTensorShape(concat_outputs[0]);
+  if (!concat_shape.has_value() || concat_shape->size() != 3 ||
+      ((*concat_shape)[0] > 0 && batch > 0 &&
+       (*concat_shape)[0] !=
+           batch * static_cast<int64_t>(split_outputs.size())) ||
+      (*concat_shape)[1] != sequence || (*concat_shape)[2] != part_width) {
+    return false;
+  }
+
+  return true;
+}
+
+std::vector<std::vector<Ort::ConstNode>> FindSplitConcatReorderFusions(
+    const std::vector<Ort::ConstNode>& all_nodes,
+    const std::unordered_set<std::string>& graph_output_names,
+    std::unordered_set<size_t>& fused_node_ids) {
+  std::vector<std::vector<Ort::ConstNode>> fusions;
+
+  for (Ort::ConstNode split_node : all_nodes) {
+    if (!IsOnnxOp(split_node, "Split") ||
+        fused_node_ids.count(split_node.GetId()) != 0) {
+      continue;
+    }
+
+    std::vector<Ort::ConstValueInfo> split_inputs = split_node.GetInputs();
+    std::vector<Ort::ConstValueInfo> split_outputs = split_node.GetOutputs();
+    if (split_inputs.empty() || split_outputs.size() < 2) {
+      continue;
+    }
+
+    Ort::ValueInfoConsumerProducerInfo producer =
+        split_inputs[0].GetProducerNode();
+    if (!producer.node || !IsOnnxOp(producer.node, "Reshape") ||
+        fused_node_ids.count(producer.node.GetId()) != 0) {
+      continue;
+    }
+    Ort::ConstNode reshape_node = producer.node;
+
+    std::vector<Ort::ConstValueInfo> reshape_outputs =
+        reshape_node.GetOutputs();
+    if (reshape_outputs.size() != 1 ||
+        reshape_outputs[0].GetConsumers().size() != 1) {
+      continue;
+    }
+
+    Ort::ConstNode concat_node{nullptr};
+    bool all_outputs_feed_same_concat = true;
+    for (Ort::ConstValueInfo split_output : split_outputs) {
+      std::vector<Ort::ValueInfoConsumerProducerInfo> consumers =
+          split_output.GetConsumers();
+      if (consumers.size() != 1 || !IsOnnxOp(consumers[0].node, "Concat")) {
+        all_outputs_feed_same_concat = false;
+        break;
+      }
+      if (!concat_node) {
+        concat_node = consumers[0].node;
+      } else if (concat_node.GetId() != consumers[0].node.GetId()) {
+        all_outputs_feed_same_concat = false;
+        break;
+      }
+    }
+    if (!all_outputs_feed_same_concat || !concat_node ||
+        fused_node_ids.count(concat_node.GetId()) != 0) {
+      continue;
+    }
+
+    if (!CanFuseSplitConcatReorder(reshape_node, split_node, concat_node,
+                                   graph_output_names)) {
+      continue;
+    }
+
+    fusions.push_back({reshape_node, split_node, concat_node});
+    fused_node_ids.insert(reshape_node.GetId());
+    fused_node_ids.insert(split_node.GetId());
+    fused_node_ids.insert(concat_node.GetId());
+  }
+
+  return fusions;
+}
+
+bool CanFuseSliceConcat(
+    Ort::ConstNode concat_node,
+    const std::unordered_set<std::string>& graph_output_names,
+    std::vector<Ort::ConstNode>& fusion_nodes) {
   std::vector<Ort::ConstValueInfo> concat_inputs = concat_node.GetInputs();
   std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
   if (concat_inputs.size() < 8 || concat_outputs.size() != 1 ||
@@ -919,7 +1107,8 @@ bool CanFuseSliceConcat(Ort::ConstNode concat_node,
   std::unordered_set<size_t> seen_slice_node_ids;
   bool has_fused_slice_input = false;
   for (Ort::ConstValueInfo concat_input : concat_inputs) {
-    Ort::ValueInfoConsumerProducerInfo producer = concat_input.GetProducerNode();
+    Ort::ValueInfoConsumerProducerInfo producer =
+        concat_input.GetProducerNode();
     if (!producer.node) {
       auto shape = GetTensorShape(concat_input);
       if (!IsFloatTensorValueInfo(concat_input) || !shape.has_value() ||
@@ -931,8 +1120,7 @@ bool CanFuseSliceConcat(Ort::ConstNode concat_node,
 
     Ort::ConstNode slice_node = producer.node;
     const bool is_slice_input = IsOnnxOp(slice_node, "Slice");
-    const bool is_zero_constant_input =
-        IsOnnxOp(slice_node, "ConstantOfShape");
+    const bool is_zero_constant_input = IsOnnxOp(slice_node, "ConstantOfShape");
     if (!is_slice_input && !is_zero_constant_input) {
       auto shape = GetTensorShape(concat_input);
       if (!IsFloatTensorValueInfo(concat_input) || !shape.has_value() ||
@@ -1389,9 +1577,9 @@ bool AddFusionNode(Ort::ConstNode node,
   return true;
 }
 
-bool PathReachesSelectedNode(Ort::ConstNode node,
-                             const std::unordered_set<size_t>& selected_node_ids,
-                             std::unordered_set<size_t>& visited_node_ids) {
+bool PathReachesSelectedNode(
+    Ort::ConstNode node, const std::unordered_set<size_t>& selected_node_ids,
+    std::unordered_set<size_t>& visited_node_ids) {
   if (!node || !visited_node_ids.insert(node.GetId()).second) {
     return false;
   }
@@ -1613,8 +1801,7 @@ bool CanFuseCenteredReduce(
   std::unordered_set<size_t> selected_node_ids;
   for (Ort::ConstNode node :
        {first_reduce_node, sub_node, mul_node, second_reduce_node}) {
-    if (!AddFusionNode(node, fused_node_ids, selected_node_ids,
-                       fusion_nodes)) {
+    if (!AddFusionNode(node, fused_node_ids, selected_node_ids, fusion_nodes)) {
       return false;
     }
   }
@@ -1648,10 +1835,11 @@ std::vector<std::vector<Ort::ConstNode>> FindCenteredReduceFusions(
   return fusions;
 }
 
-bool CanFuseSplitReduce(Ort::ConstNode split_node,
-                        const std::unordered_set<std::string>& graph_output_names,
-                        const std::unordered_set<size_t>& fused_node_ids,
-                        std::vector<Ort::ConstNode>& fusion_nodes) {
+bool CanFuseSplitReduce(
+    Ort::ConstNode split_node,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& fused_node_ids,
+    std::vector<Ort::ConstNode>& fusion_nodes) {
   if (!IsOnnxOp(split_node, "Split") ||
       fused_node_ids.count(split_node.GetId()) != 0 ||
       GetIntAttribute(split_node, "axis").value_or(0) != 1) {
@@ -1977,8 +2165,7 @@ std::vector<std::vector<Ort::ConstNode>> FindFusedGemmFusions(
       }
     }
 
-    if (!CanFuseMatMulAdd(matmul_node, add_node,
-                          matmul_consumers[0].index)) {
+    if (!CanFuseMatMulAdd(matmul_node, add_node, matmul_consumers[0].index)) {
       continue;
     }
 
@@ -2047,6 +2234,9 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
     }
 
     std::unordered_set<size_t> fused_node_ids;
+    std::vector<std::vector<Ort::ConstNode>> split_concat_reorder_fusions =
+        FindSplitConcatReorderFusions(all_nodes, graph_output_names,
+                                      fused_node_ids);
     std::vector<std::vector<Ort::ConstNode>> concat_matmul_fusions =
         FindConcatMatMulFusions(all_nodes, graph_output_names, fused_node_ids);
     std::vector<std::vector<Ort::ConstNode>> concat_split_fusions =
@@ -2054,6 +2244,15 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
     std::vector<std::vector<Ort::ConstNode>> slice_concat_fusions =
         FindSliceConcatFusions(all_nodes, graph_output_names, fused_node_ids);
 
+    for (const auto& fusion_nodes : split_concat_reorder_fusions) {
+      OrtNodeFusionOptions node_fusion_options = {};
+      node_fusion_options.ort_version_supported = ORT_API_VERSION;
+      node_fusion_options.drop_constant_initializers = false;
+      RETURN_IF_ERROR(ep->ep_api_.EpGraphSupportInfo_AddNodesToFuse(
+          graph_support_info,
+          reinterpret_cast<const OrtNode* const*>(fusion_nodes.data()),
+          fusion_nodes.size(), &node_fusion_options));
+    }
     for (const auto& fusion_nodes : concat_matmul_fusions) {
       OrtNodeFusionOptions node_fusion_options = {};
       node_fusion_options.ort_version_supported = ORT_API_VERSION;

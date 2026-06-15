@@ -28,12 +28,9 @@
 
 #include "math/binary_elementwise_ops_impl.h"
 #include "math/unary_elementwise_ops_impl.h"
-#include "pending_musa_work.h"
 #include "pinned_host_pool.h"
 #include "runtime/ep_musa_utils.h"
 #include "utils.h"
-
-inline OrtStatus* WaitForPendingMusaInputs(Ort::KernelContext& ctx);
 
 // CRTP base shared by every elementary kernel. Derived classes only need to
 // provide:
@@ -57,7 +54,6 @@ class OpKernelBase : public OrtKernelImpl {
     EXCEPTION_TO_RETURNED_STATUS_BEGIN
     auto* k = static_cast<Derived*>(this_ptr);
     Ort::KernelContext ctx(kernel_ctx);
-    RETURN_IF_ERROR(WaitForPendingMusaInputs(ctx));
     return k->Compute(ctx);
     EXCEPTION_TO_RETURNED_STATUS_END
   }
@@ -695,22 +691,6 @@ inline bool IsGpuMemory(const OrtMemoryInfo* memory_info) {
       Ort::GetEpApi().MemoryInfo_GetMemoryDevice(memory_info);
   return Ort::GetEpApi().MemoryDevice_GetDeviceType(device) ==
          OrtMemoryInfoDeviceType_GPU;
-}
-
-inline OrtStatus* WaitForPendingMusaInputs(Ort::KernelContext& ctx) {
-  musaStream_t stream = GetComputeStream(ctx);
-  const size_t input_count = ctx.GetInputCount();
-  for (size_t i = 0; i < input_count; ++i) {
-    Ort::ConstValue input = ctx.GetInput(i);
-    if (input == nullptr) {
-      continue;
-    }
-    if (!IsGpuMemory(input.GetTensorMemoryInfo())) {
-      continue;
-    }
-    RETURN_IF_ERROR(WaitForPendingMusaWork(input.GetTensorRawData(), stream));
-  }
-  return nullptr;
 }
 
 class DeviceInputBuffer {

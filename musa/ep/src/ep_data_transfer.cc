@@ -1,7 +1,5 @@
 #include "ep_data_transfer.h"
 
-#include "kernels/shared_inc/pending_musa_work.h"
-
 #include <musa_runtime.h>
 
 #include <cstdlib>
@@ -212,7 +210,6 @@ OrtStatus* ORT_API_CALL MusaDataTransfer::CopyTensorsImpl(
           impl.ort_api_.SyncStream_GetHandle(streams_ptr[i]));
     }
 
-    RETURN_IF_ERROR(WaitForPendingMusaWork(src_data, stream));
     RETURN_IF_ERROR(CopyImpl(impl, src_device, dst_device, src_data, dst_data,
                              bytes, stream, allow_pageable_bounce));
   }

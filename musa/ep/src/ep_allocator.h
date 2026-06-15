@@ -1,6 +1,5 @@
 #pragma once
 
-#include "kernels/shared_inc/pending_musa_work.h"
 #include "plugin_ep_utils.h"
 #include "pinned_host_pool.h"
 
@@ -139,8 +138,10 @@ struct CustomAllocator : BaseAllocator {
     return mb <= 0 ? 0 : static_cast<size_t>(mb) * 1024 * 1024;
   }
 
-  void* TakeCachedBlock(size_t size, const OrtSyncStreamImpl* stream,
-                        bool wait_for_pending) {
+  void* AllocateCached(size_t requested_size,
+                       const OrtSyncStreamImpl* stream) {
+    const size_t size = RoundSize(requested_size);
+    std::lock_guard<std::mutex> lock(mutex_);
     for (auto cached = cached_blocks_.lower_bound(size);
          cached != cached_blocks_.end(); ++cached) {
       if (cached->second.stream != stream) {
@@ -148,41 +149,18 @@ struct CustomAllocator : BaseAllocator {
       }
 
       void* p = cached->second.ptr;
-      if (HasPendingMusaWorkForBufferReuse(p)) {
-        if (!wait_for_pending) {
-          continue;
-        }
-        OrtStatus* wait_status = WaitForPendingMusaWorkForBufferReuse(p);
-        if (wait_status != nullptr) {
-          Ort::GetApi().ReleaseStatus(wait_status);
-          continue;
-        }
-      }
-
       const size_t block_size = cached->first;
       cached_bytes_ -= block_size;
       cached_blocks_.erase(cached);
-      ClearPendingMusaBufferState(p);
       live_blocks_[p] = BlockInfo{block_size, stream};
-      return p;
-    }
-    return nullptr;
-  }
-
-  void* AllocateCached(size_t requested_size,
-                       const OrtSyncStreamImpl* stream) {
-    const size_t size = RoundSize(requested_size);
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (void* p = TakeCachedBlock(size, stream, false)) {
       return p;
     }
 
     void* p = nullptr;
     musaError_t status = musaMalloc(&p, size);
     if (status != musaSuccess) {
-      return TakeCachedBlock(size, stream, true);
+      return nullptr;
     }
-    ClearPendingMusaBufferState(p);
     live_blocks_[p] = BlockInfo{size, stream};
     return p;
   }
@@ -198,9 +176,7 @@ struct CustomAllocator : BaseAllocator {
     const BlockInfo block = live->second;
     live_blocks_.erase(live);
     const size_t limit = CacheLimitBytes();
-    const bool pending = HasPendingMusaWorkForBufferReuse(p);
-    if (!pending && (limit == 0 || cached_bytes_ + block.size > limit)) {
-      ClearPendingMusaBufferState(p);
+    if (limit == 0 || cached_bytes_ + block.size > limit) {
       (void)musaFree(p);
       return;
     }

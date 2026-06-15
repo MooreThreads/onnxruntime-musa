@@ -4,7 +4,6 @@
 #include "ep_stream.h"
 
 #include "ep_allocator.h"
-#include "kernels/shared_inc/pending_musa_work.h"
 
 #include <memory>
 
@@ -136,16 +135,7 @@ OrtStatus* ORT_API_CALL MusaSyncStream::CreateNotificationImpl(
 OrtStatus* ORT_API_CALL
 MusaSyncStream::FlushImpl(OrtSyncStreamImpl* this_ptr) noexcept {
   auto& impl = *static_cast<MusaSyncStream*>(this_ptr);
-  OrtStatus* pending_status = WaitForAllPendingMusaWork(impl.stream());
-  if (pending_status != nullptr) {
-    return pending_status;
-  }
-  OrtStatus* status = MusaStatus(impl.ort_api_,
-                                 musaStreamSynchronize(impl.stream()));
-  if (status == nullptr) {
-    CleanupCompletedPendingMusaWork();
-  }
-  return status;
+  return MusaStatus(impl.ort_api_, musaStreamSynchronize(impl.stream()));
 }
 
 OrtStatus* ORT_API_CALL

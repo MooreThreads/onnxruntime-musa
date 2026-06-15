@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "math/gemm_post_kernels.h"
@@ -19,25 +20,32 @@
 // own implementation because it also handles batched MatMul shapes.
 inline OrtStatus* EnsureMublasHandle(mublasHandle_t* handle,
                                      musaStream_t stream = nullptr) {
-  static thread_local mublasHandle_t g_handle = nullptr;
-  static thread_local musaStream_t g_stream = nullptr;
-  if (g_handle != nullptr && g_stream != stream) {
-    mublasDestroy(g_handle);
-    g_handle = nullptr;
-  }
-  if (g_handle == nullptr) {
-    mublasStatus status = mublasCreate(&g_handle);
+  struct ThreadLocalMublasHandles {
+    ~ThreadLocalMublasHandles() {
+      for (auto& entry : handles) {
+        if (entry.second != nullptr) {
+          mublasDestroy(entry.second);
+        }
+      }
+    }
+
+    std::unordered_map<musaStream_t, mublasHandle_t> handles;
+  };
+
+  static thread_local ThreadLocalMublasHandles g_handles;
+  mublasHandle_t& cached_handle = g_handles.handles[stream];
+  if (cached_handle == nullptr) {
+    mublasStatus status = mublasCreate(&cached_handle);
     if (status != MUBLAS_STATUS_SUCCESS) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasCreate failed");
     }
-    g_stream = stream;
   }
   mublasStatus stream_status =
-      mublasSetStream(g_handle, reinterpret_cast<MUstream>(stream));
+      mublasSetStream(cached_handle, reinterpret_cast<MUstream>(stream));
   if (stream_status != MUBLAS_STATUS_SUCCESS) {
     return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSetStream failed");
   }
-  *handle = g_handle;
+  *handle = cached_handle;
   return nullptr;
 }
 
@@ -48,26 +56,25 @@ inline bool ResolveTF32EnabledForGemm() {
 
 inline OrtStatus* EnsureMudnnHandle(::musa::dnn::Handle** handle,
                                     musaStream_t stream = nullptr) {
-  static thread_local std::unique_ptr<::musa::dnn::Handle> g_handle;
-  static thread_local musaStream_t g_stream = nullptr;
-  if (g_handle && g_stream != stream) {
-    g_handle.reset();
-  }
-  if (!g_handle) {
-    g_handle = std::make_unique<::musa::dnn::Handle>();
-    g_stream = stream;
-    auto status = g_handle->SetAllowTF32(ResolveTF32EnabledForGemm());
+  static thread_local std::unordered_map<
+      musaStream_t, std::unique_ptr<::musa::dnn::Handle>>
+      g_handles;
+
+  std::unique_ptr<::musa::dnn::Handle>& cached_handle = g_handles[stream];
+  if (!cached_handle) {
+    cached_handle = std::make_unique<::musa::dnn::Handle>();
+    auto status = cached_handle->SetAllowTF32(ResolveTF32EnabledForGemm());
     if (status != ::musa::dnn::Status::SUCCESS) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                         "mudnn Handle SetAllowTF32 failed");
     }
   }
-  auto stream_status = g_handle->SetStream(stream);
+  auto stream_status = cached_handle->SetStream(stream);
   if (stream_status != ::musa::dnn::Status::SUCCESS) {
     return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                       "mudnn Handle SetStream failed");
   }
-  *handle = g_handle.get();
+  *handle = cached_handle.get();
   return nullptr;
 }
 

@@ -16,6 +16,7 @@
 #include "fusion/slice_concat_fusion.h"
 #include "fusion/split_concat_reorder_fusion.h"
 #include "fusion/split_reduce_fusion.h"
+#include "kernels/shared_inc/op_kernel_common.h"
 #include "fusion/split_unsqueeze_concat_fusion.h"
 
 /*
@@ -69,6 +70,8 @@ struct FusionNodeComputeInfo : OrtNodeComputeInfo {
                                              void* compute_state,
                                              OrtKernelContext* kernel_context) {
     auto* fusion = reinterpret_cast<const FusionNodeCompute*>(compute_state);
+    Ort::KernelContext ctx(kernel_context);
+    RETURN_IF_ERROR(WaitForPendingMusaInputs(ctx));
     return fusion->Compute(kernel_context);
   }
 

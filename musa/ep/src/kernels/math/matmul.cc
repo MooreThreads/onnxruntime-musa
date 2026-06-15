@@ -45,6 +45,103 @@ bool IsMatMulType(ONNXTensorElementDataType elem_type) {
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
 }
 
+int ReadPositiveEnvInt(const char* name, int default_value) {
+  const char* value = std::getenv(name);
+  if (value == nullptr) {
+    return default_value;
+  }
+  int parsed = std::atoi(value);
+  return parsed > 0 ? parsed : default_value;
+}
+
+size_t ReadSizeEnv(const char* name, size_t default_value) {
+  const char* value = std::getenv(name);
+  if (value == nullptr) {
+    return default_value;
+  }
+  char* end = nullptr;
+  unsigned long long parsed = std::strtoull(value, &end, 10);
+  return end != value ? static_cast<size_t>(parsed) : default_value;
+}
+
+bool AsyncMatMulStreamsEnabled() {
+  const char* value = std::getenv("ORT_MUSA_ENABLE_ASYNC_MATMUL_STREAMS");
+  return value == nullptr || std::atoi(value) != 0;
+}
+
+bool ProtectAsyncMatMulInputs() {
+  const char* value = std::getenv("ORT_MUSA_ASYNC_MATMUL_PROTECT_INPUTS");
+  return value == nullptr || std::atoi(value) != 0;
+}
+
+OrtStatus* MusaRuntimeStatus(musaError_t status) {
+  return status == musaSuccess
+             ? nullptr
+             : Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                           MusaErrorString(status));
+}
+
+class ThreadLocalMatMulAuxStreams {
+ public:
+  ~ThreadLocalMatMulAuxStreams() {
+    for (musaStream_t stream : streams_) {
+      if (stream != nullptr) {
+        (void)musaStreamDestroy(stream);
+      }
+    }
+  }
+
+  OrtStatus* GetNext(musaStream_t main_stream, musaStream_t& launch_stream,
+                     bool& using_aux_stream) {
+    launch_stream = main_stream;
+    using_aux_stream = false;
+    if (main_stream == nullptr || !AsyncMatMulStreamsEnabled()) {
+      return nullptr;
+    }
+
+    const int max_streams =
+        ReadPositiveEnvInt("ORT_MUSA_ASYNC_MATMUL_STREAMS", 4);
+    if (max_streams <= 0) {
+      return nullptr;
+    }
+
+    while (streams_.size() < static_cast<size_t>(max_streams)) {
+      musaStream_t stream = nullptr;
+      musaError_t status =
+          musaStreamCreateWithFlags(&stream, musaStreamNonBlocking);
+      if (status != musaSuccess) {
+        return MusaRuntimeStatus(status);
+      }
+      streams_.push_back(stream);
+    }
+
+    launch_stream = streams_[next_stream_ % streams_.size()];
+    ++next_stream_;
+    using_aux_stream = true;
+    return nullptr;
+  }
+
+ private:
+  std::vector<musaStream_t> streams_;
+  size_t next_stream_ = 0;
+};
+
+OrtStatus* SelectMatMulLaunchStream(size_t output_bytes,
+                                    musaStream_t main_stream,
+                                    musaStream_t& launch_stream,
+                                    bool& using_aux_stream) {
+  launch_stream = main_stream;
+  using_aux_stream = false;
+  const size_t min_bytes =
+      ReadSizeEnv("ORT_MUSA_ASYNC_MATMUL_MIN_BYTES", 0);
+  if (output_bytes < min_bytes) {
+    return nullptr;
+  }
+
+  static thread_local ThreadLocalMatMulAuxStreams streams;
+  return streams.GetNext(main_stream, launch_stream, using_aux_stream);
+}
+
 int64_t NumElementsLocal(const std::vector<int64_t>& shape) {
   int64_t n = 1;
   for (int64_t dim : shape) {
@@ -422,10 +519,49 @@ OrtStatus* ComputeMudnnMatMul(Ort::KernelContext& kernel_context,
                                       "MatMul requires MUSA output");
   }
 
-  return ComputeMusaMatMulDeviceImpl(
-      a.GetTensorRawData(), b.GetTensorRawData(), y.GetTensorMutableRawData(),
+  musaStream_t main_stream = GetComputeStream(kernel_context);
+  musaStream_t launch_stream = main_stream;
+  bool using_aux_stream = false;
+  size_t output_bytes = static_cast<size_t>(NumElementsLocal(
+                            shape_info.output_shape)) *
+                        ElementSize(elem_type);
+  RETURN_IF_ERROR(SelectMatMulLaunchStream(output_bytes, main_stream,
+                                           launch_stream, using_aux_stream));
+  const void* a_data = a.GetTensorRawData();
+  const void* b_data = b.GetTensorRawData();
+  const bool a_has_pending_producer = HasPendingMusaProducer(a_data);
+  const bool b_has_pending_producer = HasPendingMusaProducer(b_data);
+  RETURN_IF_ERROR(WaitForPendingMusaWork(a_data, launch_stream));
+  RETURN_IF_ERROR(WaitForPendingMusaWork(b_data, launch_stream));
+  if (using_aux_stream) {
+    if (!a_has_pending_producer) {
+      RETURN_IF_ERROR(
+          EnsureMusaBufferReadyOnStream(a_data, main_stream, launch_stream));
+    }
+    if (b_data != a_data && !b_has_pending_producer) {
+      RETURN_IF_ERROR(
+          EnsureMusaBufferReadyOnStream(b_data, main_stream, launch_stream));
+    }
+  }
+
+  void* y_data = y.GetTensorMutableRawData();
+  RETURN_IF_ERROR(ComputeMusaMatMulDeviceImpl(
+      a_data, b_data, y_data,
       elem_type, a_shape, b_shape, shape_info.output_shape, false, false, false,
-      false, 1.0f, GetComputeStream(kernel_context));
+      false, 1.0f, launch_stream));
+  if (using_aux_stream) {
+    // Keep the main stream free. Consumers wait on y_data; the allocator waits
+    // before reusing a_data/b_data while the aux stream may still be reading.
+    if (ProtectAsyncMatMulInputs()) {
+      RETURN_IF_ERROR(RegisterPendingMusaBufferUse(a_data, launch_stream));
+      if (b_data != a_data) {
+        RETURN_IF_ERROR(RegisterPendingMusaBufferUse(b_data, launch_stream));
+      }
+    }
+    RETURN_IF_ERROR(RegisterPendingMusaWork(y_data, launch_stream));
+    RETURN_IF_ERROR(MarkMusaBufferReady(y_data, launch_stream));
+  }
+  return nullptr;
 }
 }  // namespace
 

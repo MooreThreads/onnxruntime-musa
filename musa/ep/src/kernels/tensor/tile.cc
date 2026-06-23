@@ -83,7 +83,8 @@ OrtStatus* Tile::Compute(Ort::KernelContext& ctx) const {
   }
 
   if (output_shape == input_shape) {
-    return CopyRawTensor(input, y, input.GetTensorSizeInBytes());
+    return CopyRawTensor(input, y, input.GetTensorSizeInBytes(),
+                         GetComputeStream(ctx));
   }
 
   if (!input_shape.empty() && input_shape.back() > 0 && repeats.back() > 1 &&

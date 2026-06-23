@@ -3,13 +3,16 @@
 """End-to-end CPU-vs-MUSA test for the Tile operator."""
 
 import numpy as np
+from onnx import helper
 import pytest
 
 from op_test_utils import (
     TensorProto,
+    build_graph_model,
     build_model_with_input_types,
     float32_to_bfloat16_bits,
     run_and_compare,
+    run_model_and_compare,
     run_with_iobinding,
 )
 
@@ -18,6 +21,24 @@ def test_tile_float():
     x = np.array([[1.0], [2.0]], dtype=np.float32)
     repeats = np.array([1, 3], dtype=np.int64)
     run_and_compare("Tile", inputs={"X": x, "repeats": repeats}, outputs=[("Y", TensorProto.FLOAT)])
+
+
+def test_tile_identity_repeats_after_device_producer():
+    rng = np.random.default_rng(7)
+    x = rng.standard_normal((1024, 432)).astype(np.float32)
+    bias = rng.standard_normal((1024, 432)).astype(np.float32)
+    repeats = np.array([1, 1], dtype=np.int64)
+    feeds = {"X": x, "B": bias, "repeats": repeats}
+    model = build_graph_model(
+        [
+            helper.make_node("Add", ["X", "B"], ["sum"]),
+            helper.make_node("Tile", ["sum", "repeats"], ["Y"]),
+        ],
+        inputs=feeds,
+        outputs=[("Y", TensorProto.FLOAT)],
+        name="tile_identity_after_device_producer",
+    )
+    run_model_and_compare(model, feeds)
 
 
 @pytest.mark.parametrize(

@@ -80,6 +80,24 @@ def test_gather_float16_axis1():
     )
 
 
+def test_gather_cpu_initializer_data_axis0():
+    weights = np.random.default_rng(3).standard_normal((6, 4)).astype(np.float32)
+    indices = np.array([0, 3, 5], dtype=np.int64)
+    node = helper.make_node("Gather", ["weights", "indices"], ["Y"], axis=0)
+    initializer = helper.make_tensor(
+        "weights", TensorProto.FLOAT, weights.shape, weights.reshape(-1)
+    )
+    model = build_graph_model(
+        [node],
+        inputs={"indices": indices},
+        outputs=[("Y", TensorProto.FLOAT)],
+        initializers=[initializer],
+        opset=17,
+        name="gather_cpu_initializer_data_axis0",
+    )
+    run_model_and_compare(model, {"indices": indices})
+
+
 def test_gather_uint16_int32_indices():
     data = np.arange(3 * 4, dtype=np.uint16).reshape(3, 4)
     indices = np.array([[0, 2], [3, 1]], dtype=np.int32)

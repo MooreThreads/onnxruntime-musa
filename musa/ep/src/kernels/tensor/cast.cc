@@ -9,8 +9,8 @@ constexpr int64_t kMaxCpuMetadataCastElements = kMusaMaxBroadcastRank;
 
 OrtStatus* CastCpuIntMetadata(Ort::ConstValue input, Ort::UnownedValue output,
                               ONNXTensorElementDataType src_type,
-                              ONNXTensorElementDataType dst_type,
-                              int64_t count, musaStream_t stream) {
+                              ONNXTensorElementDataType dst_type, int64_t count,
+                              musaStream_t stream) {
   if (count > kMaxCpuMetadataCastElements) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED,
@@ -36,6 +36,16 @@ OrtStatus* CastCpuIntMetadata(Ort::ConstValue input, Ort::UnownedValue output,
     std::vector<int32_t> src = ReadTyped<int32_t>(input, stream);
     std::vector<int64_t> dst(src.begin(), src.end());
     return WriteTyped<int64_t>(output, dst, stream);
+  }
+  if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 &&
+      dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+    return WriteTyped<int64_t>(output, ReadTyped<int64_t>(input, stream),
+                               stream);
+  }
+  if (src_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 &&
+      dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    return WriteTyped<int32_t>(output, ReadTyped<int32_t>(input, stream),
+                               stream);
   }
   if (dst_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
     std::vector<float> dst;
@@ -100,10 +110,9 @@ OrtStatus* Cast::Compute(Ort::KernelContext& ctx) const {
   }
 
   const int64_t n = NumElements(shape0);
-  if (static_cast<int64_t>(elem_type) == to_) {
-    return DeviceMemcpy(y.GetTensorMutableRawData(), input0.GetTensorRawData(),
-                        static_cast<size_t>(n) * src_elem_size,
-                        GetComputeStream(ctx));
+  if (elem_type == static_cast<ONNXTensorElementDataType>(to_)) {
+    return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes(),
+                         GetComputeStream(ctx));
   }
 
   return LaunchStatus(LaunchMusaCastKernel(

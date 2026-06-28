@@ -77,12 +77,70 @@ bool TryMudnnMax(Ort::KernelContext& ctx,
   return true;
 }
 
+template <typename T>
+OrtStatus* ComputeMaxCpuMetadataTyped(
+    Ort::KernelContext& ctx, const std::vector<std::vector<int64_t>>& shapes,
+    const std::vector<int64_t>& output_shape, musaStream_t stream) {
+  const int64_t total = NumElements(output_shape);
+  if (total > kMusaMaxBroadcastRank) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "Max CPU metadata path only supports small shape tensors");
+  }
+
+  std::vector<std::vector<T>> inputs;
+  inputs.reserve(ctx.GetInputCount());
+  std::vector<std::vector<int64_t>> strides;
+  strides.reserve(ctx.GetInputCount());
+  for (size_t i = 0; i < ctx.GetInputCount(); ++i) {
+    inputs.push_back(ReadTyped<T>(ctx.GetInput(i), stream));
+    strides.push_back(Strides(shapes[i]));
+  }
+
+  std::vector<T> output(static_cast<size_t>(total));
+  for (int64_t i = 0; i < total; ++i) {
+    auto coord = Coordinates(i, output_shape);
+    T value = inputs[0][static_cast<size_t>(
+        BroadcastOffset(coord, shapes[0], strides[0]))];
+    for (size_t input_index = 1; input_index < inputs.size(); ++input_index) {
+      T next = inputs[input_index][static_cast<size_t>(
+          BroadcastOffset(coord, shapes[input_index], strides[input_index]))];
+      value = std::max(value, next);
+    }
+    output[static_cast<size_t>(i)] = value;
+  }
+
+  Ort::UnownedValue y = ctx.GetOutput(0, output_shape);
+  return WriteTyped<T>(y, output, stream);
+}
+
+OrtStatus* ComputeMaxCpuMetadata(
+    Ort::KernelContext& ctx, const std::vector<std::vector<int64_t>>& shapes,
+    const std::vector<int64_t>& output_shape,
+    ONNXTensorElementDataType elem_type) {
+  musaStream_t stream = GetComputeStream(ctx);
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+    return ComputeMaxCpuMetadataTyped<int64_t>(ctx, shapes, output_shape,
+                                               stream);
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    return ComputeMaxCpuMetadataTyped<int32_t>(ctx, shapes, output_shape,
+                                               stream);
+  }
+  return Ort::GetApi().CreateStatus(
+      ORT_NOT_IMPLEMENTED,
+      "Max CPU metadata path only supports int32/int64 tensors");
+}
+
 OrtStatus* ComputeDeviceMaxFallback(
     Ort::KernelContext& ctx, const std::vector<std::vector<int64_t>>& shapes,
     const std::vector<int64_t>& output_shape,
     ONNXTensorElementDataType elem_type) {
   MusaElementType musa_elem_type;
   if (!ToMusaElementType(elem_type, musa_elem_type) || !AllGpuInputs(ctx)) {
+    if (!AllGpuInputs(ctx)) {
+      return ComputeMaxCpuMetadata(ctx, shapes, output_shape, elem_type);
+    }
     return UnsupportedDeviceElementwiseStatus("Max", elem_type);
   }
   for (const auto& shape : shapes) {
@@ -143,6 +201,10 @@ OrtStatus* Max::Compute(Ort::KernelContext& ctx) const {
     shapes.push_back(
         ctx.GetInput(input_index).GetTensorTypeAndShapeInfo().GetShape());
     out_shape = BroadcastShape(out_shape, shapes.back());
+  }
+  if (NumElements(out_shape) == 0) {
+    ctx.GetOutput(0, out_shape);
+    return nullptr;
   }
   if (TryMudnnMax(ctx, shapes, out_shape, elem_type)) {
     return nullptr;

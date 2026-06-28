@@ -57,14 +57,14 @@ OrtStatus* GatherCpuMetadata(Ort::ConstValue input,
         "Gather CPU metadata path only supports small rank-1 shape tensors");
   }
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-    return GatherCpuMetadataTyped<int64_t>(
-        input, indices_value, output, index_type, input_count, output_count,
-        stream);
+    return GatherCpuMetadataTyped<int64_t>(input, indices_value, output,
+                                           index_type, input_count,
+                                           output_count, stream);
   }
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
-    return GatherCpuMetadataTyped<int32_t>(
-        input, indices_value, output, index_type, input_count, output_count,
-        stream);
+    return GatherCpuMetadataTyped<int32_t>(input, indices_value, output,
+                                           index_type, input_count,
+                                           output_count, stream);
   }
   return Ort::GetApi().CreateStatus(
       ORT_NOT_IMPLEMENTED,
@@ -107,9 +107,12 @@ OrtStatus* Gather::Compute(Ort::KernelContext& ctx) const {
                                       "Gather unsupported index dtype");
   }
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-  if (IsGpuMemory(input0.GetTensorMemoryInfo()) &&
-      IsGpuMemory(indices_value.GetTensorMemoryInfo()) &&
-      IsGpuMemory(y.GetTensorMemoryInfo())) {
+  if (IsGpuMemory(y.GetTensorMemoryInfo()) &&
+      CanUseBroadcastKernel(shape0, shape0, shape0)) {
+    DeviceInputBuffer input_buffer;
+    DeviceInputBuffer indices_buffer;
+    RETURN_IF_ERROR(input_buffer.Bind(input0, GetComputeStream(ctx)));
+    RETURN_IF_ERROR(indices_buffer.Bind(indices_value, GetComputeStream(ctx)));
     int64_t block_size = 1;
     for (size_t dim = static_cast<size_t>(axis) + 1; dim < shape0.size(); ++dim)
       block_size *= shape0[dim];
@@ -121,11 +124,10 @@ OrtStatus* Gather::Compute(Ort::KernelContext& ctx) const {
     int64_t input_block_size = indices_max * block_size;
     int64_t output_block_size = indices_count * block_size;
     return LaunchStatus(LaunchMusaGatherKernel(
-        input0.GetTensorRawData(), indices_value.GetTensorRawData(),
-        y.GetTensorMutableRawData(), static_cast<int32_t>(elem_size),
-        static_cast<int32_t>(index_elem_size), input_block_size, indices_max,
-        output_block_size, block_size, prefix_count * output_block_size,
-        GetComputeStream(ctx)));
+        input_buffer.data(), indices_buffer.data(), y.GetTensorMutableRawData(),
+        static_cast<int32_t>(elem_size), static_cast<int32_t>(index_elem_size),
+        input_block_size, indices_max, output_block_size, block_size,
+        prefix_count * output_block_size, GetComputeStream(ctx)));
   }
 
   // Shape outputs are CPU metadata; small constant indices may be placed on

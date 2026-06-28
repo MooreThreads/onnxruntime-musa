@@ -3,8 +3,9 @@
 """End-to-end CPU-vs-MUSA test for the Expand operator."""
 
 import numpy as np
+from onnx import helper
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import TensorProto, build_graph_model, run_and_compare, run_model_and_compare
 
 
 def test_expand_float():
@@ -29,6 +30,22 @@ def test_expand_int64_middle_broadcast():
     x = np.arange(6, dtype=np.int64).reshape(1, 2, 3)
     shape = np.array([4, 2, 3], dtype=np.int64)
     run_and_compare("Expand", inputs={"X": x, "shape": shape}, outputs=[("Y", TensorProto.INT64)])
+
+
+def test_expand_cpu_initializer_input():
+    x = np.array([[1], [2]], dtype=np.int64)
+    shape = np.array([2, 3], dtype=np.int64)
+    node = helper.make_node("Expand", ["X", "shape"], ["Y"])
+    initializer = helper.make_tensor("X", TensorProto.INT64, x.shape, x.reshape(-1))
+    model = build_graph_model(
+        [node],
+        inputs={"shape": shape},
+        outputs=[("Y", TensorProto.INT64)],
+        initializers=[initializer],
+        opset=17,
+        name="expand_cpu_initializer_input",
+    )
+    run_model_and_compare(model, {"shape": shape}, rtol=0, atol=0)
 
 
 def test_expand_float16():

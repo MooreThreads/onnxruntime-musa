@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #include "../plugin_ep_utils.h"
@@ -150,8 +152,23 @@ static constexpr const char* kMSDomain = "com.microsoft";
                   "OrtKernelCreateFunc received a NULL kernel_out argument"); \
                                                                               \
         *kernel_out = nullptr;                                                \
+        if (std::getenv("MUSA_EP_TRACE_KERNELS") != nullptr) {                \
+          Ort::ConstKernelInfo kernel_info(info);                             \
+          std::string node_name = kernel_info.GetNodeName();                  \
+          std::fprintf(stderr, "MUSA_KERNEL_CREATE %s node=%s\n", #name,      \
+                       node_name.c_str());                                    \
+          std::fflush(stderr);                                                \
+        }                                                                     \
         RETURN_IF_ERROR(                                                      \
             kernel_class::CreateKernelImpl(info, state, *kernel_out));        \
+        if (std::getenv("MUSA_EP_TRACE_KERNELS") != nullptr) {                \
+          Ort::ConstKernelInfo kernel_info(info);                             \
+          std::string node_name = kernel_info.GetNodeName();                  \
+          std::fprintf(stderr, "MUSA_KERNEL_CREATED %s node=%s impl=%p\n",    \
+                       #name, node_name.c_str(),                              \
+                       static_cast<void*>(*kernel_out));                      \
+          std::fflush(stderr);                                                \
+        }                                                                     \
         return nullptr;                                                       \
       };                                                                      \
                                                                               \

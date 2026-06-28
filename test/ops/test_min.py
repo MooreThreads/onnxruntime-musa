@@ -3,8 +3,9 @@
 """End-to-end CPU-vs-MUSA test for the Min operator."""
 
 import numpy as np
+from onnx import helper
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import TensorProto, build_graph_model, run_and_compare, run_model_and_compare
 
 
 def test_min_float_binary_broadcast():
@@ -25,6 +26,26 @@ def test_min_int32_variadic():
     b = np.full((8, 4), 7, dtype=np.int32)
     c = np.arange(31, -1, -1, dtype=np.int32).reshape(8, 4)
     run_and_compare("Min", inputs={"A": a, "B": b, "C": c}, outputs=[("Y", TensorProto.INT32)])
+
+
+def test_min_int64_constant_metadata():
+    nodes = [
+        helper.make_node(
+            "Constant",
+            [],
+            ["one"],
+            value=helper.make_tensor("one_value", TensorProto.INT64, [1], [1]),
+        ),
+        helper.make_node("Min", ["one", "A"], ["Y"]),
+    ]
+    model = build_graph_model(
+        nodes,
+        inputs={"A": np.array([3], dtype=np.int64)},
+        outputs=[("Y", TensorProto.INT64)],
+        opset=17,
+        name="min_int64_constant_metadata",
+    )
+    run_model_and_compare(model, {"A": np.array([3], dtype=np.int64)}, rtol=0, atol=0)
 
 
 def test_min_int64_binary_broadcast():

@@ -5,7 +5,7 @@
 import numpy as np
 from onnx import helper
 
-from op_test_utils import TensorProto, run, run_and_compare
+from op_test_utils import TensorProto, build_graph_model, run, run_and_compare, run_model_and_compare
 
 
 def test_reshape_float():
@@ -79,6 +79,34 @@ def test_reshape_float16():
         rtol=2e-2,
         atol=2e-2,
     )
+
+
+def test_reshape_constant_output_feeds_musa_add():
+    nodes = [
+        helper.make_node(
+            "Constant",
+            [],
+            ["constant_data"],
+            value=helper.make_tensor(
+                "constant_data_value",
+                TensorProto.FLOAT,
+                [30 * 12],
+                np.arange(30 * 12, dtype=np.float32),
+            ),
+        ),
+        helper.make_node("Reshape", ["constant_data", "shape"], ["reshaped"]),
+        helper.make_node("Add", ["reshaped", "bias"], ["Y"]),
+    ]
+    shape = helper.make_tensor("shape", TensorProto.INT64, [2], [30, 12])
+    model = build_graph_model(
+        nodes,
+        inputs={"bias": np.array(1.25, dtype=np.float32)},
+        outputs=[("Y", TensorProto.FLOAT)],
+        initializers=[shape],
+        opset=17,
+        name="reshape_constant_to_add",
+    )
+    run_model_and_compare(model, {"bias": np.array(1.25, dtype=np.float32)})
 
 
 def test_reshape_string_opset19_cpu_memory_control_path():

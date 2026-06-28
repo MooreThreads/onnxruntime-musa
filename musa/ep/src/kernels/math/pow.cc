@@ -12,7 +12,8 @@ bool TryMudnnPow(Ort::KernelContext& ctx, const std::vector<int64_t>& shape0,
                  ONNXTensorElementDataType lhs_type,
                  ONNXTensorElementDataType rhs_type) {
   std::vector<int64_t> out_shape = BroadcastShape(shape0, shape1);
-  if (out_shape.size() > kMudnnMaxElementwiseRank ||
+  if (shape0.empty() || shape1.empty() ||
+      out_shape.size() > kMudnnMaxElementwiseRank ||
       shape0.size() > kMudnnMaxElementwiseRank ||
       shape1.size() > kMudnnMaxElementwiseRank ||
       !IsGpuMemory(ctx.GetInput(0).GetTensorMemoryInfo()) ||

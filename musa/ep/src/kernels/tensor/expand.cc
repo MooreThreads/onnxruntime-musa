@@ -33,10 +33,6 @@ OrtStatus* Expand::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Expand unsupported dtype");
   }
-  if (!IsGpuMemory(input.GetTensorMemoryInfo())) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "Expand requires MUSA input");
-  }
   if (!CanUseBroadcastKernel(out_shape, input_shape, out_shape)) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Expand rank exceeds MUSA kernel limit");
@@ -46,8 +42,10 @@ OrtStatus* Expand::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Expand requires MUSA output");
   }
+  DeviceInputBuffer input_buffer;
+  RETURN_IF_ERROR(input_buffer.Bind(input, GetComputeStream(ctx)));
   return LaunchStatus(LaunchMusaExpandKernel(
-      input.GetTensorRawData(), y.GetTensorMutableRawData(),
+      input_buffer.data(), y.GetTensorMutableRawData(),
       static_cast<int32_t>(elem_size),
       MakeBroadcastParams(out_shape, input_shape, out_shape),
       GetComputeStream(ctx)));

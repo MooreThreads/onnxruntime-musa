@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#include "shared_inc/op_kernel_common.h"
 #include "shared_inc/blas_utils.h"
+#include "shared_inc/op_kernel_common.h"
 #include "tensor/transpose_impl.h"
 
 namespace {
@@ -36,8 +36,8 @@ bool TryMudnnTranspose(Ort::KernelContext& ctx, Ort::ConstValue input,
 
   ::musa::dnn::Permute op;
   if (op.ConfigDimStride(output_tensor, input_tensor,
-                         static_cast<int>(perm.size()), perm.data()) !=
-      ::musa::dnn::Status::SUCCESS) {
+                         static_cast<int>(perm.size()),
+                         perm.data()) != ::musa::dnn::Status::SUCCESS) {
     return false;
   }
   return op.Run(*handle, output_tensor, input_tensor) ==
@@ -73,6 +73,9 @@ OrtStatus* Transpose::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Transpose unsupported dtype");
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+  if (NumElements(out_shape) == 0) {
+    return nullptr;
+  }
   if (TryMudnnTranspose(ctx, input0, y, shape0, out_shape, perm, elem_type)) {
     return nullptr;
   }

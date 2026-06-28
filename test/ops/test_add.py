@@ -25,6 +25,12 @@ def test_add_broadcast():
     run_and_compare("Add", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
 
 
+def test_add_float_scalar_broadcast():
+    a = np.random.default_rng(6).standard_normal((7, 5)).astype(np.float32)
+    b = np.array(1.25, dtype=np.float32)
+    run_and_compare("Add", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+
+
 def test_add_float_5d_broadcast():
     a = np.random.default_rng(4).standard_normal((2, 1, 3, 1, 4)).astype(np.float32)
     b = np.random.default_rng(5).standard_normal((1, 5, 1, 6, 4)).astype(np.float32)

@@ -7,13 +7,15 @@
 
 #include <algorithm>
 #include <chrono>
-#include <condition_variable>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
-#include <list>
 #include <limits>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -23,6 +25,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <typeinfo>
 #include <unordered_map>
 #include <vector>
 
@@ -53,8 +56,28 @@ class OpKernelBase : public OrtKernelImpl {
   ComputeImpl(OrtKernelImpl* this_ptr, OrtKernelContext* kernel_ctx) noexcept {
     EXCEPTION_TO_RETURNED_STATUS_BEGIN
     auto* k = static_cast<Derived*>(this_ptr);
+    if (std::getenv("MUSA_EP_TRACE_KERNELS") != nullptr) {
+      std::fprintf(stderr, "MUSA_KERNEL_BEGIN %s impl=%p\n",
+                   typeid(Derived).name(), static_cast<void*>(this_ptr));
+      std::fflush(stderr);
+    }
     Ort::KernelContext ctx(kernel_ctx);
-    return k->Compute(ctx);
+    OrtStatus* status = k->Compute(ctx);
+    if (std::getenv("MUSA_EP_TRACE_KERNELS") != nullptr) {
+      if (status == nullptr && std::getenv("MUSA_EP_TRACE_SYNC") != nullptr) {
+        musaError_t sync_status = musaStreamSynchronize(
+            static_cast<musaStream_t>(ctx.GetGPUComputeStream()));
+        if (sync_status != musaSuccess) {
+          status = Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                              MusaErrorString(sync_status));
+        }
+      }
+      std::fprintf(stderr, "MUSA_KERNEL_END %s impl=%p status=%p\n",
+                   typeid(Derived).name(), static_cast<void*>(this_ptr),
+                   static_cast<void*>(status));
+      std::fflush(stderr);
+    }
+    return status;
     EXCEPTION_TO_RETURNED_STATUS_END
   }
 
@@ -138,7 +161,8 @@ class DeferredDeviceFreeQueue {
     }
 
     musaEvent_t event = nullptr;
-    if (musaEventCreateWithFlags(&event, musaEventDisableTiming) != musaSuccess) {
+    if (musaEventCreateWithFlags(&event, musaEventDisableTiming) !=
+        musaSuccess) {
       (void)musaStreamSynchronize(stream);
       (void)musaFree(ptr);
       return;
@@ -246,10 +270,9 @@ inline OrtStatus* CopyTemporaryHostToDevice(
   if (stream == nullptr) {
     musaError_t status =
         musaMemcpy(dst, src, num_bytes, musaMemcpyHostToDevice);
-    return status == musaSuccess
-               ? nullptr
-               : Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                             MusaErrorString(status));
+    return status == musaSuccess ? nullptr
+                                 : Ort::GetApi().CreateStatus(
+                                       ORT_EP_FAIL, MusaErrorString(status));
   }
 
   if (wait_for_default_stream) {
@@ -261,13 +284,11 @@ inline OrtStatus* CopyTemporaryHostToDevice(
     void* staging = pool->Allocate(num_bytes);
     if (staging != nullptr) {
       std::memcpy(staging, src, num_bytes);
-      musaError_t status =
-          musaMemcpyAsync(dst, staging, num_bytes, musaMemcpyHostToDevice,
-                          stream);
+      musaError_t status = musaMemcpyAsync(dst, staging, num_bytes,
+                                           musaMemcpyHostToDevice, stream);
       if (status != musaSuccess) {
         pool->FreeCompleted(staging);
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                          MusaErrorString(status));
+        return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
       }
 
       pool->FreeAsync(staging, stream);
@@ -278,14 +299,14 @@ inline OrtStatus* CopyTemporaryHostToDevice(
   musaError_t status =
       musaMemcpyAsync(dst, src, num_bytes, musaMemcpyHostToDevice, stream);
   if (status == musaSuccess) {
-    // Without pinned staging, the host source may be a temporary vector owned by
-    // the caller. Keep it alive until the pageable copy is no longer using it.
+    // Without pinned staging, the host source may be a temporary vector owned
+    // by the caller. Keep it alive until the pageable copy is no longer using
+    // it.
     status = musaStreamSynchronize(stream);
   }
   return status == musaSuccess
              ? nullptr
-             : Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                           MusaErrorString(status));
+             : Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
 }
 
 // ---------------------------------------------------------------------------
@@ -723,8 +744,8 @@ class DeviceInputBuffer {
                                         MusaErrorString(alloc_status));
     }
     stream_ = stream;
-    RETURN_IF_ERROR(CopyTemporaryHostToDevice(
-        ptr_, value.GetTensorRawData(), bytes_, stream_));
+    RETURN_IF_ERROR(CopyTemporaryHostToDevice(ptr_, value.GetTensorRawData(),
+                                              bytes_, stream_));
     data_ = ptr_;
     return nullptr;
   }
@@ -738,8 +759,7 @@ class DeviceInputBuffer {
   musaStream_t stream_ = nullptr;
 };
 
-inline OrtStatus* CopyToHost(Ort::ConstValue value,
-                             std::vector<uint8_t>& bytes,
+inline OrtStatus* CopyToHost(Ort::ConstValue value, std::vector<uint8_t>& bytes,
                              musaStream_t stream = nullptr) {
   size_t num_bytes = value.GetTensorSizeInBytes();
   bytes.resize(num_bytes);
@@ -1259,6 +1279,27 @@ inline OrtStatus* BinaryDeviceCompute(Ort::KernelContext& ctx,
   std::vector<int64_t> out_shape = BroadcastShape(shape0, shape1);
   Ort::ConstValue lhs = ctx.GetInput(0);
   Ort::ConstValue rhs = ctx.GetInput(1);
+  if (std::getenv("MUSA_EP_TRACE_KERNELS") != nullptr) {
+    std::string message = "MUSA_BINARY ";
+    message += op_name;
+    message += " lhs=";
+    AppendShapeForError(message, shape0);
+    message +=
+        IsGpuMemory(lhs.GetTensorMemoryInfo()) ? " lhs_gpu=1" : " lhs_gpu=0";
+    message += " rhs=";
+    AppendShapeForError(message, shape1);
+    message +=
+        IsGpuMemory(rhs.GetTensorMemoryInfo()) ? " rhs_gpu=1" : " rhs_gpu=0";
+    message += " out=";
+    AppendShapeForError(message, out_shape);
+    message += " total=" + std::to_string(NumElements(out_shape));
+    char ptr_buffer[160];
+    std::snprintf(ptr_buffer, sizeof(ptr_buffer), " lhs_ptr=%p rhs_ptr=%p",
+                  lhs.GetTensorRawData(), rhs.GetTensorRawData());
+    message += ptr_buffer;
+    std::fprintf(stderr, "%s\n", message.c_str());
+    std::fflush(stderr);
+  }
   MusaElementType musa_elem_type;
   if (!ToMusaElementType(elem_type, musa_elem_type) ||
       !IsGpuMemory(lhs.GetTensorMemoryInfo()) ||
@@ -1309,6 +1350,80 @@ inline OrtStatus* UnaryDeviceCompute(Ort::KernelContext& ctx,
   return LaunchStatus(status);
 }
 
+template <typename T>
+inline bool CompareHostValue(T lhs, T rhs, MusaCompareOp op) {
+  switch (op) {
+    case MusaCompareOp::Equal:
+      return lhs == rhs;
+    case MusaCompareOp::Greater:
+      return lhs > rhs;
+    case MusaCompareOp::GreaterOrEqual:
+      return lhs >= rhs;
+    case MusaCompareOp::Less:
+      return lhs < rhs;
+    case MusaCompareOp::LessOrEqual:
+      return lhs <= rhs;
+  }
+  return false;
+}
+
+template <typename T>
+OrtStatus* CompareCpuMetadataTyped(Ort::KernelContext& ctx,
+                                   const std::vector<int64_t>& shape0,
+                                   const std::vector<int64_t>& shape1,
+                                   const std::vector<int64_t>& out_shape,
+                                   MusaCompareOp device_op,
+                                   musaStream_t stream) {
+  const int64_t total = NumElements(out_shape);
+  if (total > kMusaMaxBroadcastRank) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "Compare CPU metadata path only supports small shape tensors");
+  }
+  std::vector<T> lhs = ReadTyped<T>(ctx.GetInput(0), stream);
+  std::vector<T> rhs = ReadTyped<T>(ctx.GetInput(1), stream);
+  std::vector<uint8_t> out(static_cast<size_t>(total));
+  auto lhs_strides = Strides(shape0);
+  auto rhs_strides = Strides(shape1);
+  for (int64_t i = 0; i < total; ++i) {
+    auto coord = Coordinates(i, out_shape);
+    int64_t lhs_offset = BroadcastOffset(coord, shape0, lhs_strides);
+    int64_t rhs_offset = BroadcastOffset(coord, shape1, rhs_strides);
+    out[static_cast<size_t>(i)] =
+        CompareHostValue(lhs[static_cast<size_t>(lhs_offset)],
+                         rhs[static_cast<size_t>(rhs_offset)], device_op)
+            ? 1
+            : 0;
+  }
+  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+  return WriteTyped<uint8_t>(y, out, stream);
+}
+
+inline OrtStatus* CompareCpuMetadata(Ort::KernelContext& ctx,
+                                     const std::vector<int64_t>& shape0,
+                                     const std::vector<int64_t>& shape1,
+                                     const std::vector<int64_t>& out_shape,
+                                     ONNXTensorElementDataType elem_type,
+                                     MusaCompareOp device_op,
+                                     musaStream_t stream) {
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+    return CompareCpuMetadataTyped<int64_t>(ctx, shape0, shape1, out_shape,
+                                            device_op, stream);
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    return CompareCpuMetadataTyped<int32_t>(ctx, shape0, shape1, out_shape,
+                                            device_op, stream);
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL &&
+      device_op == MusaCompareOp::Equal) {
+    return CompareCpuMetadataTyped<uint8_t>(ctx, shape0, shape1, out_shape,
+                                            device_op, stream);
+  }
+  return Ort::GetApi().CreateStatus(
+      ORT_NOT_IMPLEMENTED,
+      "Compare CPU metadata path only supports int32/int64 tensors");
+}
+
 inline OrtStatus* CompareDeviceCompute(Ort::KernelContext& ctx,
                                        const std::vector<int64_t>& shape0,
                                        const std::vector<int64_t>& shape1,
@@ -1323,6 +1438,11 @@ inline OrtStatus* CompareDeviceCompute(Ort::KernelContext& ctx,
       !IsGpuMemory(lhs.GetTensorMemoryInfo()) ||
       !IsGpuMemory(rhs.GetTensorMemoryInfo()) ||
       !CanUseBroadcastKernel(out_shape, shape0, shape1)) {
+    if (!IsGpuMemory(lhs.GetTensorMemoryInfo()) ||
+        !IsGpuMemory(rhs.GetTensorMemoryInfo())) {
+      return CompareCpuMetadata(ctx, shape0, shape1, out_shape, elem_type,
+                                device_op, GetComputeStream(ctx));
+    }
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
 

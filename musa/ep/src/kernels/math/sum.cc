@@ -247,6 +247,9 @@ OrtStatus* Sum::Compute(Ort::KernelContext& ctx) const {
   if (can_use_device_sum) {
     Ort::UnownedValue y = ctx.GetOutput(0, device_out_shape);
     if (IsGpuMemory(y.GetTensorMemoryInfo())) {
+      if (NumElements(device_out_shape) == 0) {
+        return nullptr;
+      }
       bool handled = false;
       RETURN_IF_ERROR(ComputeDeviceSum(ctx, input_shapes, device_out_shape, y,
                                        handled, elem_type));

@@ -3,8 +3,9 @@
 """End-to-end CPU-vs-MUSA test for the Concat operator."""
 
 import numpy as np
+from onnx import helper
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import TensorProto, build_graph_model, run_and_compare, run_model_and_compare
 
 
 def test_concat_axis0():
@@ -96,3 +97,30 @@ def test_concat_many_small_inputs_axis1():
         outputs=[("Y", TensorProto.FLOAT)],
         attrs={"axis": 1},
     )
+
+
+def test_concat_small_int64_shape_metadata_mixed_inputs():
+    nodes = [
+        helper.make_node("Constant", [], ["prefix"], value=helper.make_tensor("prefix_value", TensorProto.INT64, [1], [1])),
+        helper.make_node("Unsqueeze", ["dynamic_a", "axes"], ["dynamic_a_unsqueezed"]),
+        helper.make_node("Unsqueeze", ["dynamic_b", "axes"], ["dynamic_b_unsqueezed"]),
+        helper.make_node(
+            "Concat",
+            ["prefix", "dynamic_a_unsqueezed", "dynamic_b_unsqueezed"],
+            ["Y"],
+            axis=0,
+        ),
+    ]
+    axes = helper.make_tensor("axes", TensorProto.INT64, [1], [0])
+    model = build_graph_model(
+        nodes,
+        inputs={
+            "dynamic_a": np.array(7, dtype=np.int64),
+            "dynamic_b": np.array(11, dtype=np.int64),
+        },
+        outputs=[("Y", TensorProto.INT64)],
+        initializers=[axes],
+        opset=17,
+        name="concat_shape_metadata_graph",
+    )
+    run_model_and_compare(model, {"dynamic_a": np.array(7, dtype=np.int64), "dynamic_b": np.array(11, dtype=np.int64)}, rtol=0, atol=0)

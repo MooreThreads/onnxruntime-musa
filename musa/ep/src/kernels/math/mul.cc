@@ -11,7 +11,8 @@ bool TryMudnnMul(Ort::KernelContext& ctx, const std::vector<int64_t>& shape0,
                  const std::vector<int64_t>& shape1,
                  ONNXTensorElementDataType elem_type) {
   std::vector<int64_t> out_shape = BroadcastShape(shape0, shape1);
-  if (out_shape.size() > kMudnnMaxElementwiseRank ||
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE || shape0.empty() ||
+      shape1.empty() || out_shape.size() > kMudnnMaxElementwiseRank ||
       shape0.size() > kMudnnMaxElementwiseRank ||
       shape1.size() > kMudnnMaxElementwiseRank ||
       !IsGpuMemory(ctx.GetInput(0).GetTensorMemoryInfo()) ||
@@ -63,6 +64,11 @@ OrtStatus* Mul::Compute(Ort::KernelContext& ctx) const {
   auto elem_type = info.GetElementType();
   auto shape0 = info.GetShape();
   auto shape1 = ctx.GetInput(1).GetTensorTypeAndShapeInfo().GetShape();
+  auto out_shape = BroadcastShape(shape0, shape1);
+  if (NumElements(out_shape) == 0) {
+    ctx.GetOutput(0, out_shape);
+    return nullptr;
+  }
   if (TryMudnnMul(ctx, shape0, shape1, elem_type)) {
     return nullptr;
   }

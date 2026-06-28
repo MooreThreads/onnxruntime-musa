@@ -3,8 +3,9 @@
 """End-to-end CPU-vs-MUSA test for the Greater operator."""
 
 import numpy as np
+from onnx import helper
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import TensorProto, build_graph_model, run_and_compare, run_model_and_compare
 
 
 def test_greater_float_broadcast():
@@ -17,6 +18,26 @@ def test_greater_int64():
     a = np.arange(32, dtype=np.int64).reshape(8, 4)
     b = np.arange(31, -1, -1, dtype=np.int64).reshape(8, 4)
     run_and_compare("Greater", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.BOOL)])
+
+
+def test_greater_int64_constant_scalar_metadata():
+    nodes = [
+        helper.make_node(
+            "Constant",
+            [],
+            ["zero"],
+            value=helper.make_tensor("zero_value", TensorProto.INT64, [], [0]),
+        ),
+        helper.make_node("Greater", ["A", "zero"], ["Y"]),
+    ]
+    model = build_graph_model(
+        nodes,
+        inputs={"A": np.array([3], dtype=np.int64)},
+        outputs=[("Y", TensorProto.BOOL)],
+        opset=17,
+        name="greater_int64_constant_scalar_metadata",
+    )
+    run_model_and_compare(model, {"A": np.array([3], dtype=np.int64)}, rtol=0, atol=0)
 
 
 def test_greater_int32_scalar_broadcast():

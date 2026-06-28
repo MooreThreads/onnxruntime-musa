@@ -56,6 +56,8 @@ __device__ __forceinline__ uint8_t CompareValue(T lhs, T rhs, MusaCompareOp op) 
       return static_cast<uint8_t>(lhs < rhs);
     case MusaCompareOp::GreaterOrEqual:
       return static_cast<uint8_t>(lhs >= rhs);
+    case MusaCompareOp::LessOrEqual:
+      return static_cast<uint8_t>(lhs <= rhs);
   }
   return 0;
 }

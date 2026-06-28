@@ -28,6 +28,16 @@ def test_cast_float_to_int64():
     )
 
 
+def test_cast_float_identity_large_tensor():
+    x = np.random.default_rng(7).uniform(-5.0, 5.0, (30, 2083)).astype(np.float32)
+    run_and_compare(
+        "Cast",
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"to": TensorProto.FLOAT},
+    )
+
+
 def test_cast_int64_to_float():
     x = np.arange(-256, 256, dtype=np.int64).reshape(16, 32)
     run_and_compare(
@@ -185,3 +195,42 @@ def test_cast_shape_metadata_int64_to_int32():
     )
     (actual,) = run_model_and_compare_with_cpu_fallback(model, {"X": x})
     np.testing.assert_array_equal(actual, np.array([2, 3, 4], dtype=np.int32))
+
+
+def test_cast_shape_metadata_int64_to_int64_identity():
+    x = np.zeros((2, 3, 4), dtype=np.float32)
+    nodes = [
+        helper.make_node("Shape", ["X"], ["shape_i64"]),
+        helper.make_node(
+            "Cast", ["shape_i64"], ["shape_i64_copy"], to=TensorProto.INT64
+        ),
+    ]
+    model = build_graph_model(
+        nodes,
+        inputs={"X": x},
+        outputs=[("shape_i64_copy", TensorProto.INT64)],
+        opset=17,
+        name="cast_shape_metadata_identity_graph",
+    )
+    (actual,) = run_model_and_compare_with_cpu_fallback(model, {"X": x})
+    np.testing.assert_array_equal(actual, np.array([2, 3, 4], dtype=np.int64))
+
+
+def test_cast_identity_after_constant_of_shape():
+    fill = helper.make_tensor("value", TensorProto.FLOAT, [1], [0.0])
+    shape = helper.make_tensor("shape", TensorProto.INT64, [2], [30, 2083])
+    nodes = [
+        helper.make_node("ConstantOfShape", ["shape"], ["zeros"], value=fill),
+        helper.make_node("Cast", ["zeros"], ["Y"], to=TensorProto.FLOAT),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "cast_identity_after_constant_of_shape",
+        [],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, [30, 2083])],
+        initializer=[shape],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    (actual,) = run_model_and_compare(model.SerializeToString(), {})
+    np.testing.assert_array_equal(actual, np.zeros((30, 2083), dtype=np.float32))

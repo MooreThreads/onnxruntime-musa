@@ -12,6 +12,7 @@ constexpr size_t kConcatManySmallMaxWidthBytes = 4096;
 constexpr size_t kConcatRelaxedSmallInputCount = 2;
 constexpr size_t kConcatRelaxedSmallMaxWidthBytes = 32 * 1024;
 constexpr size_t kConcatManySmallMaxMapBytes = 4 * 1024 * 1024;
+constexpr int64_t kMaxCpuMetadataConcatElements = kMusaMaxBroadcastRank;
 
 ::musa::dnn::Tensor::Format MudnnFormatForShape(
     const std::vector<int64_t>& shape) {
@@ -147,6 +148,49 @@ OrtStatus* LaunchConcatSmallRows(void* output,
   return launch_status;
 }
 
+template <typename T>
+OrtStatus* ConcatCpuMetadataTyped(Ort::KernelContext& ctx,
+                                  Ort::UnownedValue output,
+                                  int64_t output_count, musaStream_t stream) {
+  std::vector<T> output_data;
+  output_data.reserve(static_cast<size_t>(output_count));
+  for (size_t i = 0; i < ctx.GetInputCount(); ++i) {
+    std::vector<T> input_data = ReadTyped<T>(ctx.GetInput(i), stream);
+    output_data.insert(output_data.end(), input_data.begin(), input_data.end());
+  }
+  return WriteTyped<T>(output, output_data, stream);
+}
+
+OrtStatus* ConcatCpuMetadata(Ort::KernelContext& ctx, Ort::UnownedValue output,
+                             ONNXTensorElementDataType elem_type,
+                             const std::vector<std::vector<int64_t>>& shapes,
+                             const std::vector<int64_t>& out_shape,
+                             int64_t axis, musaStream_t stream) {
+  const int64_t output_count = NumElements(out_shape);
+  if (axis != 0 || out_shape.size() != 1 ||
+      output_count > kMaxCpuMetadataConcatElements) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED,
+        "Concat CPU metadata path only supports small rank-1 shape tensors");
+  }
+  for (const auto& shape : shapes) {
+    if (shape.size() != 1) {
+      return Ort::GetApi().CreateStatus(
+          ORT_NOT_IMPLEMENTED,
+          "Concat CPU metadata path only supports rank-1 inputs");
+    }
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+    return ConcatCpuMetadataTyped<int64_t>(ctx, output, output_count, stream);
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+    return ConcatCpuMetadataTyped<int32_t>(ctx, output, output_count, stream);
+  }
+  return Ort::GetApi().CreateStatus(
+      ORT_NOT_IMPLEMENTED,
+      "Concat CPU metadata path only supports int32/int64 tensors");
+}
+
 class Concat : public OpKernelBase<Concat> {
  public:
   Concat(const OrtKernelInfo* info, void* /*state*/) {
@@ -239,8 +283,8 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
         stream));
   }
 
-  return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                    "Concat requires MUSA inputs and output");
+  return ConcatCpuMetadata(ctx, y, elem_type, shapes, out_shape, axis,
+                           GetComputeStream(ctx));
 }
 }  // namespace
 

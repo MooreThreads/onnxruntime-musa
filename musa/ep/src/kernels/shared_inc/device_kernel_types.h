@@ -33,6 +33,7 @@ enum class MusaUnaryOp : int32_t {
   Round = 13,
   Softplus = 14,
   Ceil = 15,
+  Floor = 16,
 };
 
 enum class MusaCompareOp : int32_t {
@@ -40,6 +41,7 @@ enum class MusaCompareOp : int32_t {
   Greater = 1,
   Less = 2,
   GreaterOrEqual = 3,
+  LessOrEqual = 4,
 };
 
 enum class MusaElementType : int32_t {
@@ -112,6 +114,24 @@ struct MusaLayerNormParams {
   int64_t rows;
   int64_t norm_size;
   int32_t has_bias;
+};
+
+struct MusaAttentionParams {
+  int64_t batch_size;
+  int64_t sequence_length;
+  int64_t input_hidden_size;
+  int64_t q_hidden_size;
+  int64_t k_hidden_size;
+  int64_t v_hidden_size;
+  int64_t q_head_size;
+  int64_t k_head_size;
+  int64_t v_head_size;
+  int64_t num_heads;
+  int64_t qkv_hidden_size;
+  int64_t mask_batch;
+  int64_t mask_heads;
+  float scale;
+  int32_t has_mask;
 };
 
 struct MusaBroadcastParams {
@@ -197,6 +217,34 @@ struct MusaGatherNDParams {
   int64_t input_batch_stride;
   int64_t input_dims[kMusaMaxBroadcastRank];
   int64_t sizes_from_slice_dims[kMusaMaxBroadcastRank];
+};
+
+struct MusaGatherElementsParams {
+  int32_t rank;
+  int32_t axis;
+  int64_t output_elements;
+  int64_t data_dims[kMusaMaxBroadcastRank];
+  int64_t data_strides[kMusaMaxBroadcastRank];
+  int64_t indices_strides[kMusaMaxBroadcastRank];
+};
+
+struct MusaScatterNDParams {
+  int32_t last_index_dimension;
+  int32_t reduction;
+  int64_t num_indices;
+  int64_t updates_slice_size;
+  int64_t input_strides[kMusaMaxBroadcastRank];
+  int64_t input_dims[kMusaMaxBroadcastRank];
+};
+
+struct MusaScatterElementsParams {
+  int32_t rank;
+  int32_t axis;
+  int32_t reduction;
+  int64_t updates_elements;
+  int64_t data_dims[kMusaMaxBroadcastRank];
+  int64_t data_strides[kMusaMaxBroadcastRank];
+  int64_t updates_strides[kMusaMaxBroadcastRank];
 };
 
 struct MusaReverseSequenceParams {

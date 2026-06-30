@@ -13,6 +13,11 @@ def test_squeeze_axis0():
     run_and_compare("Squeeze", inputs={"X": x, "axes": axes}, outputs=[("Y", TensorProto.FLOAT)])
 
 
+def test_squeeze_no_axes_keeps_non_singleton_dims():
+    x = np.arange(30, dtype=np.int64).reshape(30, 1)
+    run_and_compare("Squeeze", inputs={"X": x}, outputs=[("Y", TensorProto.INT64)])
+
+
 def test_squeeze_multiple_axes():
     x = np.random.default_rng(1).standard_normal((1, 16, 1, 32)).astype(np.float32)
     axes = np.array([0, 2], dtype=np.int64)

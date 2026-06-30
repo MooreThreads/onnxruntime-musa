@@ -97,6 +97,24 @@ def test_scatter_nd_reduction_add_opset16():
     )
 
 
+def test_scatter_nd_float_reduction_add_duplicate_indices_opset16():
+    run_and_compare(
+        "ScatterND",
+        inputs={
+            "data": np.zeros((3, 2), dtype=np.float32),
+            "indices": np.array([[0], [0], [-1]], dtype=np.int64),
+            "updates": np.array(
+                [[1.25, 2.5], [3.75, 4.5], [5.0, 6.25]], dtype=np.float32
+            ),
+        },
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"reduction": "add"},
+        opset=16,
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
 def test_scatter_nd_int64_reduction_add_opset16():
     run_and_compare(
         "ScatterND",

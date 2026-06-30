@@ -5,6 +5,8 @@
 #include "shared_inc/op_kernel_common.h"
 #include "tensor/concat_impl.h"
 
+#include <cstdint>
+
 namespace {
 
 constexpr size_t kConcatManySmallInputCount = 32;
@@ -101,6 +103,18 @@ bool ShouldUseConcatSmallRows(size_t input_count, size_t min_input_count,
   return input_count >= min_input_count &&
          max_width_bytes <= width_limit_bytes && output_row_elements > 0 &&
          element_descriptor_bytes <= kConcatManySmallMaxMapBytes;
+}
+
+bool RangesOverlap(const void* lhs, size_t lhs_size, const void* rhs,
+                   size_t rhs_size) {
+  if (lhs == nullptr || rhs == nullptr || lhs_size == 0 || rhs_size == 0) {
+    return false;
+  }
+  const auto lhs_begin = reinterpret_cast<std::uintptr_t>(lhs);
+  const auto rhs_begin = reinterpret_cast<std::uintptr_t>(rhs);
+  const auto lhs_end = lhs_begin + lhs_size;
+  const auto rhs_end = rhs_begin + rhs_size;
+  return lhs_begin < rhs_end && rhs_begin < lhs_end;
 }
 
 OrtStatus* LaunchConcatSmallRows(void* output,
@@ -238,14 +252,50 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
     std::vector<const void*> input_data(shapes.size());
     std::vector<int64_t> input_axis_dims(shapes.size());
     int64_t max_input_axis = 0;
+    void* output_data = y.GetTensorMutableRawData();
+    const size_t output_bytes =
+        static_cast<size_t>(NumElements(out_shape)) * elem_size;
+    bool output_overlaps_input = false;
     for (size_t input_idx = 0; input_idx < shapes.size(); ++input_idx) {
       Ort::ConstValue v = ctx.GetInput(input_idx);
       input_data[input_idx] = v.GetTensorRawData();
       input_axis_dims[input_idx] = shapes[input_idx][static_cast<size_t>(axis)];
       max_input_axis = std::max(max_input_axis, input_axis_dims[input_idx]);
+      const size_t input_bytes =
+          static_cast<size_t>(NumElements(shapes[input_idx])) * elem_size;
+      output_overlaps_input |=
+          RangesOverlap(output_data, output_bytes, input_data[input_idx],
+                        input_bytes);
     }
 
     musaStream_t stream = GetComputeStream(ctx);
+    void* concat_output = output_data;
+    void* temp_output = nullptr;
+    if (output_overlaps_input && output_bytes > 0) {
+      musaError_t alloc_status = musaMalloc(&temp_output, output_bytes);
+      if (alloc_status != musaSuccess) {
+        return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                          MusaErrorString(alloc_status));
+      }
+      concat_output = temp_output;
+    }
+    auto finish_concat = [&](OrtStatus* status) -> OrtStatus* {
+      if (temp_output == nullptr) {
+        return status;
+      }
+      if (status == nullptr) {
+        musaError_t copy_status =
+            musaMemcpyAsync(output_data, temp_output, output_bytes,
+                            musaMemcpyDeviceToDevice, stream);
+        if (copy_status != musaSuccess) {
+          status = Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                              MusaErrorString(copy_status));
+        }
+      }
+      FreeDeviceMemoryOnStream(temp_output, stream);
+      return status;
+    };
+
     const int64_t output_row_elements =
         out_shape[static_cast<size_t>(axis)] * inner;
     const size_t max_width_bytes = static_cast<size_t>(max_input_axis) *
@@ -257,30 +307,31 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
                                  max_width_bytes, kConcatManySmallMaxWidthBytes,
                                  output_row_elements,
                                  element_descriptor_bytes)) {
-      return LaunchConcatSmallRows(
-          y.GetTensorMutableRawData(), input_data, input_axis_dims, outer,
-          inner, output_row_elements, static_cast<int32_t>(elem_size), stream);
-    }
-
-    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
-        TryMudnnConcatFloat(ctx, shapes, out_shape, axis, y)) {
-      return nullptr;
+      return finish_concat(LaunchConcatSmallRows(
+          concat_output, input_data, input_axis_dims, outer, inner,
+          output_row_elements, static_cast<int32_t>(elem_size), stream));
     }
 
     if (ShouldUseConcatSmallRows(
             input_data.size(), kConcatRelaxedSmallInputCount, max_width_bytes,
             kConcatRelaxedSmallMaxWidthBytes, output_row_elements,
             element_descriptor_bytes)) {
-      return LaunchConcatSmallRows(
-          y.GetTensorMutableRawData(), input_data, input_axis_dims, outer,
-          inner, output_row_elements, static_cast<int32_t>(elem_size), stream);
+      return finish_concat(LaunchConcatSmallRows(
+          concat_output, input_data, input_axis_dims, outer, inner,
+          output_row_elements, static_cast<int32_t>(elem_size), stream));
     }
 
-    return LaunchStatus(LaunchMusaConcatCopies(
-        y.GetTensorMutableRawData(), input_data.data(), input_axis_dims.data(),
+    if (!output_overlaps_input &&
+        elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+        TryMudnnConcatFloat(ctx, shapes, out_shape, axis, y)) {
+      return nullptr;
+    }
+
+    return finish_concat(LaunchStatus(LaunchMusaConcatCopies(
+        concat_output, input_data.data(), input_axis_dims.data(),
         static_cast<int64_t>(input_data.size()), outer, inner,
         out_shape[static_cast<size_t>(axis)], static_cast<int32_t>(elem_size),
-        stream));
+        stream)));
   }
 
   return ConcatCpuMetadata(ctx, y, elem_type, shapes, out_shape, axis,

@@ -154,7 +154,8 @@ OrtStatus* ScatterND::Compute(Ort::KernelContext& ctx) const {
   return LaunchStatus(LaunchMusaScatterNDKernel(
       output.GetTensorMutableRawData(),
       static_cast<const int64_t*>(indices_buffer.data()), updates_buffer.data(),
-      static_cast<int32_t>(elem_size), params, stream));
+      static_cast<int32_t>(elem_size), static_cast<int32_t>(elem_type), params,
+      stream));
 }
 
 }  // namespace
@@ -164,8 +165,7 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .AddTypeConstraint("indices",
-                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))
-         .AddInputOutputAlias(0, 0)),
+                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))),
     ScatterND)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
@@ -173,6 +173,5 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .AddTypeConstraint("indices",
-                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))
-         .AddInputOutputAlias(0, 0)),
+                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))),
     ScatterND)

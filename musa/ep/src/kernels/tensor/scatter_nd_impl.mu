@@ -6,14 +6,24 @@ constexpr int32_t kScatterNDReductionAdd = 1;
 
 __device__ __forceinline__ void AtomicAddScatterNDElement(
     void* output, const void* updates, int64_t output_index,
-    int64_t updates_index, int32_t element_size) {
-  if (element_size == 4) {
+    int64_t updates_index, int32_t elem_type) {
+  constexpr int32_t kFloat = 1;
+  constexpr int32_t kInt32 = 6;
+  constexpr int32_t kInt64 = 7;
+  constexpr int32_t kDouble = 11;
+  if (elem_type == kFloat) {
+    atomicAdd(reinterpret_cast<float*>(output) + output_index,
+              reinterpret_cast<const float*>(updates)[updates_index]);
+  } else if (elem_type == kDouble) {
+    atomicAdd(reinterpret_cast<double*>(output) + output_index,
+              reinterpret_cast<const double*>(updates)[updates_index]);
+  } else if (elem_type == kInt32) {
     atomicAdd(reinterpret_cast<int32_t*>(output) + output_index,
               reinterpret_cast<const int32_t*>(updates)[updates_index]);
-  } else if (element_size == 8) {
+  } else if (elem_type == kInt64) {
     atomicAdd(reinterpret_cast<unsigned long long*>(output) + output_index,
-              reinterpret_cast<const unsigned long long*>(
-                  updates)[updates_index]);
+              static_cast<unsigned long long>(
+                  reinterpret_cast<const int64_t*>(updates)[updates_index]));
   }
 }
 
@@ -47,7 +57,7 @@ __device__ __forceinline__ void CopyScatterNDElement(void* output,
 
 __global__ void ScatterNDKernel(void* output, const int64_t* indices,
                                 const void* updates, int32_t element_size,
-                                MusaScatterNDParams params) {
+                                int32_t elem_type, MusaScatterNDParams params) {
   const int64_t thread_id =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const int64_t total_threads = static_cast<int64_t>(gridDim.x) * blockDim.x;
@@ -66,26 +76,28 @@ __global__ void ScatterNDKernel(void* output, const int64_t* indices,
             : updates_index % params.updates_slice_size;
 
     int64_t output_offset = 0;
+    bool valid_index = true;
     const int64_t indices_base =
         indices_row * params.last_index_dimension;
     for (int32_t dim = 0; dim < params.last_index_dimension; ++dim) {
       int64_t index = indices[indices_base + dim];
       const int64_t dim_size = params.input_dims[dim];
-      if (index >= 0) {
-        if (index >= dim_size) {
-          index = dim_size - 1;
-        }
-      } else if (index < -dim_size) {
-        index = 0;
-      } else {
+      if (index < 0) {
         index += dim_size;
       }
+      if (index < 0 || index >= dim_size) {
+        valid_index = false;
+        break;
+      }
       output_offset += index * params.input_strides[dim];
+    }
+    if (!valid_index) {
+      continue;
     }
 
     if (params.reduction == kScatterNDReductionAdd) {
       AtomicAddScatterNDElement(output, updates, output_offset + element_offset,
-                                updates_index, element_size);
+                                updates_index, elem_type);
     } else {
       CopyScatterNDElement(output, updates, output_offset + element_offset,
                            updates_index, element_size);
@@ -97,7 +109,7 @@ __global__ void ScatterNDKernel(void* output, const int64_t* indices,
 
 musaError_t LaunchMusaScatterNDKernel(void* output, const int64_t* indices,
                                       const void* updates,
-                                      int32_t element_size,
+                                      int32_t element_size, int32_t elem_type,
                                       MusaScatterNDParams params,
                                       musaStream_t stream) {
   const int64_t total_updates =
@@ -106,6 +118,7 @@ musaError_t LaunchMusaScatterNDKernel(void* output, const int64_t* indices,
     return musaSuccess;
   }
   ScatterNDKernel<<<BlocksForCount(total_updates), kThreadsPerBlock, 0,
-                    stream>>>(output, indices, updates, element_size, params);
+                    stream>>>(output, indices, updates, element_size, elem_type,
+                              params);
   return musaGetLastError();
 }

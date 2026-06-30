@@ -20,9 +20,20 @@ OrtStatus* Squeeze::Compute(Ort::KernelContext& ctx) const {
   Ort::ConstValue input0 = ctx.GetInput(0);
   auto shape0 = input0.GetTensorTypeAndShapeInfo().GetShape();
   std::vector<int64_t> axes = axes_attr_;
-  if (ctx.GetInputCount() > 1) axes = ReadIntTensor(ctx, 1);
+  bool has_axes = !axes.empty();
+  if (ctx.GetInputCount() > 1 && ctx.GetInput(1) != nullptr) {
+    axes = ReadIntTensor(ctx, 1);
+    has_axes = true;
+  }
   std::vector<int64_t> out_shape;
-  std::set<int64_t> ax = AxesSet(axes, shape0.size());
+  std::set<int64_t> ax;
+  if (has_axes) {
+    ax = AxesSet(axes, shape0.size());
+  } else {
+    for (size_t i = 0; i < shape0.size(); ++i) {
+      if (shape0[i] == 1) ax.insert(static_cast<int64_t>(i));
+    }
+  }
   for (size_t i = 0; i < shape0.size(); ++i) {
     if (!ax.count(static_cast<int64_t>(i))) out_shape.push_back(shape0[i]);
   }

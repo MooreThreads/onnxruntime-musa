@@ -6,6 +6,11 @@
 #include <musa_runtime.h>
 
 #include <cassert>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
+#include <limits>
+#include <sstream>
 
 #include "core/session/onnxruntime_ep_device_ep_metadata_keys.h"
 #include "ep.h"
@@ -13,6 +18,139 @@
 #include "ep_kernel_registration.h"
 #include "ep_stream.h"
 #include "plugin_ep_utils.h"
+
+namespace {
+
+OrtStatus* CreateInvalidArgumentStatus(const OrtApi& ort_api,
+                                       const std::string& message) {
+  return ort_api.CreateStatus(ORT_INVALID_ARGUMENT, message.c_str());
+}
+
+OrtStatus* GetProviderOptionOrDefault(const OrtApi& ort_api,
+                                      const OrtSessionOptions& session_options,
+                                      const std::string& ep_name,
+                                      const char* option_name,
+                                      const std::string& default_val,
+                                      std::string& option_val) {
+  const std::string full_key = "ep." + ep_name + "." + option_name;
+  RETURN_IF_ERROR(GetSessionConfigEntryOrDefault(
+      session_options, full_key.c_str(), default_val, option_val));
+
+  if (option_val == default_val) {
+    const std::string lowercase_key =
+        "ep." + GetLowercaseString(ep_name) + "." + option_name;
+    RETURN_IF_ERROR(GetSessionConfigEntryOrDefault(
+        session_options, lowercase_key.c_str(), option_val, option_val));
+  }
+
+  // Debug/transition alias used by the investigation doc before provider
+  // options were wired through the plugin EP V2 path.
+  if (option_val == default_val) {
+    const std::string legacy_key = std::string{"ep.musa."} + option_name;
+    RETURN_IF_ERROR(GetSessionConfigEntryOrDefault(
+        session_options, legacy_key.c_str(), option_val, option_val));
+  }
+
+  return nullptr;
+}
+
+OrtStatus* ParseIntProviderOption(const OrtApi& ort_api,
+                                  const char* option_name,
+                                  const std::string& value, int& out) {
+  char* end = nullptr;
+  errno = 0;
+  long parsed = std::strtol(value.c_str(), &end, 10);
+  if (errno != 0 || end == value.c_str() || *end != '\0' ||
+      parsed < std::numeric_limits<int>::min() ||
+      parsed > std::numeric_limits<int>::max()) {
+    std::ostringstream oss;
+    oss << "Invalid MUSA provider option '" << option_name
+        << "': expected integer, got '" << value << "'.";
+    return CreateInvalidArgumentStatus(ort_api, oss.str());
+  }
+  out = static_cast<int>(parsed);
+  return nullptr;
+}
+
+OrtStatus* ParseStreamPointerOption(const OrtApi& ort_api,
+                                    const std::string& value,
+                                    musaStream_t& out) {
+  if (value.empty() || value == "0" || value == "nullptr") {
+    out = nullptr;
+    return nullptr;
+  }
+
+  char* end = nullptr;
+  errno = 0;
+  unsigned long long parsed = std::strtoull(value.c_str(), &end, 0);
+  if (errno != 0 || end == value.c_str() || *end != '\0') {
+    std::ostringstream oss;
+    oss << "Invalid MUSA provider option 'user_compute_stream': expected "
+           "uintptr_t string, got '"
+        << value << "'.";
+    return CreateInvalidArgumentStatus(ort_api, oss.str());
+  }
+
+  out = reinterpret_cast<musaStream_t>(static_cast<uintptr_t>(parsed));
+  return nullptr;
+}
+
+OrtStatus* ParseMusaProviderOptionsFromSession(
+    const OrtApi& ort_api, const OrtSessionOptions& session_options,
+    const std::string& ep_name, MusaProviderOptions& options) {
+  std::string value;
+
+  RETURN_IF_ERROR(
+      GetProviderOptionOrDefault(ort_api, session_options, ep_name, "device_id",
+                                 std::to_string(options.device_id), value));
+  RETURN_IF_ERROR(
+      ParseIntProviderOption(ort_api, "device_id", value, options.device_id));
+
+  RETURN_IF_ERROR(GetProviderOptionOrDefault(
+      ort_api, session_options, ep_name, "has_user_compute_stream",
+      std::to_string(options.has_user_compute_stream), value));
+  RETURN_IF_ERROR(ParseIntProviderOption(ort_api, "has_user_compute_stream",
+                                         value,
+                                         options.has_user_compute_stream));
+
+  RETURN_IF_ERROR(GetProviderOptionOrDefault(
+      ort_api, session_options, ep_name, "user_compute_stream", "0", value));
+  RETURN_IF_ERROR(
+      ParseStreamPointerOption(ort_api, value, options.user_compute_stream));
+  if (options.user_compute_stream != nullptr) {
+    options.has_user_compute_stream = 1;
+  }
+
+  RETURN_IF_ERROR(GetProviderOptionOrDefault(
+      ort_api, session_options, ep_name, "use_ep_level_unified_stream",
+      std::to_string(options.use_ep_level_unified_stream), value));
+  RETURN_IF_ERROR(ParseIntProviderOption(ort_api, "use_ep_level_unified_stream",
+                                         value,
+                                         options.use_ep_level_unified_stream));
+
+  RETURN_IF_ERROR(GetProviderOptionOrDefault(
+      ort_api, session_options, ep_name, "do_copy_in_default_stream",
+      std::to_string(options.do_copy_in_default_stream), value));
+  RETURN_IF_ERROR(ParseIntProviderOption(ort_api, "do_copy_in_default_stream",
+                                         value,
+                                         options.do_copy_in_default_stream));
+
+  if (options.has_user_compute_stream != 0 &&
+      options.user_compute_stream == nullptr) {
+    return CreateInvalidArgumentStatus(
+        ort_api,
+        "MUSA provider option 'has_user_compute_stream' is set but "
+        "'user_compute_stream' is null.");
+  }
+
+  if (options.has_user_compute_stream != 0) {
+    options.use_ep_level_unified_stream = 1;
+  }
+
+  return nullptr;
+}
+
+}  // namespace
 
 MusaEpFactory::MusaEpFactory(const OrtApi& ort_api, const OrtEpApi& ep_api,
                              const OrtLogger& /*default_logger*/)
@@ -66,7 +204,8 @@ MusaEpFactory::MusaEpFactory(const OrtApi& ort_api, const OrtEpApi& ep_api,
   pinned_host_pool_ = std::make_shared<PinnedHostPool>(0);
 
   // create data transfer for the device
-  const OrtMemoryDevice* device = ep_api.MemoryInfo_GetMemoryDevice(default_memory_info_);
+  const OrtMemoryDevice* device =
+      ep_api.MemoryInfo_GetMemoryDevice(default_memory_info_);
   const OrtMemoryDevice* host_accessible_device =
       ep_api.MemoryInfo_GetMemoryDevice(host_accessible_memory_info_);
   data_transfer_impl_ = std::make_unique<MusaDataTransfer>(
@@ -182,6 +321,13 @@ OrtStatus* ORT_API_CALL MusaEpFactory::GetSupportedDevicesImpl(
           ep_metadata, "supported_devices",
           std::to_string(musa_device_count).c_str());
       factory->ort_api_.AddKeyValuePair(ep_options, "device_id", "0");
+      factory->ort_api_.AddKeyValuePair(ep_options, "has_user_compute_stream",
+                                        "0");
+      factory->ort_api_.AddKeyValuePair(ep_options, "user_compute_stream", "0");
+      factory->ort_api_.AddKeyValuePair(ep_options,
+                                        "use_ep_level_unified_stream", "0");
+      factory->ort_api_.AddKeyValuePair(ep_options, "do_copy_in_default_stream",
+                                        "1");
 
       // OrtEpDevice copies ep_metadata and ep_options.
       OrtEpDevice* ep_device = nullptr;
@@ -235,6 +381,26 @@ OrtStatus* ORT_API_CALL MusaEpFactory::CreateEpImpl(
 
   MusaEp::Config config = {};
   config.enable_prepack_weight_sharing = enable_prepack_weight_sharing == "1";
+  RETURN_IF_ERROR(ParseMusaProviderOptionsFromSession(
+      factory->ort_api_, *session_options, factory->ep_name_,
+      config.provider_options));
+
+  if (config.provider_options.device_id < 0 ||
+      config.provider_options.device_id >= std::numeric_limits<int>::max()) {
+    return factory->ort_api_.CreateStatus(
+        ORT_INVALID_ARGUMENT,
+        "MUSA provider option 'device_id' must be a non-negative integer.");
+  }
+
+  musaError_t set_device_status =
+      musaSetDevice(config.provider_options.device_id);
+  if (set_device_status != musaSuccess) {
+    std::ostringstream oss;
+    oss << "musaSetDevice(" << config.provider_options.device_id
+        << ") failed while creating MUSAExecutionProvider: "
+        << musaGetErrorString(set_device_status);
+    return factory->ort_api_.CreateStatus(ORT_EP_FAIL, oss.str().c_str());
+  }
 
   auto actual_ep = std::make_unique<MusaEp>(*factory, config, *logger);
   *ep = actual_ep.release();

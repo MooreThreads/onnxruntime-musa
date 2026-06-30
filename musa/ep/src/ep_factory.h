@@ -26,6 +26,7 @@ class MusaEpFactory : public OrtEpFactory {
   const OrtApi& GetOrtApi() const { return ort_api_; }
   const OrtEpApi& GetEpApi() const { return ep_api_; }
   const std::string& GetEpName() const { return ep_name_; }
+  uint32_t VendorId() const { return vendor_id_; }
 
   // Called by child OrtEp instances to retrieve the cached kernel registry for
   // that EP.

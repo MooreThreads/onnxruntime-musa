@@ -11,6 +11,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "ep_options.h"
+
 class FusionNodeCompute;
 class MusaEpFactory;
 
@@ -21,6 +23,7 @@ class MusaEp : public OrtEp {
  public:
   struct Config {
     bool enable_prepack_weight_sharing = false;
+    MusaProviderOptions provider_options;
   };
 
   MusaEp(MusaEpFactory& factory, const Config& config, const OrtLogger& logger);
@@ -38,27 +41,29 @@ class MusaEp : public OrtEp {
   static const char* ORT_API_CALL GetNameImpl(const OrtEp* this_ptr) noexcept;
 
   static OrtStatus* ORT_API_CALL GetKernelRegistryImpl(
-      _In_ OrtEp* this_ptr,
-      _Outptr_result_maybenull_ const OrtKernelRegistry** kernel_registry) noexcept;
+      _In_ OrtEp* this_ptr, _Outptr_result_maybenull_ const OrtKernelRegistry**
+                                kernel_registry) noexcept;
 
-  static OrtStatus* ORT_API_CALL GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* graph,
-                                                   OrtEpGraphSupportInfo* graph_support_info) noexcept;
+  static OrtStatus* ORT_API_CALL
+  GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* graph,
+                    OrtEpGraphSupportInfo* graph_support_info) noexcept;
 
-  static OrtStatus* ORT_API_CALL CompileImpl(_In_ OrtEp* this_ptr,
-                                             _In_ const OrtGraph** graphs,
-                                             _In_ const OrtNode** fused_nodes,
-                                             _In_ size_t count,
-                                             _Out_writes_all_(count)
-                                                 OrtNodeComputeInfo** node_compute_infos,
-                                             _Out_writes_(count)
-                                                 OrtNode** ep_context_nodes) noexcept;
+  static OrtStatus* ORT_API_CALL
+  CompileImpl(_In_ OrtEp* this_ptr, _In_ const OrtGraph** graphs,
+              _In_ const OrtNode** fused_nodes, _In_ size_t count,
+              _Out_writes_all_(count) OrtNodeComputeInfo** node_compute_infos,
+              _Out_writes_(count) OrtNode** ep_context_nodes) noexcept;
 
   static void ORT_API_CALL ReleaseNodeComputeInfosImpl(
       OrtEp* this_ptr, OrtNodeComputeInfo** node_compute_infos,
       size_t num_node_compute_infos) noexcept;
 
-  static OrtStatus* ORT_API_CALL CreateProfilerImpl(OrtEp* this_ptr,
-                                                    OrtEpProfilerImpl** profiler) noexcept;
+  static OrtStatus* ORT_API_CALL
+  CreateProfilerImpl(OrtEp* this_ptr, OrtEpProfilerImpl** profiler) noexcept;
+
+  static OrtStatus* ORT_API_CALL CreateSyncStreamForDeviceImpl(
+      OrtEp* this_ptr, const OrtMemoryDevice* memory_device,
+      OrtSyncStreamImpl** stream) noexcept;
 
   MusaEpFactory& factory_;
   const OrtApi& ort_api_;

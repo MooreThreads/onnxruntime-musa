@@ -4,12 +4,13 @@
 #
 # The script intentionally runs the stable suites explicitly instead of
 # discovering every sub-directory under test/. This keeps temporary experiments
-# out of the default run while ensuring both op and fusion coverage are included.
+# out of the default run while ensuring ops, fusion, and multi-stream coverage
+# are included.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUITES=(ops fusion)
+SUITES=(ops fusion multi_stream)
 
 TEST_DIRS=()
 for suite in "${SUITES[@]}"; do

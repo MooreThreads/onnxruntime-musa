@@ -12,6 +12,7 @@
 class MusaSyncStream : public OrtSyncStreamImpl {
  public:
   explicit MusaSyncStream(const OrtApi& ort_api);
+  MusaSyncStream(const OrtApi& ort_api, musaStream_t external_stream);
   ~MusaSyncStream();
 
   MusaSyncStream(const MusaSyncStream&) = delete;
@@ -32,4 +33,5 @@ class MusaSyncStream : public OrtSyncStreamImpl {
 
   const OrtApi& ort_api_;
   musaStream_t stream_ = nullptr;
+  bool owns_stream_ = true;
 };

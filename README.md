@@ -165,7 +165,7 @@ under `test/`):
 
 ```bash
 cd test
-bash run_all.sh                 # = python -m pytest ops/
+bash run_all.sh                 # = python -m pytest ops/ fusion/ multi_stream/
 bash run_all.sh -v -k div       # extra args are forwarded to pytest
 ```
 

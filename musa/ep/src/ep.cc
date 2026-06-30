@@ -22,6 +22,7 @@
 
 #include "ep_factory.h"
 #include "ep_profiling.h"
+#include "ep_stream.h"
 #include "fusion/centered_reduce_fusion.h"
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/fusion_node_compute.h"
@@ -2640,6 +2641,7 @@ MusaEp::MusaEp(MusaEpFactory& factory, const Config& config,
   Compile = CompileImpl;
   ReleaseNodeComputeInfos = ReleaseNodeComputeInfosImpl;
   CreateProfiler = CreateProfilerImpl;
+  CreateSyncStreamForDevice = CreateSyncStreamForDeviceImpl;
 
   IGNORE_ORTSTATUS(ort_api_.Logger_LogMessage(
       &logger_, OrtLoggingLevel::ORT_LOGGING_LEVEL_INFO,
@@ -2648,6 +2650,43 @@ MusaEp::MusaEp(MusaEpFactory& factory, const Config& config,
 }
 
 MusaEp::~MusaEp() = default;
+
+/*static*/
+OrtStatus* ORT_API_CALL MusaEp::CreateSyncStreamForDeviceImpl(
+    OrtEp* this_ptr, const OrtMemoryDevice* memory_device,
+    OrtSyncStreamImpl** stream) noexcept {
+  auto& ep = *static_cast<MusaEp*>(this_ptr);
+  *stream = nullptr;
+
+  if (ep.ep_api_.MemoryDevice_GetDeviceType(memory_device) !=
+          OrtMemoryInfoDeviceType_GPU ||
+      ep.ep_api_.MemoryDevice_GetVendorId(memory_device) !=
+          ep.factory_.VendorId() ||
+      ep.ep_api_.MemoryDevice_GetMemoryType(memory_device) !=
+          OrtDeviceMemoryType_DEFAULT) {
+    return nullptr;
+  }
+
+  const MusaProviderOptions& options = ep.config_.provider_options;
+
+  try {
+    if (options.has_user_compute_stream != 0) {
+      auto sync_stream = std::make_unique<MusaSyncStream>(
+          ep.ort_api_, options.user_compute_stream);
+      *stream = sync_stream.release();
+      return nullptr;
+    }
+
+    auto sync_stream = std::make_unique<MusaSyncStream>(ep.ort_api_);
+    *stream = sync_stream.release();
+    return nullptr;
+  } catch (const Ort::Exception& ex) {
+    Ort::Status status(ex);
+    return status.release();
+  } catch (const std::exception& ex) {
+    return ep.ort_api_.CreateStatus(ORT_EP_FAIL, ex.what());
+  }
+}
 
 /*static*/
 const char* ORT_API_CALL MusaEp::GetNameImpl(const OrtEp* this_ptr) noexcept {

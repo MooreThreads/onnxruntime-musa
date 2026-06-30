@@ -3,9 +3,9 @@
 
 #include "ep_stream.h"
 
-#include "ep_allocator.h"
-
 #include <memory>
+
+#include "ep_allocator.h"
 
 namespace {
 
@@ -105,9 +105,24 @@ MusaSyncStream::MusaSyncStream(const OrtApi& ort_api) : ort_api_(ort_api) {
   }
 }
 
+MusaSyncStream::MusaSyncStream(const OrtApi& ort_api,
+                               musaStream_t external_stream)
+    : ort_api_(ort_api), stream_(external_stream), owns_stream_(false) {
+  ort_version_supported = ORT_API_VERSION;
+  Release = ReleaseImpl;
+  GetHandle = GetHandleImpl;
+  CreateNotification = CreateNotificationImpl;
+  Flush = FlushImpl;
+  OnSessionRunEnd = OnSessionRunEndImpl;
+  if (stream_ == nullptr) {
+    throw Ort::Exception("MUSA external compute stream must not be null.",
+                         ORT_INVALID_ARGUMENT);
+  }
+}
+
 MusaSyncStream::~MusaSyncStream() {
   CustomAllocator::ResetBlocksUsingStream(this);
-  if (stream_ != nullptr) {
+  if (owns_stream_ && stream_ != nullptr) {
     (void)musaStreamDestroy(stream_);
   }
 }

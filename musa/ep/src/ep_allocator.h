@@ -1,8 +1,5 @@
 #pragma once
 
-#include "plugin_ep_utils.h"
-#include "pinned_host_pool.h"
-
 #include <musa_runtime.h>
 
 #include <cstdlib>
@@ -14,6 +11,9 @@
 #include <unordered_set>
 #include <vector>
 
+#include "pinned_host_pool.h"
+#include "plugin_ep_utils.h"
+
 struct BaseAllocator : OrtAllocator {
   virtual ~BaseAllocator() = default;
 };
@@ -21,7 +21,8 @@ struct BaseAllocator : OrtAllocator {
 using AllocatorUniquePtr = std::unique_ptr<BaseAllocator>;
 
 struct CustomAllocator : BaseAllocator {
-  explicit CustomAllocator(const OrtMemoryInfo* mem_info) : memory_info{mem_info} {
+  explicit CustomAllocator(const OrtMemoryInfo* mem_info)
+      : memory_info{mem_info} {
     version = ORT_API_VERSION;
     Alloc = AllocImpl;
     Free = FreeImpl;
@@ -72,7 +73,8 @@ struct CustomAllocator : BaseAllocator {
     impl.FreeCached(p);
   }
 
-  static const struct OrtMemoryInfo* ORT_API_CALL InfoImpl(const struct OrtAllocator* this_) {
+  static const struct OrtMemoryInfo* ORT_API_CALL
+  InfoImpl(const struct OrtAllocator* this_) {
     const CustomAllocator& impl = *static_cast<const CustomAllocator*>(this_);
     return impl.memory_info;
   }
@@ -132,28 +134,29 @@ struct CustomAllocator : BaseAllocator {
   static size_t CacheLimitBytes() {
     const char* env = std::getenv("ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB");
     if (env == nullptr || *env == '\0') {
-      return size_t{2048} * 1024 * 1024;
+      return 0;
     }
     long mb = std::strtol(env, nullptr, 10);
     return mb <= 0 ? 0 : static_cast<size_t>(mb) * 1024 * 1024;
   }
 
-  void* AllocateCached(size_t requested_size,
-                       const OrtSyncStreamImpl* stream) {
+  void* AllocateCached(size_t requested_size, const OrtSyncStreamImpl* stream) {
     const size_t size = RoundSize(requested_size);
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto cached = cached_blocks_.lower_bound(size);
-         cached != cached_blocks_.end(); ++cached) {
-      if (cached->second.stream != stream) {
-        continue;
-      }
+    if (stream != nullptr) {
+      for (auto cached = cached_blocks_.lower_bound(size);
+           cached != cached_blocks_.end(); ++cached) {
+        if (cached->second.stream != stream) {
+          continue;
+        }
 
-      void* p = cached->second.ptr;
-      const size_t block_size = cached->first;
-      cached_bytes_ -= block_size;
-      cached_blocks_.erase(cached);
-      live_blocks_[p] = BlockInfo{block_size, stream};
-      return p;
+        void* p = cached->second.ptr;
+        const size_t block_size = cached->first;
+        cached_bytes_ -= block_size;
+        cached_blocks_.erase(cached);
+        live_blocks_[p] = BlockInfo{block_size, stream};
+        return p;
+      }
     }
 
     void* p = nullptr;
@@ -175,6 +178,11 @@ struct CustomAllocator : BaseAllocator {
 
     const BlockInfo block = live->second;
     live_blocks_.erase(live);
+    if (block.stream == nullptr) {
+      (void)musaFree(p);
+      return;
+    }
+
     const size_t limit = CacheLimitBytes();
     if (limit == 0 || cached_bytes_ + block.size > limit) {
       (void)musaFree(p);
@@ -251,7 +259,9 @@ struct PinnedHostAllocator : BaseAllocator {
 
 using AllocationUniquePtr = std::unique_ptr<void, std::function<void(void*)>>;
 
-inline AllocationUniquePtr AllocateBytes(OrtAllocator* allocator, size_t num_bytes) {
+inline AllocationUniquePtr AllocateBytes(OrtAllocator* allocator,
+                                         size_t num_bytes) {
   void* p = allocator->Alloc(allocator, num_bytes);
-  return AllocationUniquePtr(p, [allocator](void* d) { allocator->Free(allocator, d); });
+  return AllocationUniquePtr(
+      p, [allocator](void* d) { allocator->Free(allocator, d); });
 }

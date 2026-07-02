@@ -217,9 +217,9 @@ MusaEpFactory::MusaEpFactory(const OrtApi& ort_api, const OrtEpApi& ep_api,
   // if the readonly allocator differs from the default device allocator. This
   // is not required for this cpu-based example EP, but show it as an example.
   readonly_memory_info_ =
-      Ort::MemoryInfo{"MUSAExecutionProvider CPU readonly",
-                      OrtMemoryInfoDeviceType_CPU,
-                      /*vendor*/ 0,
+      Ort::MemoryInfo{"MUSAExecutionProvider readonly",
+                      OrtMemoryInfoDeviceType_GPU,
+                      vendor_id_,
                       /* device_id */ 0,
                       OrtDeviceMemoryType_DEFAULT,
                       /*alignment*/ 0,

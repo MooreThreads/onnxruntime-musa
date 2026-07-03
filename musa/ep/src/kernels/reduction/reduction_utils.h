@@ -92,10 +92,12 @@ inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
   }
 
   Ort::UnownedValue y = ctx.GetOutput(0, output_shape);
-  if (!IsGpuMemory(input0.GetTensorMemoryInfo()) ||
-      !IsGpuMemory(y.GetTensorMemoryInfo())) {
+  if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
     return UnsupportedReduceStatus("Reduce requires MUSA device tensors");
   }
+  musaStream_t stream = GetComputeStream(ctx);
+  DeviceInputBuffer input_buffer;
+  RETURN_IF_ERROR(input_buffer.Bind(input0, stream));
 
   if (mode == ReduceMode::kMean &&
       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
@@ -117,6 +119,6 @@ inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
   MusaReduceParams params =
       MakeReduceParams(input_shape, output_shape, axes_set, keepdims);
   return LaunchStatus(LaunchMusaReduceKernel(
-      input0.GetTensorRawData(), y.GetTensorMutableRawData(), params,
-      ToMusaReduceOp(mode), musa_elem_type, GetComputeStream(ctx)));
+      input_buffer.data(), y.GetTensorMutableRawData(), params,
+      ToMusaReduceOp(mode), musa_elem_type, stream));
 }

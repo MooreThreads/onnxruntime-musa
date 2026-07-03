@@ -36,92 +36,118 @@ __device__ __forceinline__ bool TopKValueLess(T lhs, T rhs) {
 }
 
 template <typename T>
-__device__ __forceinline__ bool TopKCandidateBetter(T candidate,
-                                                    int64_t candidate_index,
-                                                    T best, int64_t best_index,
-                                                    bool has_best,
-                                                    bool largest) {
-  if (!has_best) {
-    return true;
-  }
+__device__ __forceinline__ bool TopKPairBefore(T lhs, int64_t lhs_index, T rhs,
+                                               int64_t rhs_index,
+                                               bool largest) {
   if (largest) {
-    if (TopKValueGreater(candidate, best)) {
+    if (TopKValueGreater(lhs, rhs)) {
       return true;
     }
-    if (TopKValueGreater(best, candidate)) {
+    if (TopKValueGreater(rhs, lhs)) {
       return false;
     }
   } else {
-    if (TopKValueLess(candidate, best)) {
+    if (TopKValueLess(lhs, rhs)) {
       return true;
     }
-    if (TopKValueLess(best, candidate)) {
+    if (TopKValueLess(rhs, lhs)) {
       return false;
     }
   }
-  return candidate_index < best_index;
+  return lhs_index < rhs_index;
 }
 
 template <typename T>
-__global__ void TopKKernel(const T* input, T* values, int64_t* indices,
-                           MusaTopKParams params) {
-  const int64_t thread_id =
-      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  const int64_t total_threads = static_cast<int64_t>(gridDim.x) * blockDim.x;
-  for (int64_t output_index = thread_id; output_index < params.output_elements;
-       output_index += total_threads) {
-    const int64_t inner_index = output_index % params.inner;
-    const int64_t k_index = (output_index / params.inner) % params.k;
-    const int64_t outer_index = output_index / (params.k * params.inner);
+__device__ __forceinline__ bool TopKCandidateAfterPrevious(
+    T candidate, int64_t candidate_index, T previous, int64_t previous_index,
+    bool has_previous, bool largest) {
+  if (!has_previous) {
+    return true;
+  }
+  return TopKPairBefore(previous, previous_index, candidate, candidate_index,
+                        largest);
+}
+
+template <typename T>
+__global__ void TopKStableKernel(const T* input, T* values, int64_t* indices,
+                                 MusaTopKParams params) {
+  __shared__ T shared_values[kThreadsPerBlock];
+  __shared__ int64_t shared_indices[kThreadsPerBlock];
+  __shared__ bool shared_has[kThreadsPerBlock];
+  __shared__ T previous;
+  __shared__ int64_t previous_index;
+  __shared__ bool has_previous;
+
+  for (int64_t slice_index = static_cast<int64_t>(blockIdx.x);
+       slice_index < params.rows; slice_index += gridDim.x) {
+    const int64_t inner_index = slice_index % params.inner;
+    const int64_t outer_index = slice_index / params.inner;
     const int64_t input_base =
         outer_index * params.dim * params.inner + inner_index;
 
-    T best{};
-    int64_t best_index = 0;
-    bool has_best = false;
+    if (threadIdx.x == 0) {
+      previous = T{};
+      previous_index = 0;
+      has_previous = false;
+    }
+    __syncthreads();
 
-    for (int64_t candidate_index = 0; candidate_index < params.dim;
-         ++candidate_index) {
-      const T candidate = input[input_base + candidate_index * params.inner];
+    for (int64_t k_index = 0; k_index < params.k; ++k_index) {
+      T best{};
+      int64_t best_index = 0;
+      bool has_best = false;
 
-      int64_t rank = 0;
-      for (int64_t other_index = 0; other_index < params.dim; ++other_index) {
-        if (other_index == candidate_index) {
+      for (int64_t candidate_index = threadIdx.x; candidate_index < params.dim;
+           candidate_index += blockDim.x) {
+        const T candidate = input[input_base + candidate_index * params.inner];
+        if (!TopKCandidateAfterPrevious(candidate, candidate_index, previous,
+                                        previous_index, has_previous,
+                                        params.largest != 0)) {
           continue;
         }
-        const T other = input[input_base + other_index * params.inner];
-        bool other_before_candidate = false;
-        if (params.largest) {
-          if (TopKValueGreater(other, candidate)) {
-            other_before_candidate = true;
-          } else if (!TopKValueGreater(candidate, other) &&
-                     other_index < candidate_index) {
-            other_before_candidate = true;
-          }
-        } else {
-          if (TopKValueLess(other, candidate)) {
-            other_before_candidate = true;
-          } else if (!TopKValueLess(candidate, other) &&
-                     other_index < candidate_index) {
-            other_before_candidate = true;
-          }
-        }
-        if (other_before_candidate) {
-          ++rank;
+        if (!has_best ||
+            TopKPairBefore(candidate, candidate_index, best, best_index,
+                           params.largest != 0)) {
+          best = candidate;
+          best_index = candidate_index;
+          has_best = true;
         }
       }
 
-      if (rank == k_index &&
-          TopKCandidateBetter(candidate, candidate_index, best, best_index,
-                              has_best, params.largest != 0)) {
-        best = candidate;
-        best_index = candidate_index;
-        has_best = true;
+      shared_values[threadIdx.x] = best;
+      shared_indices[threadIdx.x] = best_index;
+      shared_has[threadIdx.x] = has_best;
+      __syncthreads();
+
+      for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+          const int other = threadIdx.x + stride;
+          if (shared_has[other] &&
+              (!shared_has[threadIdx.x] ||
+               TopKPairBefore(shared_values[other], shared_indices[other],
+                              shared_values[threadIdx.x],
+                              shared_indices[threadIdx.x],
+                              params.largest != 0))) {
+            shared_values[threadIdx.x] = shared_values[other];
+            shared_indices[threadIdx.x] = shared_indices[other];
+            shared_has[threadIdx.x] = true;
+          }
+        }
+        __syncthreads();
       }
+
+      if (threadIdx.x == 0) {
+        const int64_t output_index =
+            outer_index * params.k * params.inner + k_index * params.inner +
+            inner_index;
+        values[output_index] = shared_values[0];
+        indices[output_index] = shared_indices[0];
+        previous = shared_values[0];
+        previous_index = shared_indices[0];
+        has_previous = true;
+      }
+      __syncthreads();
     }
-
-    values[output_index] = best;
-    indices[output_index] = best_index;
   }
 }
 
@@ -131,8 +157,10 @@ musaError_t LaunchTopKTyped(const void* input, void* values, int64_t* indices,
   if (params.output_elements == 0) {
     return musaSuccess;
   }
-  TopKKernel<T>
-      <<<BlocksForCount(params.output_elements), kThreadsPerBlock, 0, stream>>>(
+  const int blocks = static_cast<int>(
+      params.rows > kMaxBlocks ? kMaxBlocks : params.rows);
+  TopKStableKernel<T>
+      <<<blocks, kThreadsPerBlock, 0, stream>>>(
           reinterpret_cast<const T*>(input), reinterpret_cast<T*>(values),
           indices, params);
   return musaGetLastError();

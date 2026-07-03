@@ -58,3 +58,31 @@ def test_einsum_opset12_ij_bjk_to_bik_general_k():
         rtol=1e-5,
         atol=1e-5,
     )
+
+
+def test_einsum_opset12_blhw_bjhw_to_bhl():
+    lhs = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape(2, 3, 4, 5) / 17.0
+    rhs = np.arange(2 * 6 * 4 * 5, dtype=np.float32).reshape(2, 6, 4, 5) / 19.0
+    run_and_compare(
+        "Einsum",
+        inputs={"lhs": lhs, "rhs": rhs},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"equation": "blhw,bjhw->bhl"},
+        opset=12,
+        rtol=1e-4,
+        atol=1e-4,
+    )
+
+
+def test_einsum_opset12_ilhw_bjhw_to_bhl():
+    lhs = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape(2, 3, 4, 5) / 17.0
+    rhs = np.arange(7 * 6 * 4 * 5, dtype=np.float32).reshape(7, 6, 4, 5) / 19.0
+    run_and_compare(
+        "Einsum",
+        inputs={"lhs": lhs, "rhs": rhs},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"equation": "ilhw,bjhw->bhl"},
+        opset=12,
+        rtol=1e-4,
+        atol=1e-4,
+    )

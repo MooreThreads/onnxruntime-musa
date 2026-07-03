@@ -71,3 +71,18 @@ def test_topk_sorted0_tie_keeps_lower_indices_opset13():
     np.testing.assert_array_equal(
         np.sort(indices.reshape(-1)), np.array([0, 2], dtype=np.int64)
     )
+
+
+def test_topk_large_last_axis_k192_opset13():
+    rng = np.random.default_rng(20260703)
+    x = rng.uniform(-1.0, 1.0, size=(1, 20000)).astype(np.float32)
+    k = np.array([192], dtype=np.int64)
+    run_and_compare(
+        "TopK",
+        inputs={"X": x, "K": k},
+        outputs=[("Values", TensorProto.FLOAT), ("Indices", TensorProto.INT64)],
+        attrs={"axis": -1, "largest": 1, "sorted": 1},
+        opset=13,
+        rtol=1e-5,
+        atol=1e-6,
+    )

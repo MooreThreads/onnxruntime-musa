@@ -21,6 +21,8 @@ class Einsum : public OpKernelBase<Einsum> {
   OrtStatus* ComputeIjBjk(Ort::KernelContext& ctx) const;
   OrtStatus* ComputeBlhwBjhwBhl(Ort::KernelContext& ctx) const;
   OrtStatus* ComputeIlhwBjhwBhl(Ort::KernelContext& ctx) const;
+  OrtStatus* ComputeNikBnkBni(Ort::KernelContext& ctx) const;
+  OrtStatus* ComputeBnkNkdBnd(Ort::KernelContext& ctx) const;
 
   std::string equation_;
 };
@@ -203,6 +205,80 @@ OrtStatus* Einsum::ComputeIlhwBjhwBhl(Ort::KernelContext& ctx) const {
       GetComputeStream(ctx)));
 }
 
+OrtStatus* Einsum::ComputeNikBnkBni(Ort::KernelContext& ctx) const {
+  Ort::ConstValue lhs = ctx.GetInput(0);
+  Ort::ConstValue rhs = ctx.GetInput(1);
+  auto lhs_info = lhs.GetTensorTypeAndShapeInfo();
+  auto rhs_info = rhs.GetTensorTypeAndShapeInfo();
+  if (lhs_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+      rhs_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED, "Einsum nik,bnk->bni only supports float");
+  }
+  auto lhs_shape = lhs_info.GetShape();
+  auto rhs_shape = rhs_info.GetShape();
+  if (lhs_shape.size() != 3 || rhs_shape.size() != 3 ||
+      lhs_shape[0] != rhs_shape[1] || lhs_shape[2] != rhs_shape[2]) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Einsum nik,bnk->bni shape mismatch");
+  }
+  if (!IsGpuMemory(lhs.GetTensorMemoryInfo()) ||
+      !IsGpuMemory(rhs.GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Einsum requires MUSA inputs");
+  }
+
+  std::vector<int64_t> output_shape = {rhs_shape[0], lhs_shape[0],
+                                       lhs_shape[1]};
+  Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
+  if (!IsGpuMemory(output.GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Einsum requires MUSA output");
+  }
+
+  return LaunchStatus(LaunchMusaEinsumNikBnkBniKernel(
+      lhs.GetTensorData<float>(), rhs.GetTensorData<float>(),
+      output.GetTensorMutableData<float>(), rhs_shape[0], lhs_shape[0],
+      lhs_shape[1], lhs_shape[2], GetComputeStream(ctx)));
+}
+
+OrtStatus* Einsum::ComputeBnkNkdBnd(Ort::KernelContext& ctx) const {
+  Ort::ConstValue lhs = ctx.GetInput(0);
+  Ort::ConstValue rhs = ctx.GetInput(1);
+  auto lhs_info = lhs.GetTensorTypeAndShapeInfo();
+  auto rhs_info = rhs.GetTensorTypeAndShapeInfo();
+  if (lhs_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+      rhs_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    return Ort::GetApi().CreateStatus(
+        ORT_NOT_IMPLEMENTED, "Einsum bnk,nkd->bnd only supports float");
+  }
+  auto lhs_shape = lhs_info.GetShape();
+  auto rhs_shape = rhs_info.GetShape();
+  if (lhs_shape.size() != 3 || rhs_shape.size() != 3 ||
+      lhs_shape[1] != rhs_shape[0] || lhs_shape[2] != rhs_shape[1]) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Einsum bnk,nkd->bnd shape mismatch");
+  }
+  if (!IsGpuMemory(lhs.GetTensorMemoryInfo()) ||
+      !IsGpuMemory(rhs.GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Einsum requires MUSA inputs");
+  }
+
+  std::vector<int64_t> output_shape = {lhs_shape[0], lhs_shape[1],
+                                       rhs_shape[2]};
+  Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
+  if (!IsGpuMemory(output.GetTensorMemoryInfo())) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "Einsum requires MUSA output");
+  }
+
+  return LaunchStatus(LaunchMusaEinsumBnkNkdBndKernel(
+      lhs.GetTensorData<float>(), rhs.GetTensorData<float>(),
+      output.GetTensorMutableData<float>(), lhs_shape[0], lhs_shape[1],
+      lhs_shape[2], rhs_shape[2], GetComputeStream(ctx)));
+}
+
 OrtStatus* Einsum::Compute(Ort::KernelContext& ctx) const {
   if (equation_ == "aa->a") {
     return ComputeDiagonal(ctx);
@@ -218,6 +294,12 @@ OrtStatus* Einsum::Compute(Ort::KernelContext& ctx) const {
   }
   if (equation_ == "ilhw,bjhw->bhl") {
     return ComputeIlhwBjhwBhl(ctx);
+  }
+  if (equation_ == "nik,bnk->bni") {
+    return ComputeNikBnkBni(ctx);
+  }
+  if (equation_ == "bnk,nkd->bnd") {
+    return ComputeBnkNkdBnd(ctx);
   }
   const std::string message =
       "unsupported Einsum equation for MUSA device path: " + equation_;

@@ -136,6 +136,68 @@ __global__ void EinsumIlhwBjhwBhlKernel(const float* lhs,
   }
 }
 
+__global__ void EinsumNikBnkBniKernel(const float* lhs,
+                                      const float* rhs,
+                                      float* output,
+                                      int64_t batch,
+                                      int64_t n_dim,
+                                      int64_t i_dim,
+                                      int64_t k_dim,
+                                      int64_t total_elements) {
+  const int64_t thread_id =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t total_threads =
+      static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t index = thread_id; index < total_elements;
+       index += total_threads) {
+    int64_t remaining = index;
+    const int64_t i = remaining % i_dim;
+    remaining /= i_dim;
+    const int64_t n = remaining % n_dim;
+    remaining /= n_dim;
+    const int64_t b = remaining;
+
+    float acc = 0.0f;
+    for (int64_t k = 0; k < k_dim; ++k) {
+      const int64_t lhs_index = (n * i_dim + i) * k_dim + k;
+      const int64_t rhs_index = (b * n_dim + n) * k_dim + k;
+      acc += lhs[lhs_index] * rhs[rhs_index];
+    }
+    output[index] = acc;
+  }
+}
+
+__global__ void EinsumBnkNkdBndKernel(const float* lhs,
+                                      const float* rhs,
+                                      float* output,
+                                      int64_t batch,
+                                      int64_t n_dim,
+                                      int64_t k_dim,
+                                      int64_t d_dim,
+                                      int64_t total_elements) {
+  const int64_t thread_id =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t total_threads =
+      static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t index = thread_id; index < total_elements;
+       index += total_threads) {
+    int64_t remaining = index;
+    const int64_t d = remaining % d_dim;
+    remaining /= d_dim;
+    const int64_t n = remaining % n_dim;
+    remaining /= n_dim;
+    const int64_t b = remaining;
+
+    float acc = 0.0f;
+    for (int64_t k = 0; k < k_dim; ++k) {
+      const int64_t lhs_index = (b * n_dim + n) * k_dim + k;
+      const int64_t rhs_index = (n * k_dim + k) * d_dim + d;
+      acc += lhs[lhs_index] * rhs[rhs_index];
+    }
+    output[index] = acc;
+  }
+}
+
 }  // namespace
 
 musaError_t LaunchMusaEinsumDiagonalKernel(const void* input,
@@ -187,6 +249,42 @@ musaError_t LaunchMusaEinsumIlhwBjhwBhlKernel(const float* lhs,
   EinsumIlhwBjhwBhlKernel<<<BlocksForCount(total_elements), kThreadsPerBlock, 0,
                             stream>>>(lhs, rhs, output, batch, i_dim, l_dim,
                                       h_dim, w_dim, j_dim, total_elements);
+  return musaGetLastError();
+}
+
+musaError_t LaunchMusaEinsumNikBnkBniKernel(const float* lhs,
+                                             const float* rhs,
+                                             float* output,
+                                             int64_t batch,
+                                             int64_t n_dim,
+                                             int64_t i_dim,
+                                             int64_t k_dim,
+                                             musaStream_t stream) {
+  const int64_t total_elements = batch * n_dim * i_dim;
+  if (total_elements == 0) {
+    return musaSuccess;
+  }
+  EinsumNikBnkBniKernel<<<BlocksForCount(total_elements), kThreadsPerBlock, 0,
+                          stream>>>(lhs, rhs, output, batch, n_dim, i_dim,
+                                    k_dim, total_elements);
+  return musaGetLastError();
+}
+
+musaError_t LaunchMusaEinsumBnkNkdBndKernel(const float* lhs,
+                                             const float* rhs,
+                                             float* output,
+                                             int64_t batch,
+                                             int64_t n_dim,
+                                             int64_t k_dim,
+                                             int64_t d_dim,
+                                             musaStream_t stream) {
+  const int64_t total_elements = batch * n_dim * d_dim;
+  if (total_elements == 0) {
+    return musaSuccess;
+  }
+  EinsumBnkNkdBndKernel<<<BlocksForCount(total_elements), kThreadsPerBlock, 0,
+                          stream>>>(lhs, rhs, output, batch, n_dim, k_dim,
+                                    d_dim, total_elements);
   return musaGetLastError();
 }
 

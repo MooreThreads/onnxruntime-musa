@@ -4,13 +4,16 @@
 
 import numpy as np
 import pytest
+from onnx import helper, numpy_helper
 
 from op_test_utils import (
     TensorProto,
     bfloat16_bits_to_float32,
+    build_graph_model,
     build_model_with_input_types,
     float32_to_bfloat16_bits,
     run_and_compare,
+    run_model_and_compare_with_cpu_fallback,
     run_with_iobinding,
 )
 
@@ -85,3 +88,29 @@ def test_reduce_max_bfloat16():
         rtol=2e-2,
         atol=2e-2,
     )
+
+
+def test_reduce_max_accepts_cpu_boundary_input_from_unique_counts():
+    x = np.array([3, 1, 3, 2, 2, 2], dtype=np.int64)
+    axes = numpy_helper.from_array(np.array([0], dtype=np.int64), name="axes")
+    unique = helper.make_node(
+        "Unique",
+        ["X"],
+        ["unique_values", "unique_indices", "unique_inverse", "counts"],
+        sorted=1,
+    )
+    reduce_max = helper.make_node(
+        "ReduceMax",
+        ["counts", "axes"],
+        ["Y"],
+        keepdims=0,
+    )
+    model = build_graph_model(
+        [unique, reduce_max],
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.INT64)],
+        initializers=[axes],
+        opset=18,
+        name="unique_counts_reduce_max",
+    )
+    run_model_and_compare_with_cpu_fallback(model, {"X": x})

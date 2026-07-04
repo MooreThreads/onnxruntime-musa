@@ -63,6 +63,79 @@ __global__ void EinsumBhijHkKernel(const float* lhs,
   }
 }
 
+__global__ void EinsumBlhwBjhwBhlKernel(const float* lhs,
+                                        const float* rhs,
+                                        float* output,
+                                        int64_t batch,
+                                        int64_t l_dim,
+                                        int64_t h_dim,
+                                        int64_t w_dim,
+                                        int64_t j_dim,
+                                        int64_t total_elements) {
+  const int64_t thread_id =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t total_threads =
+      static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t index = thread_id; index < total_elements;
+       index += total_threads) {
+    int64_t remaining = index;
+    const int64_t l = remaining % l_dim;
+    remaining /= l_dim;
+    const int64_t h = remaining % h_dim;
+    remaining /= h_dim;
+    const int64_t b = remaining;
+
+    float acc = 0.0f;
+    for (int64_t j = 0; j < j_dim; ++j) {
+      for (int64_t w = 0; w < w_dim; ++w) {
+        const int64_t lhs_index = ((b * l_dim + l) * h_dim + h) * w_dim + w;
+        const int64_t rhs_index = ((b * j_dim + j) * h_dim + h) * w_dim + w;
+        acc += lhs[lhs_index] * rhs[rhs_index];
+      }
+    }
+    output[index] = acc;
+  }
+}
+
+__global__ void EinsumIlhwBjhwBhlKernel(const float* lhs,
+                                        const float* rhs,
+                                        float* output,
+                                        int64_t batch,
+                                        int64_t i_dim,
+                                        int64_t l_dim,
+                                        int64_t h_dim,
+                                        int64_t w_dim,
+                                        int64_t j_dim,
+                                        int64_t total_elements) {
+  const int64_t thread_id =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t total_threads =
+      static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t index = thread_id; index < total_elements;
+       index += total_threads) {
+    int64_t remaining = index;
+    const int64_t l = remaining % l_dim;
+    remaining /= l_dim;
+    const int64_t h = remaining % h_dim;
+    remaining /= h_dim;
+    const int64_t b = remaining;
+
+    float acc = 0.0f;
+    for (int64_t i = 0; i < i_dim; ++i) {
+      for (int64_t j = 0; j < j_dim; ++j) {
+        for (int64_t w = 0; w < w_dim; ++w) {
+          const int64_t lhs_index =
+              ((i * l_dim + l) * h_dim + h) * w_dim + w;
+          const int64_t rhs_index =
+              ((b * j_dim + j) * h_dim + h) * w_dim + w;
+          acc += lhs[lhs_index] * rhs[rhs_index];
+        }
+      }
+    }
+    output[index] = acc;
+  }
+}
+
 }  // namespace
 
 musaError_t LaunchMusaEinsumDiagonalKernel(const void* input,
@@ -75,6 +148,45 @@ musaError_t LaunchMusaEinsumDiagonalKernel(const void* input,
   }
   EinsumDiagonalKernel<<<BlocksForCount(dim), kThreadsPerBlock, 0, stream>>>(
       input, output, dim, element_size);
+  return musaGetLastError();
+}
+
+musaError_t LaunchMusaEinsumBlhwBjhwBhlKernel(const float* lhs,
+                                              const float* rhs,
+                                              float* output,
+                                              int64_t batch,
+                                              int64_t l_dim,
+                                              int64_t h_dim,
+                                              int64_t w_dim,
+                                              int64_t j_dim,
+                                              musaStream_t stream) {
+  const int64_t total_elements = batch * h_dim * l_dim;
+  if (total_elements == 0) {
+    return musaSuccess;
+  }
+  EinsumBlhwBjhwBhlKernel<<<BlocksForCount(total_elements), kThreadsPerBlock, 0,
+                            stream>>>(lhs, rhs, output, batch, l_dim, h_dim,
+                                      w_dim, j_dim, total_elements);
+  return musaGetLastError();
+}
+
+musaError_t LaunchMusaEinsumIlhwBjhwBhlKernel(const float* lhs,
+                                              const float* rhs,
+                                              float* output,
+                                              int64_t batch,
+                                              int64_t i_dim,
+                                              int64_t l_dim,
+                                              int64_t h_dim,
+                                              int64_t w_dim,
+                                              int64_t j_dim,
+                                              musaStream_t stream) {
+  const int64_t total_elements = batch * h_dim * l_dim;
+  if (total_elements == 0) {
+    return musaSuccess;
+  }
+  EinsumIlhwBjhwBhlKernel<<<BlocksForCount(total_elements), kThreadsPerBlock, 0,
+                            stream>>>(lhs, rhs, output, batch, i_dim, l_dim,
+                                      h_dim, w_dim, j_dim, total_elements);
   return musaGetLastError();
 }
 

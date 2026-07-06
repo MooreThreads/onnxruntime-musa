@@ -17,6 +17,7 @@
 #include "fusion/split_concat_reorder_fusion.h"
 #include "fusion/split_reduce_fusion.h"
 #include "fusion/split_unsqueeze_concat_fusion.h"
+#include "fusion/tile_concat_fusion.h"
 
 /*
  * Fusion node runtime bridge
@@ -133,6 +134,9 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       } else if (IsSplitConcatReorderFusionGraph(graph)) {
         ep->GetFusionComputes()[fused_node_name] =
             CreateSplitConcatReorderFusion(graph, fused_node);
+      } else if (IsTileConcatFusionGraph(graph)) {
+        ep->GetFusionComputes()[fused_node_name] =
+            CreateTileConcatFusion(graph, fused_node);
       } else {
         ep->GetFusionComputes()[fused_node_name] =
             CreateConcatMatMulFusion(graph, fused_node);

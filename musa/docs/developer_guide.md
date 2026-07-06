@@ -58,7 +58,7 @@ MUSA_VISIBLE_DEVICES=0 ./.venv/bin/python -m pytest test/ops/test_matmul.py -q
 
 ## MUSA EP 调试开关
 
-### `ORT_MUSA_DUMP_GRAPH_MERMAID`
+### `ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID`
 
 - 读取位置：`musa/ep/src/graph_mermaid_dump.cc`
 - 用途：在 `MusaEp::GetCapabilityImpl()` 入口处，将 ORT 传入 MUSA EP 之前的 graph dump 成 Mermaid `.mmd`。
@@ -68,24 +68,46 @@ MUSA_VISIBLE_DEVICES=0 ./.venv/bin/python -m pytest test/ops/test_matmul.py -q
 - 示例：
 
 ```bash
-ORT_MUSA_DUMP_GRAPH_MERMAID=1 ./.venv/bin/python your_script.py
+ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID=1 ./.venv/bin/python your_script.py
 ```
 
-### `ORT_MUSA_DUMP_GRAPH_MERMAID_PATH`
+### `ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID_PATH`
 
 - 读取位置：`musa/ep/src/graph_mermaid_dump.cc`
-- 用途：指定 Mermaid dump 文件路径。
-- 默认值：`musa_ep_getcapability_graph_<n>.mmd`
+- 用途：指定 GetCapability Mermaid dump 文件路径。
+- 默认值：`musa_ep_get_capability_graph_<n>.mmd`
 - 编号规则：
   - 路径包含 `{}` 时，用 dump 序号替换 `{}`。
   - 路径不包含 `{}` 时，第 0 次使用原路径，后续自动在扩展名前追加 `_1`、`_2` 等。
 - 示例：
 
 ```bash
-ORT_MUSA_DUMP_GRAPH_MERMAID=1 \
-ORT_MUSA_DUMP_GRAPH_MERMAID_PATH=/tmp/musa_graph_{}.mmd \
+ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID=1 \
+ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID_PATH=/tmp/musa_get_capability_graph_{}.mmd \
 ./.venv/bin/python your_script.py
 ```
+
+### `ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID`
+
+- 读取位置：`musa/ep/src/runtime_graph_dump.cc`
+- 用途：记录 session 最终实际交给 MUSA EP 执行的 execution graph，并在进程正常退出时输出 Mermaid `.mmd`。
+- 默认值：未设置时关闭。
+- 关闭值：空值、`0`、`false`、`off`、`no`。
+- 输出内容：普通 MUSA kernel 和 MUSA EP fused node 的最终拓扑，边由 tensor value name 建立；fusion 节点会显示实际 dispatch 到的 `*FusionCompute`，例如 `TileConcatFusionCompute`、`LinearFusionCompute`。
+- 注意：这是 MUSA EP execution graph，不是 MUSA profiler 时间线；muDNN/muBLAS 内部展开出的硬件 kernel 不会在这里继续拆分。
+- 示例：
+
+```bash
+ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID=1 \
+ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID_PATH=/tmp/musa_runtime_execution_graph.mmd \
+./.venv/bin/python your_script.py
+```
+
+### `ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID_PATH`
+
+- 读取位置：`musa/ep/src/runtime_graph_dump.cc`
+- 用途：指定 runtime execution graph Mermaid dump 文件路径。
+- 默认值：`musa_ep_runtime_execution_graph.mmd`
 
 ### `MUSA_EP_TRACE_KERNELS`
 
@@ -185,8 +207,10 @@ MUSA_ENABLE_TF32=1 ./.venv/bin/python your_script.py
 | `LD_LIBRARY_PATH` | 动态链接 | 系统值 | 让运行时找到 MUSA toolkit 动态库 |
 | `MUSA_HOME` | CMake cache | `/usr/local/musa` | 指定 MUSA toolkit 安装目录 |
 | `MUSA_VISIBLE_DEVICES` | MUSA runtime | runtime 默认 | 限制可见 MUSA 设备 |
-| `ORT_MUSA_DUMP_GRAPH_MERMAID` | EP 调试 | 关闭 | GetCapability 前 dump Mermaid graph |
-| `ORT_MUSA_DUMP_GRAPH_MERMAID_PATH` | EP 调试 | `musa_ep_getcapability_graph_<n>.mmd` | 指定 Mermaid 输出文件 |
+| `ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID` | EP 调试 | 关闭 | GetCapability 前 dump Mermaid graph |
+| `ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID_PATH` | EP 调试 | `musa_ep_get_capability_graph_<n>.mmd` | 指定 GetCapability Mermaid 输出文件 |
+| `ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID` | EP 调试 | 关闭 | 运行结束时 dump runtime execution graph |
+| `ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID_PATH` | EP 调试 | `musa_ep_runtime_execution_graph.mmd` | 指定 runtime execution graph Mermaid 输出文件 |
 | `MUSA_EP_TRACE_KERNELS` | EP 调试 | 关闭 | 打印 kernel 创建/执行 trace |
 | `MUSA_EP_TRACE_SYNC` | EP 调试 | 关闭 | trace 模式下强制 stream 同步 |
 | `ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB` | 内存调优 | `0` MB | Device allocator cache 上限 |
@@ -201,8 +225,16 @@ MUSA_ENABLE_TF32=1 ./.venv/bin/python your_script.py
 ### Dump GetCapability 前的图
 
 ```bash
-ORT_MUSA_DUMP_GRAPH_MERMAID=1 \
-ORT_MUSA_DUMP_GRAPH_MERMAID_PATH=/tmp/musa_graph_{}.mmd \
+ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID=1 \
+ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID_PATH=/tmp/musa_get_capability_graph_{}.mmd \
+./.venv/bin/python your_script.py
+```
+
+### Dump runtime execution graph
+
+```bash
+ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID=1 \
+ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID_PATH=/tmp/musa_runtime_execution_graph.mmd \
 ./.venv/bin/python your_script.py
 ```
 

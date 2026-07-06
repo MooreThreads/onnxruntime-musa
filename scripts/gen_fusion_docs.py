@@ -201,16 +201,19 @@ def _compile_entries() -> list[CompileEntry]:
     text = _strip_comments(COMPUTE_CC.read_text())
     body = _extract_function_body(text, "MusaEp::CompileImpl")
     entries: list[CompileEntry] = []
+    assignment_target = (
+        r"(?:ep->GetFusionComputes\(\)\[fused_node_name\]|fusion_compute)"
+    )
     for m in re.finditer(
         r"(?:if|else if)\s*\(\s*(?P<detector>Is\w+FusionGraph)\s*\(\s*graph\s*\)\s*\)"
-        r"\s*\{\s*ep->GetFusionComputes\(\)\[fused_node_name\]\s*=\s*"
+        r"\s*\{\s*" + assignment_target + r"\s*=\s*"
         r"(?P<factory>Create\w+Fusion)\s*\(",
         body,
         re.DOTALL,
     ):
         entries.append(CompileEntry(detector=m.group("detector"), factory=m.group("factory")))
     fallback = re.search(
-        r"else\s*\{\s*ep->GetFusionComputes\(\)\[fused_node_name\]\s*=\s*"
+        r"else\s*\{\s*" + assignment_target + r"\s*=\s*"
         r"(?P<factory>Create\w+Fusion)\s*\(",
         body,
         re.DOTALL,

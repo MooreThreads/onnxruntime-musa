@@ -5,9 +5,11 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 #include "../plugin_ep_utils.h"
+#include "runtime_graph_dump.h"
 
 /// <summary>
 /// Gets an OrtDataType for a tensor type. Throws on error.
@@ -129,63 +131,85 @@ static constexpr const char* kMSDomain = "com.microsoft";
 
 // Defines a function of type BuildKernelCreateInfoFn for a kernel
 // implementation with a start and end version range.
-#define ONNX_OPERATOR_VERSIONED_KERNEL_EX(name, domain, startver, endver,     \
-                                          builder, kernel_class)              \
-  class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(domain, startver, endver,   \
-                                                  name);                      \
-  template <>                                                                 \
-  OrtStatus* BuildKernelCreateInfo<ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME( \
-      domain, startver, endver, name)>(const char* ep_name,                   \
-                                       void* create_kernel_state,             \
-                                       KernelCreateInfo* result) {            \
-    try {                                                                     \
-      Ort::KernelDef kernel_def = builder.SetOperatorType(#name)              \
-                                      .SetDomain(domain)                      \
-                                      .SetSinceVersion(startver, endver)      \
-                                      .SetExecutionProvider(ep_name)          \
-                                      .Build();                               \
-                                                                              \
-      auto kernel_create_func =                                               \
-          [](void* state, const OrtKernelInfo* info,                          \
-             OrtKernelImpl** kernel_out) noexcept -> OrtStatus* {             \
-        RETURN_IF(kernel_out == nullptr, Ort::GetApi(),                       \
-                  "OrtKernelCreateFunc received a NULL kernel_out argument"); \
-                                                                              \
-        *kernel_out = nullptr;                                                \
-        if (std::getenv("MUSA_EP_TRACE_KERNELS") != nullptr) {                \
-          Ort::ConstKernelInfo kernel_info(info);                             \
-          std::string node_name = kernel_info.GetNodeName();                  \
-          std::fprintf(stderr, "MUSA_KERNEL_CREATE %s node=%s\n", #name,      \
-                       node_name.c_str());                                    \
-          std::fflush(stderr);                                                \
-        }                                                                     \
-        RETURN_IF_ERROR(                                                      \
-            kernel_class::CreateKernelImpl(info, state, *kernel_out));        \
-        if (std::getenv("MUSA_EP_TRACE_KERNELS") != nullptr) {                \
-          Ort::ConstKernelInfo kernel_info(info);                             \
-          std::string node_name = kernel_info.GetNodeName();                  \
-          std::fprintf(stderr, "MUSA_KERNEL_CREATED %s node=%s impl=%p\n",    \
-                       #name, node_name.c_str(),                              \
-                       static_cast<void*>(*kernel_out));                      \
-          std::fflush(stderr);                                                \
-        }                                                                     \
-        return nullptr;                                                       \
-      };                                                                      \
-                                                                              \
-      *result = KernelCreateInfo(std::move(kernel_def), kernel_create_func,   \
-                                 create_kernel_state);                        \
-    } catch (const Ort::Exception& ex) {                                      \
-      Ort::Status status(ex);                                                 \
-      return status.release();                                                \
-    } catch (const std::exception& ex) {                                      \
-      Ort::Status status(ex.what(), ORT_EP_FAIL);                             \
-      return status.release();                                                \
-    }                                                                         \
-    return nullptr;                                                           \
-  }                                                                           \
-  static const KernelCreateInfoRegistrar MUSA_CONCAT(kernel_registrar_,       \
-                                                     __LINE__)(               \
-      BuildKernelCreateInfo<ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(        \
+#define ONNX_OPERATOR_VERSIONED_KERNEL_EX(name, domain, startver, endver,      \
+                                          builder, kernel_class)               \
+  class ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(domain, startver, endver,    \
+                                                  name);                       \
+  template <>                                                                  \
+  OrtStatus* BuildKernelCreateInfo<ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(  \
+      domain, startver, endver, name)>(const char* ep_name,                    \
+                                       void* create_kernel_state,              \
+                                       KernelCreateInfo* result) {             \
+    try {                                                                      \
+      Ort::KernelDef kernel_def = builder.SetOperatorType(#name)               \
+                                      .SetDomain(domain)                       \
+                                      .SetSinceVersion(startver, endver)       \
+                                      .SetExecutionProvider(ep_name)           \
+                                      .Build();                                \
+                                                                               \
+      auto kernel_create_func =                                                \
+          [](void* state, const OrtKernelInfo* info,                           \
+             OrtKernelImpl** kernel_out) noexcept -> OrtStatus* {              \
+        EXCEPTION_TO_RETURNED_STATUS_BEGIN                                     \
+        RETURN_IF(kernel_out == nullptr, Ort::GetApi(),                        \
+                  "OrtKernelCreateFunc received a NULL kernel_out argument");  \
+                                                                               \
+        *kernel_out = nullptr;                                                 \
+        const bool trace_kernels =                                             \
+            std::getenv("MUSA_EP_TRACE_KERNELS") != nullptr;                   \
+        const bool dump_runtime_graph = RuntimeGraphDumpEnabled();             \
+        std::string node_name;                                                 \
+        if (trace_kernels || dump_runtime_graph) {                             \
+          Ort::ConstKernelInfo kernel_info(info);                              \
+          node_name = kernel_info.GetNodeName();                               \
+        }                                                                      \
+        if (trace_kernels) {                                                   \
+          std::fprintf(stderr, "MUSA_KERNEL_CREATE %s node=%s\n", #name,       \
+                       node_name.c_str());                                     \
+          std::fflush(stderr);                                                 \
+        }                                                                      \
+        RETURN_IF_ERROR(                                                       \
+            kernel_class::CreateKernelImpl(info, state, *kernel_out));         \
+        if (dump_runtime_graph) {                                              \
+          Ort::ConstKernelInfo kernel_info(info);                              \
+          RuntimeGraphNodeMetadata runtime_node;                               \
+          runtime_node.kind = "kernel";                                        \
+          runtime_node.display_type = #name;                                   \
+          runtime_node.node_name = node_name;                                  \
+          runtime_node.domain_name = kernel_info.GetOperatorDomain();          \
+          runtime_node.since_version = kernel_info.GetOperatorSinceVersion();  \
+          for (size_t i = 0; i < kernel_info.GetInputCount(); ++i) {           \
+            runtime_node.inputs.push_back(kernel_info.GetInputName(i));        \
+          }                                                                    \
+          for (size_t i = 0; i < kernel_info.GetOutputCount(); ++i) {          \
+            runtime_node.outputs.push_back(kernel_info.GetOutputName(i));      \
+          }                                                                    \
+          RegisterRuntimeKernelInstance(*kernel_out, std::move(runtime_node)); \
+        }                                                                      \
+        if (trace_kernels) {                                                   \
+          std::fprintf(stderr, "MUSA_KERNEL_CREATED %s node=%s impl=%p\n",     \
+                       #name, node_name.c_str(),                               \
+                       static_cast<void*>(*kernel_out));                       \
+          std::fflush(stderr);                                                 \
+        }                                                                      \
+        return nullptr;                                                        \
+        EXCEPTION_TO_RETURNED_STATUS_END                                       \
+      };                                                                       \
+                                                                               \
+      *result = KernelCreateInfo(std::move(kernel_def), kernel_create_func,    \
+                                 create_kernel_state);                         \
+    } catch (const Ort::Exception& ex) {                                       \
+      Ort::Status status(ex);                                                  \
+      return status.release();                                                 \
+    } catch (const std::exception& ex) {                                       \
+      Ort::Status status(ex.what(), ORT_EP_FAIL);                              \
+      return status.release();                                                 \
+    }                                                                          \
+    return nullptr;                                                            \
+  }                                                                            \
+  static const KernelCreateInfoRegistrar MUSA_CONCAT(kernel_registrar_,        \
+                                                     __LINE__)(                \
+      BuildKernelCreateInfo<ONNX_OPERATOR_VERSIONED_KERNEL_CLASS_NAME(         \
           domain, startver, endver, name)>);
 
 // Defines a function of type BuildKernelCreateInfoFn for a kernel

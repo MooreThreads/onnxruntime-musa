@@ -33,6 +33,7 @@
 #include "math/unary_elementwise_ops_impl.h"
 #include "pinned_host_pool.h"
 #include "runtime/ep_musa_utils.h"
+#include "runtime_graph_dump.h"
 #include "utils.h"
 
 // CRTP base shared by every elementary kernel. Derived classes only need to
@@ -62,7 +63,19 @@ class OpKernelBase : public OrtKernelImpl {
       std::fflush(stderr);
     }
     Ort::KernelContext ctx(kernel_ctx);
-    OrtStatus* status = k->Compute(ctx);
+    OrtStatus* status = nullptr;
+    if (RuntimeGraphDumpEnabled()) {
+      struct RuntimeComputeScope {
+        explicit RuntimeComputeScope(const void* impl,
+                                     const char* fallback_label)
+            : id(BeginRuntimeCompute(impl, fallback_label)) {}
+        ~RuntimeComputeScope() { EndRuntimeCompute(id); }
+        uint64_t id;
+      } runtime_compute_scope(this_ptr, typeid(Derived).name());
+      status = k->Compute(ctx);
+    } else {
+      status = k->Compute(ctx);
+    }
     if (std::getenv("MUSA_EP_TRACE_KERNELS") != nullptr) {
       if (status == nullptr && std::getenv("MUSA_EP_TRACE_SYNC") != nullptr) {
         musaError_t sync_status = musaStreamSynchronize(
@@ -82,6 +95,7 @@ class OpKernelBase : public OrtKernelImpl {
   }
 
   static void ORT_API_CALL ReleaseImpl(OrtKernelImpl* this_ptr) noexcept {
+    UnregisterRuntimeKernelInstance(this_ptr);
     delete static_cast<Derived*>(this_ptr);
   }
 

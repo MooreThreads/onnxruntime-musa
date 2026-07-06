@@ -208,3 +208,6 @@ Key entry points:
 For the longer migration story from the in-tree `onnx_musa` provider, see
 [musa/docs/migration-from-onnx-musa.md](musa/docs/migration-from-onnx-musa.md) and
 [musa/docs/supported_ops.md](musa/docs/supported_ops.md).
+Fusion documentation is generated the same way: [musa/docs/fusion_priority.md](musa/docs/fusion_priority.md)
+lists the GetCapability/Compile priority order, and [musa/docs/fusion/](musa/docs/fusion/)
+contains the per-fusion graph notes generated from the current C++ fusion sources.

@@ -100,4 +100,5 @@ Everything else has hidden visibility, so the plugin can evolve without breaking
   headers under [`third_party/onnxruntime/include/`](../../third_party/onnxruntime/). No
   GSL; `std::span` (C++20) is used instead.
 - **Run time**: any `onnxruntime` matching the wheel's `onnxruntime~=<vendored-version>`
-  constraint, plus the MUSA toolkit shared libraries available on `LD_LIBRARY_PATH`.
+  constraint, plus the MUSA toolkit shared libraries. See
+  [developer_guide.md](developer_guide.md) for environment setup.

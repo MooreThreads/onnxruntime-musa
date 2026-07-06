@@ -12,6 +12,7 @@ set(MUSA_PLUGIN_SOURCES
   src/ep_data_transfer.cc
   src/ep_profiling.cc
   src/ep_stream.cc
+  src/graph_mermaid_dump.cc
 )
 
 file(GLOB_RECURSE MUSA_PLUGIN_KERNEL_SOURCES CONFIGURE_DEPENDS

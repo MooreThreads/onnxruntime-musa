@@ -21,7 +21,8 @@ musa/ep/                    # plugin EP sources, kernels, Python packaging
 third_party/onnxruntime/    # vendored ORT public headers (tag v1.26.0)
 ```
 
-See [musa/docs/architecture.md](musa/docs/architecture.md) for design notes.
+See [musa/docs/architecture.md](musa/docs/architecture.md) for design notes. See
+[musa/docs/developer_guide.md](musa/docs/developer_guide.md) for environment variables and developer switches.
 
 ---
 

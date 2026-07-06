@@ -30,6 +30,7 @@
 #include "fusion/shape_reshape_fusion.h"
 #include "fusion/split_reduce_fusion.h"
 #include "fusion/tile_concat_fusion.h"
+#include "graph_mermaid_dump.h"
 #include "plugin_ep_utils.h"
 
 namespace {
@@ -2784,6 +2785,8 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
                           OrtEpGraphSupportInfo* graph_support_info) noexcept {
   try {
     MusaEp* ep = static_cast<MusaEp*>(this_ptr);
+
+    RETURN_IF_ERROR(DumpGraphToMermaidIfEnabled(*ort_graph));
 
     Ort::ConstGraph graph{ort_graph};
     std::vector<Ort::ConstNode> all_nodes = graph.GetNodes();

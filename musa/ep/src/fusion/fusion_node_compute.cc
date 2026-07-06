@@ -3,9 +3,17 @@
 
 #include "fusion/fusion_node_compute.h"
 
+#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <string>
+#include <typeinfo>
+#include <unordered_set>
+#include <vector>
+
+#if defined(__GNUG__)
+#include <cxxabi.h>
+#endif
 
 #include "ep.h"
 #include "fusion/centered_reduce_fusion.h"
@@ -18,6 +26,8 @@
 #include "fusion/split_reduce_fusion.h"
 #include "fusion/split_unsqueeze_concat_fusion.h"
 #include "fusion/tile_concat_fusion.h"
+#include "plugin_ep_utils.h"
+#include "runtime_graph_dump.h"
 
 /*
  * Fusion node runtime bridge
@@ -38,6 +48,68 @@
  */
 
 namespace {
+
+std::vector<std::string> ValueInfoNames(
+    const std::vector<Ort::ConstValueInfo>& value_infos) {
+  std::vector<std::string> names;
+  names.reserve(value_infos.size());
+  for (Ort::ConstValueInfo value_info : value_infos) {
+    if (value_info != nullptr) {
+      names.push_back(value_info.GetName());
+    }
+  }
+  return names;
+}
+
+RuntimeGraphNodeMetadata CreateFusionRuntimeMetadata(
+    const Ort::ConstGraph& graph, const Ort::ConstNode& fused_node,
+    const std::string& display_type) {
+  RuntimeGraphNodeMetadata metadata;
+  metadata.kind = "fusion";
+  metadata.display_type = display_type;
+  metadata.node_name = fused_node.GetName();
+  metadata.domain_name = fused_node.GetDomain();
+  metadata.since_version = fused_node.GetSinceVersion();
+  metadata.inputs = ValueInfoNames(fused_node.GetInputs());
+  metadata.outputs = ValueInfoNames(fused_node.GetOutputs());
+
+  std::unordered_set<std::string> seen_source_ops;
+  for (Ort::ConstNode source_node : graph.GetNodes()) {
+    std::string source_name = source_node.GetName();
+    if (source_name.empty()) {
+      source_name = source_node.GetOperatorType();
+    }
+    metadata.source_nodes.push_back(std::move(source_name));
+
+    std::string source_op = source_node.GetOperatorType();
+    if (seen_source_ops.insert(source_op).second) {
+      metadata.source_ops.push_back(std::move(source_op));
+    }
+  }
+  return metadata;
+}
+
+std::string RuntimeTypeName(const FusionNodeCompute& compute) {
+  std::string name;
+#if defined(__GNUG__)
+  int status = 0;
+  char* demangled =
+      abi::__cxa_demangle(typeid(compute).name(), nullptr, nullptr, &status);
+  if (status == 0 && demangled != nullptr) {
+    name = demangled;
+  }
+  std::free(demangled);
+#endif
+  if (name.empty()) {
+    name = typeid(compute).name();
+  }
+
+  const size_t namespace_pos = name.rfind("::");
+  if (namespace_pos != std::string::npos) {
+    name = name.substr(namespace_pos + 2);
+  }
+  return name;
+}
 
 struct FusionNodeComputeInfo : OrtNodeComputeInfo {
   explicit FusionNodeComputeInfo(MusaEp& ep) : ep(ep) {
@@ -70,6 +142,16 @@ struct FusionNodeComputeInfo : OrtNodeComputeInfo {
                                              void* compute_state,
                                              OrtKernelContext* kernel_context) {
     auto* fusion = reinterpret_cast<const FusionNodeCompute*>(compute_state);
+    if (RuntimeGraphDumpEnabled()) {
+      struct RuntimeComputeScope {
+        explicit RuntimeComputeScope(const void* impl,
+                                     const char* fallback_label)
+            : id(BeginRuntimeCompute(impl, fallback_label)) {}
+        ~RuntimeComputeScope() { EndRuntimeCompute(id); }
+        uint64_t id;
+      } runtime_compute_scope(fusion, "FusionNodeCompute");
+      return fusion->Compute(kernel_context);
+    }
     return fusion->Compute(kernel_context);
   }
 
@@ -110,36 +192,33 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       }
 
       std::string fused_node_name = fused_node.GetName();
+      auto& fusion_compute = ep->GetFusionComputes()[fused_node_name];
       if (IsCenteredReduceFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateCenteredReduceFusion(graph, fused_node);
+        fusion_compute = CreateCenteredReduceFusion(graph, fused_node);
       } else if (IsShapeReshapeFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateShapeReshapeFusion(graph, fused_node);
+        fusion_compute = CreateShapeReshapeFusion(graph, fused_node);
       } else if (IsSplitReduceFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateSplitReduceFusion(graph, fused_node);
+        fusion_compute = CreateSplitReduceFusion(graph, fused_node);
       } else if (IsLinearFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateLinearFusion(graph, fused_node);
+        fusion_compute = CreateLinearFusion(graph, fused_node);
       } else if (IsConcatSplitFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateConcatSplitFusion(graph, fused_node);
+        fusion_compute = CreateConcatSplitFusion(graph, fused_node);
       } else if (IsSliceConcatFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateSliceConcatFusion(graph, fused_node);
+        fusion_compute = CreateSliceConcatFusion(graph, fused_node);
       } else if (IsSplitUnsqueezeConcatFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateSplitUnsqueezeConcatFusion(graph, fused_node);
+        fusion_compute = CreateSplitUnsqueezeConcatFusion(graph, fused_node);
       } else if (IsSplitConcatReorderFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateSplitConcatReorderFusion(graph, fused_node);
+        fusion_compute = CreateSplitConcatReorderFusion(graph, fused_node);
       } else if (IsTileConcatFusionGraph(graph)) {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateTileConcatFusion(graph, fused_node);
+        fusion_compute = CreateTileConcatFusion(graph, fused_node);
       } else {
-        ep->GetFusionComputes()[fused_node_name] =
-            CreateConcatMatMulFusion(graph, fused_node);
+        fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
+      }
+      if (RuntimeGraphDumpEnabled()) {
+        RegisterRuntimeFusionInstance(
+            fusion_compute.get(),
+            CreateFusionRuntimeMetadata(graph, fused_node,
+                                        RuntimeTypeName(*fusion_compute)));
       }
       node_compute_infos[i] = CreateFusionNodeComputeInfo(*ep);
     }

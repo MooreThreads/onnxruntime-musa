@@ -13,11 +13,12 @@
 
 namespace {
 
-constexpr const char* kDumpGraphMermaidEnv = "ORT_MUSA_DUMP_GRAPH_MERMAID";
-constexpr const char* kDumpGraphMermaidPathEnv =
-    "ORT_MUSA_DUMP_GRAPH_MERMAID_PATH";
+constexpr const char* kDumpGetCapabilityGraphMermaidEnv =
+    "ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID";
+constexpr const char* kDumpGetCapabilityGraphMermaidPathEnv =
+    "ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID_PATH";
 
-std::atomic<uint64_t> g_dump_counter{0};
+std::atomic<uint64_t> g_get_capability_dump_counter{0};
 
 bool EnvEnabled(const char* value) {
   if (value == nullptr || value[0] == '\0') {
@@ -61,13 +62,18 @@ std::string NodeId(const Ort::ConstNode& node) {
   return "node_" + std::to_string(node.GetId());
 }
 
+std::string NodeId(const std::string& prefix, const Ort::ConstNode& node) {
+  return prefix + "_" + NodeId(node);
+}
+
 std::string EdgeKey(const std::string& from, const std::string& to) {
   return from + "\n" + to;
 }
 
-std::string NumberedPath(const char* configured_path, uint64_t index) {
+std::string NumberedPath(const char* configured_path,
+                         const char* default_prefix, uint64_t index) {
   if (configured_path == nullptr || configured_path[0] == '\0') {
-    return "musa_ep_getcapability_graph_" + std::to_string(index) + ".mmd";
+    return std::string(default_prefix) + "_" + std::to_string(index) + ".mmd";
   }
 
   std::string path(configured_path);
@@ -106,38 +112,19 @@ std::string NodeLabel(const Ort::ConstNode& node) {
   return node.GetOperatorType();
 }
 
-}  // namespace
-
-Ort::Status DumpGraphToMermaidIfEnabled(const OrtGraph& ort_graph) {
-  const char* enabled = std::getenv(kDumpGraphMermaidEnv);
-  if (!EnvEnabled(enabled)) {
-    return Ort::Status(nullptr);
-  }
-
-  const uint64_t dump_index = g_dump_counter.fetch_add(1);
-  const std::string path =
-      NumberedPath(std::getenv(kDumpGraphMermaidPathEnv), dump_index);
-  std::ofstream out(path, std::ios::out | std::ios::trunc);
-  if (!out) {
-    const std::string message =
-        "Failed to open MUSA EP Mermaid graph dump file: " + path;
-    return Ort::Status(message.c_str(), ORT_EP_FAIL);
-  }
-
+void WriteGraph(std::ostream& out, const OrtGraph& ort_graph,
+                const std::string& node_prefix,
+                std::unordered_set<std::string>& seen_edges) {
   Ort::ConstGraph graph{&ort_graph};
   const std::vector<Ort::ConstNode> nodes = graph.GetNodes();
 
-  out << "flowchart TD\n";
-
-  std::unordered_set<std::string> seen_edges;
-
   for (const Ort::ConstNode& node : nodes) {
-    out << "  " << NodeId(node) << "[\"" << EscapeLabel(NodeLabel(node))
-        << "\"]\n";
+    out << "    " << NodeId(node_prefix, node) << "[\""
+        << EscapeLabel(NodeLabel(node)) << "\"]\n";
   }
 
   for (const Ort::ConstNode& node : nodes) {
-    const std::string to = NodeId(node);
+    const std::string to = NodeId(node_prefix, node);
     for (Ort::ConstValueInfo input : node.GetInputs()) {
       if (input == nullptr) {
         continue;
@@ -145,10 +132,38 @@ Ort::Status DumpGraphToMermaidIfEnabled(const OrtGraph& ort_graph) {
 
       Ort::ValueInfoConsumerProducerInfo producer = input.GetProducerNode();
       if (producer.node != nullptr) {
-        WriteEdge(out, seen_edges, NodeId(producer.node), to);
+        WriteEdge(out, seen_edges, NodeId(node_prefix, producer.node), to);
       }
     }
   }
+}
+
+}  // namespace
+
+Ort::Status DumpGraphToMermaidIfEnabled(const OrtGraph& ort_graph,
+                                        const char* enabled_env,
+                                        const char* path_env,
+                                        const char* default_prefix,
+                                        std::atomic<uint64_t>& counter) {
+  const char* enabled = std::getenv(enabled_env);
+  if (!EnvEnabled(enabled)) {
+    return Ort::Status(nullptr);
+  }
+
+  const uint64_t dump_index = counter.fetch_add(1);
+  const std::string path =
+      NumberedPath(std::getenv(path_env), default_prefix, dump_index);
+  std::ofstream out(path, std::ios::out | std::ios::trunc);
+  if (!out) {
+    const std::string message =
+        "Failed to open MUSA EP Mermaid graph dump file: " + path;
+    return Ort::Status(message.c_str(), ORT_EP_FAIL);
+  }
+
+  out << "flowchart TD\n";
+
+  std::unordered_set<std::string> seen_edges;
+  WriteGraph(out, ort_graph, "graph", seen_edges);
 
   if (!out) {
     const std::string message =
@@ -157,4 +172,12 @@ Ort::Status DumpGraphToMermaidIfEnabled(const OrtGraph& ort_graph) {
   }
 
   return Ort::Status(nullptr);
+}
+
+Ort::Status DumpGetCapabilityGraphToMermaidIfEnabled(
+    const OrtGraph& ort_graph) {
+  return DumpGraphToMermaidIfEnabled(
+      ort_graph, kDumpGetCapabilityGraphMermaidEnv,
+      kDumpGetCapabilityGraphMermaidPathEnv, "musa_ep_get_capability_graph",
+      g_get_capability_dump_counter);
 }

@@ -7,4 +7,4 @@
 #include "onnxruntime_cxx_api.h"
 #undef ORT_API_MANUAL_INIT
 
-Ort::Status DumpGraphToMermaidIfEnabled(const OrtGraph& ort_graph);
+Ort::Status DumpGetCapabilityGraphToMermaidIfEnabled(const OrtGraph& ort_graph);

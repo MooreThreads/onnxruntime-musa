@@ -2786,7 +2786,7 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
   try {
     MusaEp* ep = static_cast<MusaEp*>(this_ptr);
 
-    RETURN_IF_ERROR(DumpGraphToMermaidIfEnabled(*ort_graph));
+    RETURN_IF_ERROR(DumpGetCapabilityGraphToMermaidIfEnabled(*ort_graph));
 
     Ort::ConstGraph graph{ort_graph};
     std::vector<Ort::ConstNode> all_nodes = graph.GetNodes();

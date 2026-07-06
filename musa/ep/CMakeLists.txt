@@ -77,10 +77,17 @@ endif()
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
   set(_GEN_SUPPORTED_OPS "${CMAKE_SOURCE_DIR}/scripts/gen_supported_ops.py")
+  set(_GEN_FUSION_DOCS "${CMAKE_SOURCE_DIR}/scripts/gen_fusion_docs.py")
   add_custom_command(TARGET ${MUSA_PLUGIN_TARGET} POST_BUILD
     COMMAND ${Python3_EXECUTABLE} ${_GEN_SUPPORTED_OPS}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Regenerating musa/docs/supported_ops.md"
+    VERBATIM
+  )
+  add_custom_command(TARGET ${MUSA_PLUGIN_TARGET} POST_BUILD
+    COMMAND ${Python3_EXECUTABLE} ${_GEN_FUSION_DOCS}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Regenerating musa/docs/fusion/*.md"
     VERBATIM
   )
 endif()

@@ -18,6 +18,7 @@ This file is generated from `MusaEp::GetCapabilityImpl` and `MusaEp::CompileImpl
 | 9 | Shape + Reshape Fusion | `FindShapeReshapeFusions` | `true` | [shape_reshape.md](fusion/shape_reshape.md) |
 | 10 | Centered + Reduce Fusion | `FindCenteredReduceFusions` | `false` | [centered_reduce.md](fusion/centered_reduce.md) |
 | 11 | Split + Reduce Fusion | `FindSplitReduceFusions` | `false` | [split_reduce.md](fusion/split_reduce.md) |
+| 12 | Rms + Norm Fusion | `FindRmsNormFusions` | `false` | [rms_norm.md](fusion/rms_norm.md) |
 
 ## Compile Dispatch Order
 
@@ -32,4 +33,5 @@ This file is generated from `MusaEp::GetCapabilityImpl` and `MusaEp::CompileImpl
 | 7 | `IsSplitUnsqueezeConcatFusionGraph` | `CreateSplitUnsqueezeConcatFusion` | [split_unsqueeze_concat](fusion/split_unsqueeze_concat.md) |
 | 8 | `IsSplitConcatReorderFusionGraph` | `CreateSplitConcatReorderFusion` | [split_concat_reorder](fusion/split_concat_reorder.md) |
 | 9 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
-| 10 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
+| 10 | `IsRmsNormFusionGraph` | `CreateRmsNormFusion` | [rms_norm](fusion/rms_norm.md) |
+| 11 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |

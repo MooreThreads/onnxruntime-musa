@@ -20,6 +20,7 @@
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/concat_split_fusion.h"
 #include "fusion/linear_fusion.h"
+#include "fusion/rms_norm_fusion.h"
 #include "fusion/shape_reshape_fusion.h"
 #include "fusion/slice_concat_fusion.h"
 #include "fusion/split_concat_reorder_fusion.h"
@@ -211,6 +212,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateSplitConcatReorderFusion(graph, fused_node);
       } else if (IsTileConcatFusionGraph(graph)) {
         fusion_compute = CreateTileConcatFusion(graph, fused_node);
+      } else if (IsRmsNormFusionGraph(graph)) {
+        fusion_compute = CreateRmsNormFusion(graph, fused_node);
       } else {
         fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
       }

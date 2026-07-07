@@ -2,6 +2,7 @@
 """Generate MUSA fusion docs by extracting fusion structure from C++ sources."""
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ REPO = Path(__file__).resolve().parents[1]
 EP_CC = REPO / "musa" / "ep" / "src" / "ep.cc"
 COMPUTE_CC = REPO / "musa" / "ep" / "src" / "fusion" / "fusion_node_compute.cc"
 FUSION_DIR = REPO / "musa" / "ep" / "src" / "fusion"
+FUSION_TEST_DIR = REPO / "test" / "fusion"
 OUTPUT_DIR = REPO / "musa" / "docs" / "fusion"
 PRIORITY_OUTPUT = REPO / "musa" / "docs" / "fusion_priority.md"
 
@@ -57,6 +59,7 @@ class FusionInfo:
     extracted_ops: list[str]
     pattern_labels: list[str]
     pattern_graph: PatternGraph | None
+    test_graph: TestGraph | None
 
 
 @dataclass
@@ -75,6 +78,15 @@ class PatternEdge:
 class PatternGraph:
     nodes: list[PatternNode]
     edges: list[PatternEdge]
+
+
+@dataclass
+class TestGraph:
+    source: Path
+    function: str
+    nodes: list[PatternNode]
+    edges: list[PatternEdge]
+    ops: list[str]
 
 
 def _strip_comments(text: str) -> str:
@@ -179,6 +191,133 @@ def _title_from_stem(stem: str, known_ops: set[str]) -> str:
 
 def _relative(path: Path) -> str:
     return str(path.relative_to(REPO))
+
+
+def _literal_string_list(node: ast.AST) -> list[str] | None:
+    if isinstance(node, ast.List | ast.Tuple):
+        values: list[str] = []
+        for elt in node.elts:
+            if not isinstance(elt, ast.Constant) or not isinstance(elt.value, str):
+                return None
+            values.append(elt.value)
+        return values
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    return None
+
+
+def _make_node_call(call: ast.Call) -> tuple[str, list[str], list[str]] | None:
+    func = call.func
+    if not (
+        isinstance(func, ast.Attribute)
+        and func.attr == "make_node"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "helper"
+    ):
+        return None
+    if len(call.args) < 3:
+        return None
+    op_arg = call.args[0]
+    if not isinstance(op_arg, ast.Constant) or not isinstance(op_arg.value, str):
+        return None
+    inputs = _literal_string_list(call.args[1])
+    outputs = _literal_string_list(call.args[2])
+    if inputs is None or outputs is None:
+        return None
+    return op_arg.value, inputs, outputs
+
+
+def _test_graph_from_function(source: Path, function: ast.FunctionDef) -> TestGraph | None:
+    nodes: list[PatternNode] = []
+    edges: list[PatternEdge] = []
+    producer_by_value: dict[str, str] = {}
+    edge_seen: set[tuple[str, str]] = set()
+    ops: list[str] = []
+
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        parsed = _make_node_call(node)
+        if parsed is None:
+            continue
+        op, inputs, outputs = parsed
+        var = f"{function.name}_{len(nodes)}"
+        nodes.append(PatternNode(var=var, label=op))
+        ops.append(op)
+        for input_name in inputs:
+            producer = producer_by_value.get(input_name)
+            if producer is None:
+                continue
+            key = (producer, var)
+            if key not in edge_seen:
+                edge_seen.add(key)
+                edges.append(PatternEdge(src=producer, dst=var))
+        for output_name in outputs:
+            producer_by_value[output_name] = var
+
+    if not nodes:
+        return None
+    return TestGraph(
+        source=source,
+        function=function.name,
+        nodes=nodes,
+        edges=edges,
+        ops=_ordered_unique(ops),
+    )
+
+
+def _test_graphs() -> list[TestGraph]:
+    graphs: list[TestGraph] = []
+    for path in sorted(FUSION_TEST_DIR.glob("test_*_fusion.py")):
+        try:
+            tree = ast.parse(path.read_text(), filename=str(path))
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            graph = _test_graph_from_function(path, node)
+            if graph is not None:
+                graphs.append(graph)
+    return graphs
+
+
+def _tokens_from_name(name: str) -> set[str]:
+    return {word.lower() for word in _camel_words(name) if len(word) > 1}
+
+
+def _best_test_graph_for_fusion(
+    fusion_key: str, finder: str, finder_ops: list[str], graphs: list[TestGraph]
+) -> TestGraph | None:
+    fusion_tokens = set(fusion_key.split("_")) | _tokens_from_name(finder)
+    finder_op_set = set(finder_ops)
+    best_graph: TestGraph | None = None
+    best_score = 0
+    negative_words = ("fallback", "not_fused", "non_", "unsupported", "disable")
+
+    for graph in graphs:
+        graph_id = f"{graph.source.stem}_{graph.function}".lower()
+        if any(word in graph_id for word in negative_words):
+            continue
+        graph_tokens = set(re.split(r"[^a-z0-9]+", graph_id))
+        if not set(fusion_key.split("_")).issubset(graph_tokens):
+            continue
+        op_overlap = len(finder_op_set & set(graph.ops))
+        if finder_op_set and op_overlap == 0:
+            continue
+        min_required_overlap = max(1, (len(finder_op_set) * 3 + 4) // 5)
+        if finder_op_set and op_overlap < min_required_overlap:
+            continue
+        score = op_overlap * 10 + len(fusion_tokens & graph_tokens) * 5
+        if fusion_key.replace("_", "") in graph_id.replace("_", ""):
+            score += 40
+        if graph.edges:
+            score += 3
+        if score > best_score:
+            best_score = score
+            best_graph = graph
+
+    return best_graph
 
 
 def _capability_entries() -> list[CapabilityEntry]:
@@ -531,6 +670,7 @@ def _build_fusions() -> tuple[list[FusionInfo], list[CompileEntry]]:
         known_ops.update(_ops_from_text(text))
     factories = _factory_infos(sources)
     detectors = _detector_infos(sources)
+    test_graphs = _test_graphs()
 
     fusions: list[FusionInfo] = []
     for entry in capability:
@@ -547,6 +687,9 @@ def _build_fusions() -> tuple[list[FusionInfo], list[CompileEntry]]:
         pattern_graph = _pattern_graph_from_finder(entry.finder, finder_ops)
         stem = _stem_from_finder(entry.finder)
         key = _key_from_stem(stem, known_ops)
+        test_graph = _best_test_graph_for_fusion(
+            key, entry.finder, finder_ops, test_graphs
+        )
         fusions.append(
             FusionInfo(
                 key=key,
@@ -559,6 +702,7 @@ def _build_fusions() -> tuple[list[FusionInfo], list[CompileEntry]]:
                 extracted_ops=finder_ops,
                 pattern_labels=pattern_labels,
                 pattern_graph=pattern_graph,
+                test_graph=test_graph,
             )
         )
     return fusions, compile_entries
@@ -569,26 +713,28 @@ def _mermaid_label(label: str) -> str:
 
 
 def _mermaid(
+    test_graph: TestGraph | None,
     pattern_graph: PatternGraph | None,
     pattern_labels: list[str],
     compute_type: str,
 ) -> str:
     after = ["MUSA fused node", compute_type]
     lines = ["```mermaid", "flowchart LR", "  subgraph Before[Before fusion]"]
-    if pattern_graph is not None and pattern_graph.nodes:
+    before_graph = test_graph or pattern_graph
+    if before_graph is not None and before_graph.nodes:
         node_ids = {
-            node.var: f"B{index}" for index, node in enumerate(pattern_graph.nodes)
+            node.var: f"B{index}" for index, node in enumerate(before_graph.nodes)
         }
-        for node in pattern_graph.nodes:
+        for node in before_graph.nodes:
             lines.append(
                 f'    {node_ids[node.var]}["{_mermaid_label(node.label)}"]'
             )
-        if pattern_graph.edges:
-            for edge in pattern_graph.edges:
+        if before_graph.edges:
+            for edge in before_graph.edges:
                 lines.append(f"    {node_ids[edge.src]} --> {node_ids[edge.dst]}")
         else:
             previous = None
-            for node in pattern_graph.nodes:
+            for node in before_graph.nodes:
                 current = node_ids[node.var]
                 if previous is not None:
                     lines.append(f"    {previous} --> {current}")
@@ -615,11 +761,16 @@ def _mermaid(
 
 
 def _render_fusion_doc(fusion: FusionInfo, priority: int) -> str:
+    topology_source = (
+        f"`{_relative(fusion.test_graph.source)}::{fusion.test_graph.function}`"
+        if fusion.test_graph is not None
+        else "`MusaEp::GetCapabilityImpl` finder source"
+    )
     lines = [
         "<!-- AUTO-GENERATED by scripts/gen_fusion_docs.py. DO NOT EDIT BY HAND. -->",
         f"# {fusion.title}",
         "",
-        "This file is generated from the current C++ fusion source. The before graph is derived from ONNX op names found in the finder/detector source; no per-fusion prose metadata is maintained by the generator.",
+        "This file is generated from the current C++ fusion source and matching fusion tests. The before graph prefers ONNX topology extracted from test cases, then falls back to finder source analysis; no per-fusion prose metadata is maintained by the generator.",
         "",
         "## Source Mapping",
         "",
@@ -630,6 +781,7 @@ def _render_fusion_doc(fusion: FusionInfo, priority: int) -> str:
         f"- Runtime compute: `{fusion.compute_type}`",
         f"- Runtime implementation: `{_relative(fusion.source)}`",
         f"- `drop_constant_initializers`: `{fusion.capability.drop_constant_initializers}`",
+        f"- Before-graph topology source: {topology_source}",
         "",
         "## Extracted ONNX Ops",
         "",
@@ -637,7 +789,12 @@ def _render_fusion_doc(fusion: FusionInfo, priority: int) -> str:
         "",
         "## Mermaid",
         "",
-        _mermaid(fusion.pattern_graph, fusion.pattern_labels, fusion.compute_type),
+        _mermaid(
+            fusion.test_graph,
+            fusion.pattern_graph,
+            fusion.pattern_labels,
+            fusion.compute_type,
+        ),
         "",
     ]
     return "\n".join(lines)

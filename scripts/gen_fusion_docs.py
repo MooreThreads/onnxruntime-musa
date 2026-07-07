@@ -56,6 +56,25 @@ class FusionInfo:
     compute_type: str
     extracted_ops: list[str]
     pattern_labels: list[str]
+    pattern_graph: PatternGraph | None
+
+
+@dataclass
+class PatternNode:
+    var: str
+    label: str
+
+
+@dataclass
+class PatternEdge:
+    src: str
+    dst: str
+
+
+@dataclass
+class PatternGraph:
+    nodes: list[PatternNode]
+    edges: list[PatternEdge]
 
 
 def _strip_comments(text: str) -> str:
@@ -367,6 +386,105 @@ def _finder_labels(finder: str, fallback_ops: list[str]) -> list[str]:
     return labels or fallback_ops
 
 
+def _node_label_from_var(var: str, known_ops: set[str]) -> str:
+    words = [word for word in re.split(r"_+", var) if word and word != "node"]
+    for word in reversed(words):
+        for op in known_ops:
+            if word.lower() == op.lower():
+                return op
+    return var
+
+
+def _selected_node_vars(body: str) -> list[str]:
+    selected: list[str] = []
+    for match in re.finditer(
+        r"for\s*\(\s*Ort::ConstNode\s+\w+\s*:\s*\{(?P<nodes>[^}]+)\}",
+        body,
+    ):
+        vars_in_loop = re.findall(r"\b([A-Za-z_]\w*)\b", match.group("nodes"))
+        if len(vars_in_loop) > len(selected):
+            selected = vars_in_loop
+    return _ordered_unique(selected)
+
+
+def _helper_body_for_finder(finder: str, ep_text: str) -> str | None:
+    finder_body = _extract_function_body(ep_text, finder)
+    helpers = _ordered_unique(
+        [
+            match.group(1)
+            for match in re.finditer(r"\b(CanFuse\w+)\s*\(", finder_body)
+            if match.group(1) != finder
+        ]
+    )
+    for helper in helpers:
+        try:
+            return _extract_function_body(ep_text, helper)
+        except ValueError:
+            continue
+    return None
+
+
+def _pattern_graph_from_finder(finder: str, ops: list[str]) -> PatternGraph | None:
+    ep_text = _strip_comments(EP_CC.read_text())
+    try:
+        body = _helper_body_for_finder(finder, ep_text) or _extract_function_body(
+            ep_text, finder
+        )
+    except ValueError:
+        return None
+
+    selected_vars = _selected_node_vars(body)
+    if not selected_vars:
+        return None
+    selected = set(selected_vars)
+    known_ops = set(ops) | set(_ops_from_text(body))
+
+    op_by_var: dict[str, str] = {}
+    for match in re.finditer(
+        r'IsOnnxOp\s*\(\s*(?P<var>[A-Za-z_]\w*)\s*,\s*"(?P<op>[^"]+)"\s*\)',
+        body,
+    ):
+        op_by_var[match.group("var")] = match.group("op")
+
+    nodes = [
+        PatternNode(
+            var=var,
+            label=op_by_var.get(var, _node_label_from_var(var, known_ops)),
+        )
+        for var in selected_vars
+    ]
+    if any(node.label == node.var for node in nodes):
+        return None
+
+    output_owner: dict[str, str] = {}
+    for match in re.finditer(
+        r"std::vector<Ort::ConstValueInfo>\s+"
+        r"(?P<prefix>[A-Za-z_]\w*)_outputs\s*=\s*"
+        r"(?P<var>[A-Za-z_]\w*)\.GetOutputs\s*\(",
+        body,
+    ):
+        output_owner[match.group("prefix")] = match.group("var")
+
+    edges: list[PatternEdge] = []
+    edge_seen: set[tuple[str, str]] = set()
+    for match in re.finditer(
+        r"\b(?:ValueHasOnlyConsumers|HasOnlyConsumer)\s*\(\s*"
+        r"(?P<src>[A-Za-z_]\w*)_outputs\s*\[\s*\d+\s*\]\s*,\s*"
+        r"(?P<dst>[A-Za-z_]\w*)",
+        body,
+    ):
+        src = output_owner.get(match.group("src"), match.group("src"))
+        dst = match.group("dst")
+        if src not in selected or dst not in selected or src == dst:
+            continue
+        key = (src, dst)
+        if key not in edge_seen:
+            edge_seen.add(key)
+            edges.append(PatternEdge(src=src, dst=dst))
+
+    return PatternGraph(nodes=nodes, edges=edges)
+
+
 def _compile_entry_for_finder(
     finder: str,
     finder_ops: list[str],
@@ -378,7 +496,10 @@ def _compile_entry_for_finder(
     finder_set = set(finder_ops)
 
     for entry in compile_entries:
-        if entry.detector == "fallback" and _stem_from_factory(entry.factory) == finder_stem:
+        if (
+            entry.detector == "fallback"
+            and _stem_from_factory(entry.factory) == finder_stem
+        ):
             return entry
 
     best_entry: CompileEntry | None = None
@@ -423,6 +544,7 @@ def _build_fusions() -> tuple[list[FusionInfo], list[CompileEntry]]:
         if not finder_ops:
             finder_ops = factory.ops
         pattern_labels = _finder_labels(entry.finder, finder_ops)
+        pattern_graph = _pattern_graph_from_finder(entry.finder, finder_ops)
         stem = _stem_from_finder(entry.finder)
         key = _key_from_stem(stem, known_ops)
         fusions.append(
@@ -436,27 +558,55 @@ def _build_fusions() -> tuple[list[FusionInfo], list[CompileEntry]]:
                 compute_type=factory.compute_type,
                 extracted_ops=finder_ops,
                 pattern_labels=pattern_labels,
+                pattern_graph=pattern_graph,
             )
         )
     return fusions, compile_entries
 
 
-def _mermaid(pattern_labels: list[str], compute_type: str) -> str:
-    before = pattern_labels or ["unresolved source pattern"]
+def _mermaid_label(label: str) -> str:
+    return label.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _mermaid(
+    pattern_graph: PatternGraph | None,
+    pattern_labels: list[str],
+    compute_type: str,
+) -> str:
     after = ["MUSA fused node", compute_type]
     lines = ["```mermaid", "flowchart LR", "  subgraph Before[Before fusion]"]
-    previous = None
-    for index, label in enumerate(before):
-        node = f"B{index}"
-        lines.append(f'    {node}["{label}"]')
-        if previous is not None:
-            lines.append(f"    {previous} --> {node}")
-        previous = node
+    if pattern_graph is not None and pattern_graph.nodes:
+        node_ids = {
+            node.var: f"B{index}" for index, node in enumerate(pattern_graph.nodes)
+        }
+        for node in pattern_graph.nodes:
+            lines.append(
+                f'    {node_ids[node.var]}["{_mermaid_label(node.label)}"]'
+            )
+        if pattern_graph.edges:
+            for edge in pattern_graph.edges:
+                lines.append(f"    {node_ids[edge.src]} --> {node_ids[edge.dst]}")
+        else:
+            previous = None
+            for node in pattern_graph.nodes:
+                current = node_ids[node.var]
+                if previous is not None:
+                    lines.append(f"    {previous} --> {current}")
+                previous = current
+    else:
+        before = pattern_labels or ["unresolved source pattern"]
+        previous = None
+        for index, label in enumerate(before):
+            node = f"B{index}"
+            lines.append(f'    {node}["{_mermaid_label(label)}"]')
+            if previous is not None:
+                lines.append(f"    {previous} --> {node}")
+            previous = node
     lines.extend(["  end", "  subgraph After[After fusion]"])
     previous = None
     for index, label in enumerate(after):
         node = f"A{index}"
-        lines.append(f'    {node}["{label}"]')
+        lines.append(f'    {node}["{_mermaid_label(label)}"]')
         if previous is not None:
             lines.append(f"    {previous} --> {node}")
         previous = node
@@ -487,7 +637,7 @@ def _render_fusion_doc(fusion: FusionInfo, priority: int) -> str:
         "",
         "## Mermaid",
         "",
-        _mermaid(fusion.pattern_labels, fusion.compute_type),
+        _mermaid(fusion.pattern_graph, fusion.pattern_labels, fusion.compute_type),
         "",
     ]
     return "\n".join(lines)

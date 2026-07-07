@@ -19,6 +19,7 @@ This file is generated from `MusaEp::GetCapabilityImpl` and `MusaEp::CompileImpl
 | 10 | Centered + Reduce Fusion | `FindCenteredReduceFusions` | `false` | [centered_reduce.md](fusion/centered_reduce.md) |
 | 11 | Split + Reduce Fusion | `FindSplitReduceFusions` | `false` | [split_reduce.md](fusion/split_reduce.md) |
 | 12 | Rms + Norm Fusion | `FindRmsNormFusions` | `false` | [rms_norm.md](fusion/rms_norm.md) |
+| 13 | Modulo + Gather Fusion | `FindModuloGatherFusions` | `false` | [modulo_gather.md](fusion/modulo_gather.md) |
 
 ## Compile Dispatch Order
 
@@ -34,4 +35,5 @@ This file is generated from `MusaEp::GetCapabilityImpl` and `MusaEp::CompileImpl
 | 8 | `IsSplitConcatReorderFusionGraph` | `CreateSplitConcatReorderFusion` | [split_concat_reorder](fusion/split_concat_reorder.md) |
 | 9 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
 | 10 | `IsRmsNormFusionGraph` | `CreateRmsNormFusion` | [rms_norm](fusion/rms_norm.md) |
-| 11 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
+| 11 | `IsModuloGatherFusionGraph` | `CreateModuloGatherFusion` | [modulo_gather](fusion/modulo_gather.md) |
+| 12 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |

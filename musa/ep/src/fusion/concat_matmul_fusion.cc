@@ -405,8 +405,8 @@ OrtStatus* RunMudnnConcatMatMulBatched(const float* a_data, const float* b_data,
   }
 
   scratch.ResetWorkspace();
-  auto memory_allocator =
-      [&scratch, stream](size_t size) -> ::musa::dnn::MemoryHandler {
+  auto memory_allocator = [&scratch,
+                           stream](size_t size) -> ::musa::dnn::MemoryHandler {
     if (size == 0) {
       return ::musa::dnn::MemoryHandler(nullptr, NoOpDelete);
     }
@@ -458,16 +458,10 @@ OrtStatus* ComputeDeviceConcatMatMul(
     const std::vector<int64_t>& other_shape, int64_t axis,
     int64_t concat_input_idx, const std::vector<int64_t>& output_shape,
     ConcatMatMulScratch& scratch, musaStream_t stream) {
-  scratch.concat_buffer.Resize(static_cast<size_t>(NumElements(concat_shape)) *
-                                   sizeof(float),
-                               stream);
-  DeviceBuffer& concat_buffer = scratch.concat_buffer;
   if (!AllGpuValues(concat_inputs)) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED, "ConcatMatMul requires MUSA concat inputs");
   }
-  RunMudnnConcat(concat_inputs, concat_shape, axis, concat_buffer.data<float>(),
-                 stream);
 
   if (!IsGpuValue(other_input)) {
     return Ort::GetApi().CreateStatus(
@@ -479,15 +473,10 @@ OrtStatus* ComputeDeviceConcatMatMul(
       concat_input_idx == 0 ? concat_shape : other_shape;
   const std::vector<int64_t>& rhs_shape =
       concat_input_idx == 0 ? other_shape : concat_shape;
-  const float* a_data =
-      concat_input_idx == 0 ? concat_buffer.data<float>() : other_data;
-  const float* b_data =
-      concat_input_idx == 0 ? other_data : concat_buffer.data<float>();
   if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "ConcatMatMul requires MUSA output");
   }
-  float* y_data = y.GetTensorMutableData<float>();
 
   const size_t rank = lhs_shape.size();
   if (lhs_shape[rank - 2] > INT32_MAX || lhs_shape[rank - 1] > INT32_MAX ||
@@ -495,6 +484,34 @@ OrtStatus* ComputeDeviceConcatMatMul(
     return Ort::GetApi().CreateStatus(
         ORT_INVALID_ARGUMENT, "ConcatMatMul dimensions exceed int32 limits");
   }
+
+  if (NumElements(output_shape) == 0) {
+    return nullptr;
+  }
+
+  float* y_data = y.GetTensorMutableData<float>();
+  if (y_data == nullptr) {
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT,
+        "ConcatMatMul output pointer must be non-null for non-empty output");
+  }
+
+  if (lhs_shape[rank - 1] == 0) {
+    musaError_t status = musaMemsetAsync(
+        y_data, 0,
+        static_cast<size_t>(NumElements(output_shape)) * sizeof(float), stream);
+    return LaunchStatus(status);
+  }
+
+  scratch.concat_buffer.Resize(
+      static_cast<size_t>(NumElements(concat_shape)) * sizeof(float), stream);
+  DeviceBuffer& concat_buffer = scratch.concat_buffer;
+  RunMudnnConcat(concat_inputs, concat_shape, axis, concat_buffer.data<float>(),
+                 stream);
+  const float* a_data =
+      concat_input_idx == 0 ? concat_buffer.data<float>() : other_data;
+  const float* b_data =
+      concat_input_idx == 0 ? other_data : concat_buffer.data<float>();
 
   const bool used_mudnn_batched = lhs_shape.size() > 2 || rhs_shape.size() > 2;
   OrtStatus* matmul_status =

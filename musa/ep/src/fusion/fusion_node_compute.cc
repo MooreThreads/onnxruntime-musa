@@ -21,6 +21,7 @@
 #include "fusion/concat_split_fusion.h"
 #include "fusion/linear_fusion.h"
 #include "fusion/modulo_gather_fusion.h"
+#include "fusion/parallel_matmul_concat_fusion.h"
 #include "fusion/rms_norm_fusion.h"
 #include "fusion/shape_reshape_fusion.h"
 #include "fusion/slice_concat_fusion.h"
@@ -217,6 +218,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateRmsNormFusion(graph, fused_node);
       } else if (IsModuloGatherFusionGraph(graph)) {
         fusion_compute = CreateModuloGatherFusion(graph, fused_node);
+      } else if (IsParallelMatMulConcatFusionGraph(graph)) {
+        fusion_compute = CreateParallelMatMulConcatFusion(graph, fused_node);
       } else {
         fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
       }

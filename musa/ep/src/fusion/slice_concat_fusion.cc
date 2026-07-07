@@ -41,6 +41,13 @@ int64_t ReadIntAttribute(Ort::ConstNode node, const std::string& name,
   return status.IsOK() ? value : default_value;
 }
 
+bool IsRank2ColumnAxis(int64_t axis) {
+  if (axis < 0) {
+    axis += 2;
+  }
+  return axis == 1;
+}
+
 std::vector<int64_t> ReadIntInitializer(Ort::ConstValueInfo value_info) {
   if (!value_info.IsConstantInitializer()) {
     throw std::runtime_error("SliceConcat requires constant Slice parameters");
@@ -139,13 +146,13 @@ int64_t SliceConcatBlockCount(int64_t rows, int64_t width) {
          kSliceConcatThreadsPerBlock;
 }
 
-SliceConcatInput MakeInput(Ort::ConstNode slice_node,
-                           const std::unordered_map<std::string, size_t>&
-                               fused_input_indices,
-                           int64_t dst_offset) {
+SliceConcatInput MakeInput(
+    Ort::ConstNode slice_node,
+    const std::unordered_map<std::string, size_t>& fused_input_indices,
+    int64_t dst_offset) {
   std::vector<Ort::ConstValueInfo> slice_inputs = slice_node.GetInputs();
   if (slice_inputs.size() < 3 || slice_inputs.size() > 5) {
-      throw std::runtime_error("SliceConcat requires Slice with 3-5 inputs");
+    throw std::runtime_error("SliceConcat requires Slice with 3-5 inputs");
   }
 
   RequireFloatTensor(slice_inputs[0], Name(slice_inputs[0]));
@@ -189,8 +196,7 @@ SliceConcatInput MakeInput(Ort::ConstNode slice_node,
         throw std::runtime_error(
             "SliceConcat requires known cols for negative Slice bounds");
       }
-      int64_t start =
-          starts[i] < 0 ? starts[i] + (*input_shape)[1] : starts[i];
+      int64_t start = starts[i] < 0 ? starts[i] + (*input_shape)[1] : starts[i];
       int64_t end = ends[i] < 0 ? ends[i] + (*input_shape)[1] : ends[i];
       if (input_shape.has_value() && (*input_shape)[1] > 0) {
         const int64_t dim = (*input_shape)[1];
@@ -296,12 +302,7 @@ SliceConcatInput MakeZeroInput(Ort::ConstValueInfo value_info,
         "SliceConcat zero ConstantOfShape requires rank-2 output shape");
   }
   return SliceConcatInput{
-      0,
-      0,
-      0,
-      (*shape)[1],
-      dst_offset,
-      true,
+      0, 0, 0, (*shape)[1], dst_offset, true,
   };
 }
 
@@ -403,7 +404,8 @@ OrtStatus* SliceConcatFusionCompute::Compute(
     }
     if (first_tensor_input == nullptr) {
       return Ort::GetApi().CreateStatus(
-          ORT_INVALID_ARGUMENT, "SliceConcat requires at least one Slice input");
+          ORT_INVALID_ARGUMENT,
+          "SliceConcat requires at least one Slice input");
     }
 
     std::vector<int64_t> first_shape =
@@ -443,18 +445,17 @@ OrtStatus* SliceConcatFusionCompute::Compute(
         scratch->pinned_segments = nullptr;
       }
       const size_t bytes = inputs.size() * sizeof(MusaSliceConcatSegment);
-      musaError_t alloc_status =
-          musaMalloc(reinterpret_cast<void**>(&scratch->device_segments),
-                     bytes);
+      musaError_t alloc_status = musaMalloc(
+          reinterpret_cast<void**>(&scratch->device_segments), bytes);
       if (alloc_status != musaSuccess) {
         scratch->device_segments = nullptr;
         scratch->capacity = 0;
         return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                           MusaErrorString(alloc_status));
       }
-      musaError_t host_alloc_status = musaHostAlloc(
-          reinterpret_cast<void**>(&scratch->pinned_segments), bytes,
-          musaHostAllocDefault);
+      musaError_t host_alloc_status =
+          musaHostAlloc(reinterpret_cast<void**>(&scratch->pinned_segments),
+                        bytes, musaHostAllocDefault);
       if (host_alloc_status != musaSuccess) {
         (void)musaFree(scratch->device_segments);
         scratch->device_segments = nullptr;
@@ -474,9 +475,9 @@ OrtStatus* SliceConcatFusionCompute::Compute(
       const int64_t block_offset = total_blocks;
       total_blocks += block_count;
       if (spec.zero_fill) {
-        scratch->host_segments[i] =
-            MusaSliceConcatSegment{nullptr, 0, 0, spec.width, spec.dst_offset,
-                                   block_offset, block_count, 1};
+        scratch->host_segments[i] = MusaSliceConcatSegment{
+            nullptr,      0,           0, spec.width, spec.dst_offset,
+            block_offset, block_count, 1};
         continue;
       }
 
@@ -489,8 +490,8 @@ OrtStatus* SliceConcatFusionCompute::Compute(
       if (!runtime_input.initialized) {
         Ort::ConstValue input = ctx.GetInput(spec.input_index);
         if (!IsGpuMemory(input.GetTensorMemoryInfo())) {
-          return Ort::GetApi().CreateStatus(
-              ORT_NOT_IMPLEMENTED, "SliceConcat requires MUSA inputs");
+          return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                            "SliceConcat requires MUSA inputs");
         }
         int64_t input_cols = spec.input_cols;
         if (input_cols <= 0) {
@@ -502,7 +503,8 @@ OrtStatus* SliceConcatFusionCompute::Compute(
           std::vector<int64_t> shape = info.GetShape();
           if (shape.size() != 2 || shape[0] != rows) {
             return Ort::GetApi().CreateStatus(
-                ORT_INVALID_ARGUMENT, "SliceConcat runtime input rank mismatch");
+                ORT_INVALID_ARGUMENT,
+                "SliceConcat runtime input rank mismatch");
           }
           input_cols = shape[1];
         }
@@ -516,14 +518,8 @@ OrtStatus* SliceConcatFusionCompute::Compute(
             ORT_INVALID_ARGUMENT, "SliceConcat runtime input cols mismatch");
       }
       scratch->host_segments[i] = MusaSliceConcatSegment{
-          runtime_input.data,
-          runtime_input.cols,
-          spec.start_col,
-          spec.width,
-          spec.dst_offset,
-          block_offset,
-          block_count,
-          0,
+          runtime_input.data, runtime_input.cols, spec.start_col, spec.width,
+          spec.dst_offset,    block_offset,       block_count,    0,
       };
     }
 
@@ -555,27 +551,30 @@ OrtStatus* SliceConcatFusionCompute::Compute(
 }
 
 bool IsSliceConcatFusionGraph(Ort::ConstGraph graph) {
-  bool has_concat = false;
+  Ort::ConstNode concat_node{nullptr};
   bool has_slice = false;
   for (Ort::ConstNode node : graph.GetNodes()) {
     if (IsOnnxOp(node, "Concat")) {
-      has_concat = true;
+      if (concat_node) {
+        return false;
+      }
+      concat_node = node;
     } else if (IsOnnxOp(node, "Slice")) {
       has_slice = true;
-    } else if (IsOnnxOp(node, "ConstantOfShape") ||
-               IsOnnxOp(node, "Shape")) {
+    } else if (IsOnnxOp(node, "ConstantOfShape") || IsOnnxOp(node, "Shape")) {
       continue;
     } else {
       return false;
     }
   }
-  return has_concat && has_slice;
+  return concat_node && has_slice &&
+         IsRank2ColumnAxis(ReadIntAttribute(concat_node, "axis", 0));
 }
 
 std::unique_ptr<FusionNodeCompute> CreateSliceConcatFusion(
     Ort::ConstGraph graph, Ort::ConstNode fused_node) {
   Ort::ConstNode concat_node = FindConcatNode(graph);
-  if (ReadIntAttribute(concat_node, "axis", 0) != 1) {
+  if (!IsRank2ColumnAxis(ReadIntAttribute(concat_node, "axis", 0))) {
     throw std::runtime_error("SliceConcat requires Concat axis=1");
   }
 
@@ -626,6 +625,6 @@ std::unique_ptr<FusionNodeCompute> CreateSliceConcatFusion(
     inputs.push_back(input);
   }
 
-  return std::make_unique<SliceConcatFusionCompute>(
-      dst_offset, std::move(inputs));
+  return std::make_unique<SliceConcatFusionCompute>(dst_offset,
+                                                    std::move(inputs));
 }

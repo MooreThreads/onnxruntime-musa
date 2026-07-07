@@ -20,6 +20,7 @@ This file is generated from `MusaEp::GetCapabilityImpl` and `MusaEp::CompileImpl
 | 11 | Split + Reduce Fusion | `FindSplitReduceFusions` | `false` | [split_reduce.md](fusion/split_reduce.md) |
 | 12 | Rms + Norm Fusion | `FindRmsNormFusions` | `false` | [rms_norm.md](fusion/rms_norm.md) |
 | 13 | Modulo + Gather Fusion | `FindModuloGatherFusions` | `false` | [modulo_gather.md](fusion/modulo_gather.md) |
+| 14 | Parallel + MatMul + Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
 
 ## Compile Dispatch Order
 
@@ -36,4 +37,5 @@ This file is generated from `MusaEp::GetCapabilityImpl` and `MusaEp::CompileImpl
 | 9 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
 | 10 | `IsRmsNormFusionGraph` | `CreateRmsNormFusion` | [rms_norm](fusion/rms_norm.md) |
 | 11 | `IsModuloGatherFusionGraph` | `CreateModuloGatherFusion` | [modulo_gather](fusion/modulo_gather.md) |
-| 12 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
+| 12 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
+| 13 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |

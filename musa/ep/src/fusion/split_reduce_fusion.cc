@@ -3,6 +3,7 @@
 
 #include "fusion/split_reduce_fusion.h"
 
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -88,6 +89,54 @@ struct SplitReduceOutput {
   MusaSplitReduceMode mode;
 };
 
+class DeviceBuffer {
+ public:
+  DeviceBuffer() = default;
+
+  void Resize(size_t bytes, musaStream_t stream) {
+    if (bytes <= bytes_) {
+      stream_ = stream;
+      return;
+    }
+
+    if (ptr_ != nullptr) {
+      FreeDeviceMemoryOnStream(ptr_, stream_);
+      ptr_ = nullptr;
+      bytes_ = 0;
+    }
+
+    stream_ = stream;
+    if (bytes == 0) {
+      return;
+    }
+
+    musaError_t status = musaMalloc(&ptr_, bytes);
+    if (status != musaSuccess) {
+      throw std::runtime_error(MusaErrorString(status));
+    }
+    bytes_ = bytes;
+  }
+
+  ~DeviceBuffer() {
+    if (ptr_ != nullptr) {
+      (void)musaFree(ptr_);
+    }
+  }
+
+  DeviceBuffer(const DeviceBuffer&) = delete;
+  DeviceBuffer& operator=(const DeviceBuffer&) = delete;
+
+  template <typename T>
+  T* data() const {
+    return reinterpret_cast<T*>(ptr_);
+  }
+
+ private:
+  void* ptr_ = nullptr;
+  size_t bytes_ = 0;
+  musaStream_t stream_ = nullptr;
+};
+
 std::unordered_map<std::string, size_t> FusedOutputIndices(
     Ort::ConstNode fused_node) {
   std::unordered_map<std::string, size_t> fused_output_indices;
@@ -126,9 +175,9 @@ struct SplitReduceFusionCompute : FusionNodeCompute {
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override {
     try {
       Ort::KernelContext ctx(kernel_context);
-      if (outputs.size() != 2) {
+      if (outputs.size() < 2) {
         return Ort::GetApi().CreateStatus(
-            ORT_NOT_IMPLEMENTED, "SplitReduce requires two outputs");
+            ORT_NOT_IMPLEMENTED, "SplitReduce requires at least two outputs");
       }
 
       Ort::ConstValue input = ctx.GetInput(0);
@@ -141,13 +190,14 @@ struct SplitReduceFusionCompute : FusionNodeCompute {
       std::vector<int64_t> input_shape = input_info.GetShape();
       if (input_shape.size() != 3 || input_shape[1] <= 0 ||
           input_shape[2] <= 0) {
-        return Ort::GetApi().CreateStatus(
-            ORT_NOT_IMPLEMENTED, "SplitReduce requires rank-3 input");
+        return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                          "SplitReduce requires rank-3 input");
       }
 
       const int64_t batch = input_shape[0];
       const int64_t axis_dim = input_shape[1];
       const int64_t inner = input_shape[2];
+      musaStream_t stream = GetComputeStream(ctx);
       std::vector<float*> output_data(outputs.size(), nullptr);
       for (const SplitReduceOutput& output : outputs) {
         if (output.offset < 0 || output.width <= 0 ||
@@ -156,7 +206,8 @@ struct SplitReduceFusionCompute : FusionNodeCompute {
           return Ort::GetApi().CreateStatus(
               ORT_INVALID_ARGUMENT, "SplitReduce output spec is invalid");
         }
-        Ort::UnownedValue y = ctx.GetOutput(output.output_index, {batch, inner});
+        Ort::UnownedValue y =
+            ctx.GetOutput(output.output_index, {batch, inner});
         if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
           return Ort::GetApi().CreateStatus(
               ORT_NOT_IMPLEMENTED, "SplitReduce requires MUSA outputs");
@@ -164,11 +215,35 @@ struct SplitReduceFusionCompute : FusionNodeCompute {
         output_data[output.output_index] = y.GetTensorMutableData<float>();
       }
 
-      return LaunchStatus(LaunchMusaSplitReduce2Float(
-          input.GetTensorData<float>(), output_data[0], output_data[1], batch,
-          axis_dim, inner, outputs[0].offset, outputs[0].width,
-          outputs[0].mode, outputs[1].offset, outputs[1].width,
-          outputs[1].mode, GetComputeStream(ctx)));
+      std::lock_guard<std::mutex> lock(scratch_mutex);
+      for (size_t i = 0; i < outputs.size(); i += 2) {
+        const SplitReduceOutput& first = outputs[i];
+        const SplitReduceOutput* second =
+            (i + 1 < outputs.size()) ? &outputs[i + 1] : nullptr;
+        float* second_output = nullptr;
+        int64_t second_offset = first.offset;
+        int64_t second_width = first.width;
+        MusaSplitReduceMode second_mode = first.mode;
+        if (second != nullptr) {
+          second_output = output_data[second->output_index];
+          second_offset = second->offset;
+          second_width = second->width;
+          second_mode = second->mode;
+        } else {
+          scratch_output.Resize(
+              static_cast<size_t>(batch * inner) * sizeof(float), stream);
+          second_output = scratch_output.data<float>();
+        }
+
+        OrtStatus* status = LaunchStatus(LaunchMusaSplitReduce2Float(
+            input.GetTensorData<float>(), output_data[first.output_index],
+            second_output, batch, axis_dim, inner, first.offset, first.width,
+            first.mode, second_offset, second_width, second_mode, stream));
+        if (status != nullptr) {
+          return status;
+        }
+      }
+      return nullptr;
     } catch (const Ort::Exception& ex) {
       Ort::Status status(ex);
       return status.release();
@@ -178,6 +253,8 @@ struct SplitReduceFusionCompute : FusionNodeCompute {
   }
 
   std::vector<SplitReduceOutput> outputs;
+  mutable DeviceBuffer scratch_output;
+  mutable std::mutex scratch_mutex;
 };
 
 bool IsSplitReduceFusionGraph(Ort::ConstGraph graph) {
@@ -192,7 +269,7 @@ bool IsSplitReduceFusionGraph(Ort::ConstGraph graph) {
       return false;
     }
   }
-  return split_count == 1 && reduce_count == 2;
+  return split_count == 1 && reduce_count >= 2;
 }
 
 std::unique_ptr<FusionNodeCompute> CreateSplitReduceFusion(
@@ -207,17 +284,17 @@ std::unique_ptr<FusionNodeCompute> CreateSplitReduceFusion(
 
   std::vector<Ort::ConstValueInfo> split_inputs = split_node.GetInputs();
   std::vector<Ort::ConstValueInfo> split_outputs = split_node.GetOutputs();
-  if (split_inputs.size() != 2 || split_outputs.size() != 2) {
-    throw std::runtime_error("SplitReduce requires two-way Split");
+  if (split_inputs.size() != 2 || split_outputs.size() < 2) {
+    throw std::runtime_error("SplitReduce requires at least two-way Split");
   }
   std::vector<int64_t> split_sizes = ReadIntInitializer(split_inputs[1]);
-  if (split_sizes.size() != 2) {
-    throw std::runtime_error("SplitReduce requires two Split sizes");
+  if (split_sizes.size() != split_outputs.size()) {
+    throw std::runtime_error("SplitReduce split size/output mismatch");
   }
 
   auto fused_output_indices = FusedOutputIndices(fused_node);
   std::vector<SplitReduceOutput> outputs;
-  outputs.reserve(2);
+  outputs.reserve(split_outputs.size());
   int64_t offset = 0;
   for (size_t i = 0; i < split_outputs.size(); ++i) {
     std::vector<Ort::ValueInfoConsumerProducerInfo> consumers =
@@ -227,7 +304,8 @@ std::unique_ptr<FusionNodeCompute> CreateSplitReduceFusion(
           IsOnnxOp(consumers[0].node, "ReduceMean")) ||
         !AxesInputIsAxis1(consumers[0].node) ||
         ReadIntAttribute(consumers[0].node, "keepdims", 1) != 0) {
-      throw std::runtime_error("SplitReduce requires Reduce(axis=1, keepdims=0)");
+      throw std::runtime_error(
+          "SplitReduce requires Reduce(axis=1, keepdims=0)");
     }
     std::vector<Ort::ConstValueInfo> reduce_outputs =
         consumers[0].node.GetOutputs();

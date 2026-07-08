@@ -99,6 +99,20 @@ def test_concat_many_small_inputs_axis1():
     )
 
 
+def test_concat_many_small_inputs_near_direct_kernel_limit_axis1():
+    inputs = {}
+    rng = np.random.default_rng(16)
+    for i in range(237):
+        width = 1 if i % 5 else 3
+        inputs[f"X{i}"] = rng.standard_normal((2, width)).astype(np.float32)
+    run_and_compare(
+        "Concat",
+        inputs=inputs,
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"axis": 1},
+    )
+
+
 def test_concat_small_int64_shape_metadata_mixed_inputs():
     nodes = [
         helper.make_node("Constant", [], ["prefix"], value=helper.make_tensor("prefix_value", TensorProto.INT64, [1], [1])),

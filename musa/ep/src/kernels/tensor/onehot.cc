@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
 #include "shared_inc/op_kernel_common.h"
@@ -6,8 +6,7 @@
 
 namespace {
 
-uint64_t ReadScalarBits(const std::vector<uint8_t>& bytes,
-                        size_t element_size,
+uint64_t ReadScalarBits(const std::vector<uint8_t>& bytes, size_t element_size,
                         size_t index) {
   uint64_t bits = 0;
   std::memcpy(&bits, bytes.data() + index * element_size, element_size);

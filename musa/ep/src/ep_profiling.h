@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 #pragma once
 
@@ -13,12 +13,14 @@
 #include "plugin_ep_utils.h"
 
 /// <summary>
-/// Example implementation of OrtEpProfilerImpl. ORT obtains an instance of this EP profiler by calling
-/// OrtEp::CreateProfiler().
+/// Example implementation of OrtEpProfilerImpl. ORT obtains an instance of this
+/// EP profiler by calling OrtEp::CreateProfiler().
 ///
-/// ORT calls the function pointers at appropriate times during a profiling session:
+/// ORT calls the function pointers at appropriate times during a profiling
+/// session:
 ///   - StartProfiling once when profiling begins.
-///   - [Optional] StartEvent / StopEvent around each ORT event (operator executions, session events, etc.).
+///   - [Optional] StartEvent / StopEvent around each ORT event (operator
+///   executions, session events, etc.).
 ///   - EndProfiling once when profiling ends to collect EP events.
 ///   - Release when ORT no longer needs the profiler.
 /// </summary>
@@ -32,37 +34,49 @@ struct MusaEpProfiler : OrtEpProfilerImpl {
   ~MusaEpProfiler();
 
   static void ORT_API_CALL ReleaseImpl(OrtEpProfilerImpl* this_ptr) noexcept;
-  static OrtStatus* ORT_API_CALL StartProfilingImpl(OrtEpProfilerImpl* this_ptr,
-                                                    int64_t ep_profiling_start_offset_ns) noexcept;
+  static OrtStatus* ORT_API_CALL
+  StartProfilingImpl(OrtEpProfilerImpl* this_ptr,
+                     int64_t ep_profiling_start_offset_ns) noexcept;
 
-  static OrtStatus* ORT_API_CALL StartEventImpl(OrtEpProfilerImpl* this_ptr, uint64_t ort_event_correlation_id) noexcept;
-  static OrtStatus* ORT_API_CALL StopEventImpl(OrtEpProfilerImpl* this_ptr, uint64_t ort_event_correlation_id,
-                                               const OrtProfilingEvent* ort_event) noexcept;
-  static OrtStatus* ORT_API_CALL EndProfilingImpl(OrtEpProfilerImpl* this_ptr,
-                                                  OrtProfilingEventsContainer* events_container) noexcept;
+  static OrtStatus* ORT_API_CALL StartEventImpl(
+      OrtEpProfilerImpl* this_ptr, uint64_t ort_event_correlation_id) noexcept;
+  static OrtStatus* ORT_API_CALL
+  StopEventImpl(OrtEpProfilerImpl* this_ptr, uint64_t ort_event_correlation_id,
+                const OrtProfilingEvent* ort_event) noexcept;
+  static OrtStatus* ORT_API_CALL
+  EndProfilingImpl(OrtEpProfilerImpl* this_ptr,
+                   OrtProfilingEventsContainer* events_container) noexcept;
 };
 
 /// <summary>
-/// Singleton object that stores events from this EP's kernels and manages a stack of ORT event boundaries
-/// used for annotating EP events with metadata from correlated ORT events.
+/// Singleton object that stores events from this EP's kernels and manages a
+/// stack of ORT event boundaries used for annotating EP events with metadata
+/// from correlated ORT events.
 ///
-/// This singleton maintains state per profiling session (i.e., per profiler). An OrtEpProfilerImpl must register
-/// itself via RegisterProfiler().
+/// This singleton maintains state per profiling session (i.e., per profiler).
+/// An OrtEpProfilerImpl must register itself via RegisterProfiler().
 ///
 /// An OrtEpProfilerImpl performs the following operations:
 ///   - RegisterProfiler()
-///   - PushOrtEvent() / PopOrtEvent() as ORT provides StartEvent / StopEvent callbacks
-///   - ConsumeEvents() to get all EP events when ORT calls OrtEpProfilerImpl::EndProfiling()
+///   - PushOrtEvent() / PopOrtEvent() as ORT provides StartEvent / StopEvent
+///   callbacks
+///   - ConsumeEvents() to get all EP events when ORT calls
+///   OrtEpProfilerImpl::EndProfiling()
 ///
 /// An EP kernel performs the following operations:
-///   - AddEvent() to add a new EP event (e.g., kernel execution start and duration)
+///   - AddEvent() to add a new EP event (e.g., kernel execution start and
+///   duration)
 /// </summary>
 class EpEventManager {
  public:
   struct Event {
-    Event(std::string event_name, std::chrono::high_resolution_clock::time_point start_ts,
+    Event(std::string event_name,
+          std::chrono::high_resolution_clock::time_point start_ts,
           std::chrono::high_resolution_clock::time_point end_ts)
-        : name(std::move(event_name)), start_time(start_ts), end_time(end_ts), thread_id(std::this_thread::get_id()) {}
+        : name(std::move(event_name)),
+          start_time(start_ts),
+          end_time(end_ts),
+          thread_id(std::this_thread::get_id()) {}
 
     std::string name;
     std::chrono::high_resolution_clock::time_point start_time;
@@ -75,17 +89,18 @@ class EpEventManager {
 
   static EpEventManager& GetInstance();
 
-  // Returns the active profiler ID for the current thread, or std::nullopt if no
-  // ORT event is in progress on this thread. Use this from kernels to determine the correct
-  // profiler ID for submitting profiling events during concurrent runs (each with its own run profiler).
+  // Returns the active profiler ID for the current thread, or std::nullopt if
+  // no ORT event is in progress on this thread. Use this from kernels to
+  // determine the correct profiler ID for submitting profiling events during
+  // concurrent runs (each with its own run profiler).
   static std::optional<uint64_t> GetActiveProfilerId();
 
   uint64_t RegisterProfiler();
   void UnregisterProfiler(uint64_t profiler_id);
 
   void PushOrtEvent(uint64_t profiler_id);
-  void PopOrtEvent(uint64_t profiler_id, const std::string& ort_event_name, int64_t ort_event_start_us,
-                   int64_t ort_event_duration_us);
+  void PopOrtEvent(uint64_t profiler_id, const std::string& ort_event_name,
+                   int64_t ort_event_start_us, int64_t ort_event_duration_us);
 
   void AddEpEvent(uint64_t profiler_id, Event event);
 

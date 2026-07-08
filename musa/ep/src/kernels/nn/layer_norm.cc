@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
 #include <musa_runtime.h>
@@ -160,9 +160,8 @@ bool LayerNormalization::TryMudnn(Ort::KernelContext& ctx,
     if (bytes != 0 && musaMalloc(&ptr, bytes) != musaSuccess) {
       ptr = nullptr;
     }
-    return ::musa::dnn::MemoryHandler(ptr, [stream](void* p) {
-      FreeDeviceMemoryOnStream(p, stream);
-    });
+    return ::musa::dnn::MemoryHandler(
+        ptr, [stream](void* p) { FreeDeviceMemoryOnStream(p, stream); });
   };
 
   auto status = op.Run(*handle, output_tensor, mean_tensor, inv_std_tensor,

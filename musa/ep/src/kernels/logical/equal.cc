@@ -1,10 +1,10 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
+
+#include <string_view>
 
 #include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
-
-#include <string_view>
 
 namespace {
 constexpr size_t kMudnnMaxElementwiseRank = 5;
@@ -142,9 +142,9 @@ OrtStatus* EqualString::Compute(Ort::KernelContext& ctx) const {
     const std::vector<int64_t> coord = Coordinates(i, out_shape);
     const int64_t lhs_offset = BroadcastOffset(coord, lhs_shape, lhs_strides);
     const int64_t rhs_offset = BroadcastOffset(coord, rhs_shape, rhs_strides);
-    const uint8_t value = static_cast<uint8_t>(
-        lhs_values[static_cast<size_t>(lhs_offset)] ==
-        rhs_values[static_cast<size_t>(rhs_offset)]);
+    const uint8_t value =
+        static_cast<uint8_t>(lhs_values[static_cast<size_t>(lhs_offset)] ==
+                             rhs_values[static_cast<size_t>(rhs_offset)]);
     out[static_cast<size_t>(i)] = value;
     if (i == 0) {
       first_value = value;

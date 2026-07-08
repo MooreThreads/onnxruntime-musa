@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
 #include <string>
@@ -164,14 +164,14 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     ScatterND, kOnnxDomain, 11, 12,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .AddTypeConstraint("indices",
-                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))),
+         .AddTypeConstraint(
+             "indices", GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))),
     ScatterND)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     ScatterND, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .AddTypeConstraint("indices",
-                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))),
+         .AddTypeConstraint(
+             "indices", GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))),
     ScatterND)

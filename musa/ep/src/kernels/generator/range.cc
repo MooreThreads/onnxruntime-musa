@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
 #include "generator/range_impl.h"
@@ -55,10 +55,9 @@ OrtStatus* ComputeRangeTyped(Ort::KernelContext& ctx,
   }
   MusaRangeParams params{};
   params.count = count;
-  return LaunchStatus(
-      LaunchMusaRangeKernel(output.GetTensorMutableRawData(), params,
-                            musa_elem_type, static_cast<double>(start),
-                            static_cast<double>(delta), stream));
+  return LaunchStatus(LaunchMusaRangeKernel(
+      output.GetTensorMutableRawData(), params, musa_elem_type,
+      static_cast<double>(start), static_cast<double>(delta), stream));
 }
 
 class Range : public OpKernelBase<Range> {

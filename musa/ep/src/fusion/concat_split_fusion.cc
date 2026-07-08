@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
 #include "fusion/concat_split_fusion.h"
@@ -173,7 +173,8 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
     auto load_input = [&](size_t source_input_index) -> OrtStatus* {
       if (source_input_index >= input_count) {
         return Ort::GetApi().CreateStatus(
-            ORT_INVALID_ARGUMENT, "ConcatSplit source input index out of range");
+            ORT_INVALID_ARGUMENT,
+            "ConcatSplit source input index out of range");
       }
       if (input_seen[source_input_index]) {
         return nullptr;
@@ -198,14 +199,14 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
       }
       std::vector<int64_t> shape = info.GetShape();
       if (shape.size() != 2 || shape[1] <= 0) {
-        return Ort::GetApi().CreateStatus(
-            ORT_INVALID_ARGUMENT, "ConcatSplit requires rank-2 inputs");
+        return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                          "ConcatSplit requires rank-2 inputs");
       }
       if (rows < 0) {
         rows = shape[0];
       } else if (rows != shape[0]) {
-        return Ort::GetApi().CreateStatus(
-            ORT_INVALID_ARGUMENT, "ConcatSplit input batch mismatch");
+        return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                          "ConcatSplit input batch mismatch");
       }
       input_data[source_input_index] = input.GetTensorRawData();
       input_cols[source_input_index] = shape[1];
@@ -216,7 +217,8 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
     for (const ConcatSplitSegmentSpec& spec : segments) {
       RETURN_IF_ERROR(load_input(spec.source_input_index));
       if (spec.source_offset < 0 || spec.width <= 0 ||
-          spec.source_offset + spec.width > input_cols[spec.source_input_index]) {
+          spec.source_offset + spec.width >
+              input_cols[spec.source_input_index]) {
         return Ort::GetApi().CreateStatus(
             ORT_INVALID_ARGUMENT, "ConcatSplit output spec exceeds input");
       }
@@ -236,8 +238,8 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
       }
       for (const ConcatSplitSumTermSpec& term : sum.terms) {
         RETURN_IF_ERROR(load_input(term.source_input_index));
-        if (term.source_offset < 0 ||
-            term.source_offset + sum.width > input_cols[term.source_input_index]) {
+        if (term.source_offset < 0 || term.source_offset + sum.width >
+                                          input_cols[term.source_input_index]) {
           return Ort::GetApi().CreateStatus(
               ORT_INVALID_ARGUMENT, "ConcatSplit Sum term exceeds input");
         }
@@ -275,9 +277,8 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
           }
         }
         const size_t bytes = segments.size() * sizeof(MusaConcatSplitSegment);
-        musaError_t alloc_status =
-            musaMalloc(reinterpret_cast<void**>(&scratch->device_segments),
-                       bytes);
+        musaError_t alloc_status = musaMalloc(
+            reinterpret_cast<void**>(&scratch->device_segments), bytes);
         if (alloc_status != musaSuccess) {
           scratch->device_segments = nullptr;
           scratch->capacity = 0;
@@ -364,9 +365,8 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
           }
         }
         const size_t bytes = sums.size() * sizeof(MusaConcatSplitSumOutput);
-        musaError_t alloc_status =
-            musaMalloc(reinterpret_cast<void**>(&scratch->device_sum_outputs),
-                       bytes);
+        musaError_t alloc_status = musaMalloc(
+            reinterpret_cast<void**>(&scratch->device_sum_outputs), bytes);
         if (alloc_status != musaSuccess) {
           scratch->device_sum_outputs = nullptr;
           scratch->sum_output_capacity = 0;
@@ -384,9 +384,8 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
           }
         }
         const size_t bytes = sum_term_count * sizeof(MusaConcatSplitSumTerm);
-        musaError_t alloc_status =
-            musaMalloc(reinterpret_cast<void**>(&scratch->device_sum_terms),
-                       bytes);
+        musaError_t alloc_status = musaMalloc(
+            reinterpret_cast<void**>(&scratch->device_sum_terms), bytes);
         if (alloc_status != musaSuccess) {
           scratch->device_sum_terms = nullptr;
           scratch->sum_term_capacity = 0;
@@ -416,12 +415,14 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
         }
       }
 
-      const size_t output_bytes = sums.size() * sizeof(MusaConcatSplitSumOutput);
+      const size_t output_bytes =
+          sums.size() * sizeof(MusaConcatSplitSumOutput);
       musaError_t copy_status = musaMemcpyAsync(
           scratch->device_sum_outputs, scratch->host_sum_outputs.data(),
           output_bytes, musaMemcpyHostToDevice, stream);
       if (copy_status == musaSuccess) {
-        const size_t term_bytes = sum_term_count * sizeof(MusaConcatSplitSumTerm);
+        const size_t term_bytes =
+            sum_term_count * sizeof(MusaConcatSplitSumTerm);
         copy_status = musaMemcpyAsync(
             scratch->device_sum_terms, scratch->host_sum_terms.data(),
             term_bytes, musaMemcpyHostToDevice, stream);
@@ -596,8 +597,7 @@ std::unique_ptr<FusionNodeCompute> CreateConcatSplitFusion(
     for (Ort::ConstValueInfo input : downstream_inputs) {
       auto it = split_specs.find(Name(input));
       if (it == split_specs.end()) {
-        throw std::runtime_error(
-            "ConcatSplit Sum input is not Split output");
+        throw std::runtime_error("ConcatSplit Sum input is not Split output");
       }
       if (sum_width < 0) {
         sum_width = it->second.width;
@@ -634,7 +634,8 @@ std::unique_ptr<FusionNodeCompute> CreateConcatSplitFusion(
       auto sum_it = sum_specs.find(output_name);
       if (sum_it == sum_specs.end()) {
         throw std::runtime_error(
-            "ConcatSplit graph output is not Split, downstream Concat, or Sum output");
+            "ConcatSplit graph output is not Split, downstream Concat, or Sum "
+            "output");
       }
       ConcatSplitSumSpec sum = sum_it->second;
       sum.output_index = output_index;
@@ -656,7 +657,6 @@ std::unique_ptr<FusionNodeCompute> CreateConcatSplitFusion(
     throw std::runtime_error("ConcatSplit requires outputs");
   }
 
-  return std::make_unique<ConcatSplitFusionCompute>(std::move(outputs),
-                                                    std::move(segments),
-                                                    std::move(sums));
+  return std::make_unique<ConcatSplitFusionCompute>(
+      std::move(outputs), std::move(segments), std::move(sums));
 }

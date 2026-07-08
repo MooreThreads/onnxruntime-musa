@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
 #pragma once
@@ -37,8 +37,8 @@ struct ConcatSplitScratch;
 
 struct ConcatSplitFusionCompute : FusionNodeCompute {
   ConcatSplitFusionCompute(std::vector<ConcatSplitOutput> outputs,
-                            std::vector<ConcatSplitSegmentSpec> segments,
-                            std::vector<ConcatSplitSumSpec> sums);
+                           std::vector<ConcatSplitSegmentSpec> segments,
+                           std::vector<ConcatSplitSumSpec> sums);
   ~ConcatSplitFusionCompute() override;
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override;

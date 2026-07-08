@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
 #include "fusion/centered_reduce_fusion.h"
@@ -115,8 +115,8 @@ bool IsFloatGpuTensor(Ort::ConstValue value) {
 
 struct CenteredReduceFusionCompute : FusionNodeCompute {
   CenteredReduceFusionCompute(size_t input_index, size_t first_output_index,
-                              size_t second_output_index,
-                              MusaReduceOp first_op, MusaReduceOp second_op)
+                              size_t second_output_index, MusaReduceOp first_op,
+                              MusaReduceOp second_op)
       : input_index(input_index),
         first_output_index(first_output_index),
         second_output_index(second_output_index),
@@ -129,8 +129,7 @@ struct CenteredReduceFusionCompute : FusionNodeCompute {
       Ort::ConstValue input = ctx.GetInput(input_index);
       if (!IsFloatGpuTensor(input)) {
         return Ort::GetApi().CreateStatus(
-            ORT_NOT_IMPLEMENTED,
-            "CenteredReduce requires a MUSA float input");
+            ORT_NOT_IMPLEMENTED, "CenteredReduce requires a MUSA float input");
       }
 
       std::vector<int64_t> input_shape =
@@ -161,8 +160,7 @@ struct CenteredReduceFusionCompute : FusionNodeCompute {
       if (!IsGpuMemory(first_output.GetTensorMemoryInfo()) ||
           !IsGpuMemory(second_output.GetTensorMemoryInfo())) {
         return Ort::GetApi().CreateStatus(
-            ORT_NOT_IMPLEMENTED,
-            "CenteredReduce requires MUSA outputs");
+            ORT_NOT_IMPLEMENTED, "CenteredReduce requires MUSA outputs");
       }
 
       return LaunchStatus(LaunchMusaCenteredReduceFloatKernel(
@@ -245,13 +243,15 @@ std::unique_ptr<FusionNodeCompute> CreateCenteredReduceFusion(
       first_reduce_node.GetOutputs();
   if (first_reduce_inputs.empty() || first_reduce_outputs.size() != 1 ||
       Name(first_reduce_inputs[0]) != Name(sub_inputs[0])) {
-    throw std::runtime_error("CenteredReduce requires Sub(input, reduce(input))");
+    throw std::runtime_error(
+        "CenteredReduce requires Sub(input, reduce(input))");
   }
 
   auto fused_input_indices = FusedInputIndices(fused_node);
   auto fused_output_indices = FusedOutputIndices(fused_node);
   return std::make_unique<CenteredReduceFusionCompute>(
-      GetMappedIndex(fused_input_indices, Name(first_reduce_inputs[0]), "input"),
+      GetMappedIndex(fused_input_indices, Name(first_reduce_inputs[0]),
+                     "input"),
       GetMappedIndex(fused_output_indices, Name(first_reduce_outputs[0]),
                      "first output"),
       GetMappedIndex(fused_output_indices, Name(second_reduce_outputs[0]),

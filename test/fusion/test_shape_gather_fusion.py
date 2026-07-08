@@ -1,4 +1,4 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
+# Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 # Licensed under the MIT License.
 """Guardrails for shape-metadata matching not catching large data tensors."""
 

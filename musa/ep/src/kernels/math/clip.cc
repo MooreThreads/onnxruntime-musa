@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
 #include "math/clip_impl.h"
@@ -68,9 +68,9 @@ OrtStatus* Clip::Compute(Ort::KernelContext& ctx) const {
                                       "Clip requires MUSA output");
   }
 
-  musaError_t status = LaunchMusaClipKernel(
-      input.GetTensorRawData(), output.GetTensorMutableRawData(), params,
-      musa_elem_type, stream);
+  musaError_t status = LaunchMusaClipKernel(input.GetTensorRawData(),
+                                            output.GetTensorMutableRawData(),
+                                            params, musa_elem_type, stream);
   if (status == musaErrorNotSupported) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Clip unsupported dtype");

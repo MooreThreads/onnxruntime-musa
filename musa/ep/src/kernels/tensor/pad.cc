@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
 #include "shared_inc/op_kernel_common.h"
@@ -120,8 +120,7 @@ OrtStatus* Pad::Compute(Ort::KernelContext& ctx) const {
       input.GetTensorRawData(), output.GetTensorMutableRawData(),
       ScalarInputOrZero(ctx, 2, elem_size, stream),
       static_cast<int32_t>(elem_size),
-      MakePadParams(input_shape, output_shape, pads_begin),
-      stream));
+      MakePadParams(input_shape, output_shape, pads_begin), stream));
 }
 }  // namespace
 

@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
 #pragma once
@@ -436,8 +436,8 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
   std::vector<int64_t> a_shape = a_info.GetShape();
   std::vector<int64_t> b_shape = b_info.GetShape();
   GemmShapeInfo shape_info;
-  RETURN_IF_ERROR(ResolveGemmShape(a_shape, b_shape, trans_a, trans_b,
-                                   shape_info));
+  RETURN_IF_ERROR(
+      ResolveGemmShape(a_shape, b_shape, trans_a, trans_b, shape_info));
   const int64_t m = shape_info.m;
   const int64_t k = shape_info.k;
   const int64_t n = shape_info.n;
@@ -496,10 +496,9 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
   const void* b_data = ctx.GetInput(1).GetTensorRawData();
   void* y_data = y.GetTensorMutableRawData();
 
-  if (bias_is_gpu && TryMudnnGemm(y_data, a_data, b_data, c_data,
-                                  a_shape, b_shape, c_shape, out_shape,
-                                  trans_a, trans_b, alpha, beta, has_bias,
-                                  elem_type, stream)) {
+  if (bias_is_gpu && TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape,
+                                  b_shape, c_shape, out_shape, trans_a, trans_b,
+                                  alpha, beta, has_bias, elem_type, stream)) {
     if (!has_activation) {
       return nullptr;
     }

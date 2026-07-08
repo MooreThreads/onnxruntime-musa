@@ -7,12 +7,13 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 - GetCapability priority: **1**
 - Finder: `FindSplitUnsqueezeConcatFusions`
+- Finder implementation: `musa/ep/src/fusion/split_unsqueeze_concat_fusion_matcher.cc`
 - Compile detector: `IsSplitUnsqueezeConcatFusionGraph`
 - Runtime factory: `CreateSplitUnsqueezeConcatFusion`
 - Runtime compute: `SplitUnsqueezeConcatFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/split_unsqueeze_concat_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `MusaEp::GetCapabilityImpl` finder source
+- Before-graph topology source: `musa/ep/src/fusion/split_unsqueeze_concat_fusion_matcher.cc` finder source
 
 ## Extracted ONNX Ops
 

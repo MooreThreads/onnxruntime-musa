@@ -7,6 +7,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 - GetCapability priority: **3**
 - Finder: `FindConcatMatMulFusions`
+- Finder implementation: `musa/ep/src/fusion/concat_matmul_fusion_matcher.cc`
 - Compile detector: `fallback`
 - Runtime factory: `CreateConcatMatMulFusion`
 - Runtime compute: `ConcatMatMulFusionCompute`

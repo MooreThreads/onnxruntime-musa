@@ -7,12 +7,13 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 - GetCapability priority: **2**
 - Finder: `FindSplitConcatReorderFusions`
+- Finder implementation: `musa/ep/src/fusion/split_concat_reorder_fusion_matcher.cc`
 - Compile detector: `IsSplitConcatReorderFusionGraph`
 - Runtime factory: `CreateSplitConcatReorderFusion`
 - Runtime compute: `SplitConcatReorderFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/split_concat_reorder_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `MusaEp::GetCapabilityImpl` finder source
+- Before-graph topology source: `musa/ep/src/fusion/split_concat_reorder_fusion_matcher.cc` finder source
 
 ## Extracted ONNX Ops
 

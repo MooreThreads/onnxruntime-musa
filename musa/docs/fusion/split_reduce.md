@@ -7,6 +7,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 - GetCapability priority: **11**
 - Finder: `FindSplitReduceFusions`
+- Finder implementation: `musa/ep/src/fusion/split_reduce_fusion_matcher.cc`
 - Compile detector: `IsSplitReduceFusionGraph`
 - Runtime factory: `CreateSplitReduceFusion`
 - Runtime compute: `SplitReduceFusionCompute`

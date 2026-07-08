@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-EP_CC = REPO / "musa" / "ep" / "src" / "ep.cc"
 COMPUTE_CC = REPO / "musa" / "ep" / "src" / "fusion" / "fusion_node_compute.cc"
+FUSION_MATCHER_CC = REPO / "musa" / "ep" / "src" / "fusion" / "fusion_matcher.cc"
 FUSION_DIR = REPO / "musa" / "ep" / "src" / "fusion"
 FUSION_TEST_DIR = REPO / "test" / "fusion"
 OUTPUT_DIR = REPO / "musa" / "docs" / "fusion"
@@ -54,6 +54,7 @@ class FusionInfo:
     slug: str
     capability: CapabilityEntry
     compile_entry: CompileEntry
+    finder_source: Path
     source: Path
     compute_type: str
     extracted_ops: list[str]
@@ -321,35 +322,19 @@ def _best_test_graph_for_fusion(
 
 
 def _capability_entries() -> list[CapabilityEntry]:
-    text = _strip_comments(EP_CC.read_text())
-    body = _extract_function_body(text, "MusaEp::GetCapabilityImpl")
-    assignments = {
-        m.group("var"): m.group("func")
-        for m in re.finditer(
-            r"std::vector<std::vector<Ort::ConstNode>>\s+(?P<var>\w+)\s*=\s*"
-            r"(?P<func>Find\w+Fusions)\s*\(",
-            body,
-        )
-    }
+    text = _strip_comments(FUSION_MATCHER_CC.read_text())
+    body = _extract_function_body(text, "FindFusionMatches")
     entries: list[CapabilityEntry] = []
-    for loop in re.finditer(
-        r"for\s*\(\s*const auto& fusion_nodes\s*:\s*(?P<var>\w+)\s*\)\s*\{"
-        r"(?P<body>.*?EpGraphSupportInfo_AddNodesToFuse\s*\([^;]+;\s*)\}",
+    for match in re.finditer(
+        r"AddFusionMatch\s*\(\s*matches\s*,\s*\"(?P<finder>Find\w+Fusions)\"\s*,\s*"
+        r"(?P<drop>true|false)\s*,\s*std::move\s*\(\s*(?P<var>\w+)\s*\)",
         body,
-        re.DOTALL,
     ):
-        variable = loop.group("var")
-        finder = assignments.get(variable)
-        if finder is None:
-            continue
-        drop = re.search(
-            r"drop_constant_initializers\s*=\s*(true|false)", loop.group("body")
-        )
         entries.append(
             CapabilityEntry(
-                variable=variable,
-                finder=finder,
-                drop_constant_initializers=drop.group(1) if drop else "unknown",
+                variable=match.group("var"),
+                finder=match.group("finder"),
+                drop_constant_initializers=match.group("drop"),
             )
         )
     return entries
@@ -449,6 +434,16 @@ def _source_with_function(name: str, sources: list[tuple[Path, str]]) -> tuple[P
     raise ValueError(f"unable to find function in fusion sources: {name}")
 
 
+def _finder_source(finder: str, sources: list[tuple[Path, str]]) -> tuple[Path, str]:
+    for path, text in sources:
+        try:
+            _extract_function_body(text, finder)
+        except ValueError:
+            continue
+        return path, text
+    return FUSION_MATCHER_CC, _strip_comments(FUSION_MATCHER_CC.read_text())
+
+
 def _factory_infos(sources: list[tuple[Path, str]]) -> dict[str, FactoryInfo]:
     infos: dict[str, FactoryInfo] = {}
     factories = sorted(
@@ -501,8 +496,8 @@ def _detector_infos(sources: list[tuple[Path, str]]) -> dict[str, DetectorInfo]:
 
 
 def _finder_ops(finder: str, sources: list[tuple[Path, str]]) -> list[str]:
-    ep_text = _strip_comments(EP_CC.read_text())
-    ops = _ops_from_function_and_helpers(ep_text, finder)
+    _source, source_text = _finder_source(finder, sources)
+    ops = _ops_from_function_and_helpers(source_text, finder)
     if ops:
         return ops
 
@@ -519,9 +514,11 @@ def _finder_ops(finder: str, sources: list[tuple[Path, str]]) -> list[str]:
     return []
 
 
-def _finder_labels(finder: str, fallback_ops: list[str]) -> list[str]:
-    ep_text = _strip_comments(EP_CC.read_text())
-    labels = _labels_from_function_and_helpers(ep_text, finder)
+def _finder_labels(
+    finder: str, sources: list[tuple[Path, str]], fallback_ops: list[str]
+) -> list[str]:
+    _source, source_text = _finder_source(finder, sources)
+    labels = _labels_from_function_and_helpers(source_text, finder)
     return labels or fallback_ops
 
 
@@ -563,12 +560,14 @@ def _helper_body_for_finder(finder: str, ep_text: str) -> str | None:
     return None
 
 
-def _pattern_graph_from_finder(finder: str, ops: list[str]) -> PatternGraph | None:
-    ep_text = _strip_comments(EP_CC.read_text())
+def _pattern_graph_from_finder(
+    finder: str, sources: list[tuple[Path, str]], ops: list[str]
+) -> PatternGraph | None:
+    _source, source_text = _finder_source(finder, sources)
     try:
-        body = _helper_body_for_finder(finder, ep_text) or _extract_function_body(
-            ep_text, finder
-        )
+        body = _helper_body_for_finder(
+            finder, source_text
+        ) or _extract_function_body(source_text, finder)
     except ValueError:
         return None
 
@@ -665,7 +664,7 @@ def _build_fusions() -> tuple[list[FusionInfo], list[CompileEntry]]:
     capability = _capability_entries()
     compile_entries = _compile_entries()
     sources = _fusion_sources()
-    known_ops = set(_ops_from_text(EP_CC.read_text()))
+    known_ops = set()
     for _path, text in sources:
         known_ops.update(_ops_from_text(text))
     factories = _factory_infos(sources)
@@ -683,8 +682,13 @@ def _build_fusions() -> tuple[list[FusionInfo], list[CompileEntry]]:
             raise ValueError(f"factory source not found: {compile_entry.factory}")
         if not finder_ops:
             finder_ops = factory.ops
-        pattern_labels = _finder_labels(entry.finder, finder_ops)
-        pattern_graph = _pattern_graph_from_finder(entry.finder, finder_ops)
+        pattern_labels = _finder_labels(entry.finder, sources, finder_ops)
+        pattern_graph = _pattern_graph_from_finder(
+            entry.finder, sources, finder_ops
+        )
+        finder_source, _finder_source_text = _finder_source(
+            entry.finder, sources
+        )
         stem = _stem_from_finder(entry.finder)
         key = _key_from_stem(stem, known_ops)
         test_graph = _best_test_graph_for_fusion(
@@ -697,6 +701,7 @@ def _build_fusions() -> tuple[list[FusionInfo], list[CompileEntry]]:
                 slug=f"{key}.md",
                 capability=entry,
                 compile_entry=compile_entry,
+                finder_source=finder_source,
                 source=factory.source,
                 compute_type=factory.compute_type,
                 extracted_ops=finder_ops,
@@ -764,7 +769,7 @@ def _render_fusion_doc(fusion: FusionInfo, priority: int) -> str:
     topology_source = (
         f"`{_relative(fusion.test_graph.source)}::{fusion.test_graph.function}`"
         if fusion.test_graph is not None
-        else "`MusaEp::GetCapabilityImpl` finder source"
+        else f"`{_relative(fusion.finder_source)}` finder source"
     )
     lines = [
         "<!-- AUTO-GENERATED by scripts/gen_fusion_docs.py. DO NOT EDIT BY HAND. -->",
@@ -776,6 +781,7 @@ def _render_fusion_doc(fusion: FusionInfo, priority: int) -> str:
         "",
         f"- GetCapability priority: **{priority}**",
         f"- Finder: `{fusion.capability.finder}`",
+        f"- Finder implementation: `{_relative(fusion.finder_source)}`",
         f"- Compile detector: `{fusion.compile_entry.detector}`",
         f"- Runtime factory: `{fusion.compile_entry.factory}`",
         f"- Runtime compute: `{fusion.compute_type}`",
@@ -805,7 +811,7 @@ def _render_priority_doc(fusions: list[FusionInfo], compile_entries: list[Compil
         "<!-- AUTO-GENERATED by scripts/gen_fusion_docs.py. DO NOT EDIT BY HAND. -->",
         "# MUSA Fusion Priority",
         "",
-        "This file is generated from `MusaEp::GetCapabilityImpl` and `MusaEp::CompileImpl`.",
+        "This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusion_node_compute.cc`.",
         "",
         "## GetCapability Match Order",
         "",

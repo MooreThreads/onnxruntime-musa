@@ -1,6 +1,6 @@
 # MUSA Fusion Development Guide
 
-本文档说明当前 MUSA EP fusion 的开发范式。它是手写开发指南；自动生成的优先级和单个 fusion 拓扑说明仍然在 [`fusion_priority.md`](fusion_priority.md) 和 [`fusion/`](fusion/) 下。
+本文档说明当前 MUSA EP fusion 的开发范式。它是手写开发指南；自动生成的优先级和单个 fusion 拓扑说明仍然在 [`fusion_priority.md`](fusion_priority.md) 和 [`fusion/`](fusion/) 下。关于 overlap 机制迁移的背景和修复细节，见 [`fusion_overlap_fix.md`](fusion_overlap_fix.md)。
 
 ## 当前模型
 
@@ -64,8 +64,14 @@ GetCapability matcher
 std::vector<std::vector<Ort::ConstNode>> FindNameFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids);
+    const std::unordered_set<size_t>& accepted_node_ids);
 ```
+
+   - `accepted_node_ids` 是只读剪枝提示，表示更高优先级 matcher 已经被
+     dispatcher 接受的原始 ONNX node。matcher 可以用它跳过 root、producer
+     或 consumer，但不能修改它。
+   - `Find<Name>Fusions(...)` 返回的是 candidate proposals，不代表这些
+     candidate 已经最终注册给 ORT。
 
 4. 声明 matcher
    - 在 `fusion_matcher.h` 声明 `Find<Name>Fusions(...)`。
@@ -74,7 +80,10 @@ std::vector<std::vector<Ort::ConstNode>> FindNameFusions(
 5. 注册 matcher 优先级
    - 在 `fusion_matcher.cc` 的 `FindFusionMatches(...)` 中按优先级调用 matcher。
    - 新建 fusion 默认追加到当前 matcher 顺序末尾，除非有明确理由需要更高优先级。
-   - `fused_node_ids` 是优先级机制的一部分：前面的 matcher 命中后，后面的 matcher 不能复用这些节点。
+   - `accepted_node_ids` 是优先级机制的一部分：前面的 matcher candidate
+     被 dispatcher 接受后，后面的 matcher 不能复用这些节点。
+   - 不要在 matcher 内更新 `accepted_node_ids`。全局占用只能由
+     `fusion_matcher.cc` 的 dispatcher accept helper 完成。
    - `AddFusionMatch(..., drop_constant_initializers, ...)` 的第三个参数必须按 fusion runtime 输入约定设置。
 
 6. 写 runtime fusion
@@ -113,17 +122,50 @@ std::unique_ptr<FusionNodeCompute> CreateNameFusion(
 
 ## Matcher 规则
 
-matcher 必须保守。宁可不融合，也不要 claim 一个 runtime factory 处理不了的子图。
+matcher 必须保守。宁可不融合，也不要返回一个 runtime factory 处理不了的子图。
 
 基本要求：
 
 - 每个候选节点先检查 `IsOnnxOp(...)`。
 - 对 shape/rank/dtype/axis/attribute 做 capability-time 检查。
 - 对内部 tensor 检查 graph output 和 consumer。
-- 对已融合节点检查 `fused_node_ids`。
-- 命中后立即把 fusion 内所有节点 id 加入 `fused_node_ids`。
+- 对已接受节点检查 `accepted_node_ids`。
+- 命中后只返回 candidate，不要把 fusion 内节点 id 加入
+  `accepted_node_ids`。
 - 返回的 `std::vector<Ort::ConstNode>` 应包含 runtime factory 需要看到的完整子图节点。
+- 返回的 candidate 内部不能包含重复 node。
 - matcher 条件必须和 `Create*Fusion(...)` / `Is*FusionGraph(...)` 的约束一致。
+
+### Candidate 和 overlap 规则
+
+GetCapability matcher 的职责是提出候选 fusion；是否最终接受由
+`fusion_matcher.cc` 中的 dispatcher 决定。dispatcher 会对每个 candidate
+做统一校验：
+
+```text
+1. candidate 不能为空。
+2. candidate 不能包含 null node。
+3. candidate 内部不能有重复 node id。
+4. candidate 不能包含已经被更高优先级 fusion 接受的 node id。
+```
+
+通过校验后，dispatcher 才会一次性把 candidate 内所有 node id 加入全局
+`accepted_node_ids`。如果 candidate 和已接受 fusion 重叠，整个 candidate
+会被拒绝，不会部分修改全局占用集合。
+
+这条规则的目的是保证一个原始 ONNX node 最多只能属于一个 fused subgraph。
+开发 matcher 时不要依赖“自己 insert 到全局 set”来解决冲突；这个旧模式
+已经被移除。
+
+复杂 matcher 在沿 producer 或 consumer 扩展时仍然应该主动读取
+`accepted_node_ids` 做剪枝，尤其是可选 downstream node。例如某个 fusion
+可以融合 `Root + OptionalConsumer`，但 `OptionalConsumer` 已被更高优先级
+fusion 接受，那么 matcher 应该优先返回缩小后的 `Root` candidate，而不是
+把已接受 node 放进 candidate 后等待 dispatcher 拒绝整个 fusion。
+
+如果某个 fusion 不能安全缩小，则可以返回完整 candidate；dispatcher 会在
+overlap 时拒绝它。这个行为比 matcher 自行占用 node 更安全，因为全局
+no-overlap 不变量仍由 dispatcher 保证。
 
 常用 helper：
 
@@ -155,7 +197,22 @@ runtime 侧要把 matcher 的 capability 条件重新落到可执行实现上：
 
 ## 优先级
 
-GetCapability 优先级只在 `fusion_matcher.cc` 中维护。顺序越靠前，越先 claim 节点。
+GetCapability 优先级只在 `fusion_matcher.cc` 中维护。顺序越靠前，越先被
+调用，也越先获得接受 candidate 的机会。
+
+当前机制分两步：
+
+```text
+for finder in priority order:
+  candidates = FindXxxFusions(all_nodes, graph_output_names, accepted_node_ids)
+  accepted = dispatcher validates candidates against accepted_node_ids
+  dispatcher records accepted candidate node ids into accepted_node_ids
+```
+
+也就是说，finder 顺序决定冲突时谁获胜。较早 finder 的 candidate 一旦被
+接受，后续 finder 返回的任何包含相同 node id 的 candidate 都会被拒绝。
+后续 finder 可以读取 `accepted_node_ids`，提前避开这些 node，或者返回一个
+不重叠的缩小 candidate。
 
 默认情况下，新建 fusion 应放在最低优先级。只有在新 matcher 必须先于某个已有 matcher 才能得到正确或显著更优的行为时，才把它插到中间；这种情况需要在 review 说明中明确写出被影响的已有 matcher、原因和验证结果。
 
@@ -163,10 +220,12 @@ GetCapability 优先级只在 `fusion_matcher.cc` 中维护。顺序越靠前，
 
 - 新 matcher 是否会抢走旧 matcher 的节点。
 - 被抢走后 runtime factory 是否等价或更严格。
-- `fused_node_ids` 是否会让后续 matcher 少命中真实模型中更重要的 fusion。
+- `accepted_node_ids` 是否会让后续 matcher 少命中真实模型中更重要的 fusion。
+- 新 matcher 是否可能沿 producer/consumer 扩展到已被接受的 node。
+- 如果发生 overlap，应该缩小 candidate 还是让 dispatcher 拒绝整个 candidate。
 - `fusion_priority.md` 是否反映了预期顺序。
 
-Compile dispatch 顺序在 `fusion_node_compute.cc` 中维护。它决定 ORT fused graph 到 runtime factory 的选择，和 GetCapability matcher 顺序是两件事。通常 GetCapability 顺序处理“哪个 pattern 先 claim 原始 ONNX 节点”，Compile 顺序处理“这个 fused graph 用哪个 factory 创建 compute”。
+Compile dispatch 顺序在 `fusion_node_compute.cc` 中维护。它决定 ORT fused graph 到 runtime factory 的选择，和 GetCapability matcher 顺序是两件事。通常 GetCapability 顺序处理“哪个 pattern 先接受并占用原始 ONNX 节点”，Compile 顺序处理“这个 fused graph 用哪个 factory 创建 compute”。
 
 ## 文档和验证
 

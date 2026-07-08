@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "fusion/fusion_node_compute.h"
@@ -20,7 +21,8 @@ struct ConcatMatMulScratch;
 struct ConcatMatMulFusionCompute : FusionNodeCompute {
   ConcatMatMulFusionCompute(int64_t axis, int64_t concat_input_idx,
                             std::vector<size_t> concat_input_indices,
-                            size_t other_input_index);
+                            size_t other_input_index,
+                            std::vector<std::string> fused_input_names);
   ~ConcatMatMulFusionCompute() override;
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override;
@@ -29,6 +31,7 @@ struct ConcatMatMulFusionCompute : FusionNodeCompute {
   int64_t concat_input_idx;
   std::vector<size_t> concat_input_indices;
   size_t other_input_index;
+  std::vector<std::string> fused_input_names;
   mutable std::unique_ptr<ConcatMatMulScratch> scratch;
   mutable std::mutex scratch_mutex;
 };

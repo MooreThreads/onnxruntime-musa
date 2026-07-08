@@ -135,12 +135,12 @@ bool CanFuseConcatMatMul(Ort::ConstNode concat_node, Ort::ConstNode matmul_node,
 std::vector<std::vector<Ort::ConstNode>> FindConcatMatMulFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
 
   for (Ort::ConstNode concat_node : all_nodes) {
     if (!IsOnnxOp(concat_node, "Concat") ||
-        fused_node_ids.count(concat_node.GetId()) != 0) {
+        accepted_node_ids.count(concat_node.GetId()) != 0) {
       continue;
     }
 
@@ -159,7 +159,7 @@ std::vector<std::vector<Ort::ConstNode>> FindConcatMatMulFusions(
 
     Ort::ConstNode matmul_node = consumers[0].node;
     if (!IsOnnxOp(matmul_node, "MatMul") ||
-        fused_node_ids.count(matmul_node.GetId()) != 0) {
+        accepted_node_ids.count(matmul_node.GetId()) != 0) {
       continue;
     }
 
@@ -167,13 +167,11 @@ std::vector<std::vector<Ort::ConstNode>> FindConcatMatMulFusions(
       continue;
     }
     if (IsParallelEinsumActivationConcatCandidate(
-            concat_node, graph_output_names, fused_node_ids)) {
+            concat_node, graph_output_names, accepted_node_ids)) {
       continue;
     }
 
     fusions.push_back({concat_node, matmul_node});
-    fused_node_ids.insert(concat_node.GetId());
-    fused_node_ids.insert(matmul_node.GetId());
   }
 
   return fusions;

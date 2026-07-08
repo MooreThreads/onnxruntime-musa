@@ -51,7 +51,7 @@ bool MatchParallelEinsumActivationBranch(
     Ort::ConstNode concat_node, size_t concat_input_index,
     Ort::ConstValueInfo concat_input,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids,
+    const std::unordered_set<size_t>& accepted_node_ids,
     ParallelEinsumActivationBranchMatch& branch) {
   if (!HasSingleConsumerAt(concat_input, concat_node,
                            static_cast<int64_t>(concat_input_index),
@@ -62,7 +62,7 @@ bool MatchParallelEinsumActivationBranch(
 
   Ort::ConstNode mul_node{nullptr};
   if (!GetProducer(concat_input, mul_node) || !IsOnnxOp(mul_node, "Mul") ||
-      fused_node_ids.count(mul_node.GetId()) != 0) {
+      accepted_node_ids.count(mul_node.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> mul_inputs = mul_node.GetInputs();
@@ -83,7 +83,7 @@ bool MatchParallelEinsumActivationBranch(
       break;
     }
   }
-  if (!add_node || fused_node_ids.count(add_node.GetId()) != 0) {
+  if (!add_node || accepted_node_ids.count(add_node.GetId()) != 0) {
     return false;
   }
   const size_t gate_input_index = static_cast<size_t>(1 - add_input_index);
@@ -113,7 +113,7 @@ bool MatchParallelEinsumActivationBranch(
       break;
     }
   }
-  if (!third_einsum || fused_node_ids.count(third_einsum.GetId()) != 0) {
+  if (!third_einsum || accepted_node_ids.count(third_einsum.GetId()) != 0) {
     return false;
   }
   const size_t bias_input_index = static_cast<size_t>(1 - third_input_index);
@@ -137,7 +137,7 @@ bool MatchParallelEinsumActivationBranch(
   Ort::ConstNode second_tanh{nullptr};
   if (!GetProducer(third_inputs[1], second_tanh) ||
       !IsOnnxOp(second_tanh, "Tanh") ||
-      fused_node_ids.count(second_tanh.GetId()) != 0) {
+      accepted_node_ids.count(second_tanh.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> second_tanh_inputs = second_tanh.GetInputs();
@@ -153,7 +153,7 @@ bool MatchParallelEinsumActivationBranch(
   Ort::ConstNode second_einsum{nullptr};
   if (!GetProducer(second_tanh_inputs[0], second_einsum) ||
       !HasEinsumEquation(second_einsum, "ij,bjk->bik") ||
-      fused_node_ids.count(second_einsum.GetId()) != 0) {
+      accepted_node_ids.count(second_einsum.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> second_inputs = second_einsum.GetInputs();
@@ -170,7 +170,7 @@ bool MatchParallelEinsumActivationBranch(
   Ort::ConstNode first_tanh{nullptr};
   if (!GetProducer(second_inputs[1], first_tanh) ||
       !IsOnnxOp(first_tanh, "Tanh") ||
-      fused_node_ids.count(first_tanh.GetId()) != 0) {
+      accepted_node_ids.count(first_tanh.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> first_tanh_inputs = first_tanh.GetInputs();
@@ -185,7 +185,7 @@ bool MatchParallelEinsumActivationBranch(
   Ort::ConstNode first_einsum{nullptr};
   if (!GetProducer(first_tanh_inputs[0], first_einsum) ||
       !HasEinsumEquation(first_einsum, "ij,bjk->bik") ||
-      fused_node_ids.count(first_einsum.GetId()) != 0) {
+      accepted_node_ids.count(first_einsum.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> first_inputs = first_einsum.GetInputs();
@@ -243,13 +243,13 @@ bool MatchParallelEinsumActivationBranch(
 bool CanFuseParallelEinsumActivationConcat(
     Ort::ConstNode concat_node,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids,
+    const std::unordered_set<size_t>& accepted_node_ids,
     std::vector<Ort::ConstNode>* fusion_nodes) {
   std::vector<Ort::ConstValueInfo> concat_inputs = concat_node.GetInputs();
   std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
   if (!IsOnnxOp(concat_node, "Concat") || concat_inputs.size() != 4 ||
       concat_outputs.size() != 1 ||
-      fused_node_ids.count(concat_node.GetId()) != 0 ||
+      accepted_node_ids.count(concat_node.GetId()) != 0 ||
       !IsFloatTensorValueInfo(concat_outputs[0])) {
     return false;
   }
@@ -271,8 +271,8 @@ bool CanFuseParallelEinsumActivationConcat(
   for (size_t i = 0; i < concat_inputs.size(); ++i) {
     ParallelEinsumActivationBranchMatch branch;
     if (!MatchParallelEinsumActivationBranch(concat_node, i, concat_inputs[i],
-                                             graph_output_names, fused_node_ids,
-                                             branch)) {
+                                             graph_output_names,
+                                             accepted_node_ids, branch)) {
       return false;
     }
     if (!branches.empty()) {
@@ -309,28 +309,26 @@ bool CanFuseParallelEinsumActivationConcat(
 bool IsParallelEinsumActivationConcatCandidate(
     Ort::ConstNode concat_node,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   return CanFuseParallelEinsumActivationConcat(concat_node, graph_output_names,
-                                               fused_node_ids, nullptr);
+                                               accepted_node_ids, nullptr);
 }
 
 std::vector<std::vector<Ort::ConstNode>> FindParallelEinsumActivationFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
   for (Ort::ConstNode concat_node : all_nodes) {
     if (!IsOnnxOp(concat_node, "Concat") ||
-        fused_node_ids.count(concat_node.GetId()) != 0) {
+        accepted_node_ids.count(concat_node.GetId()) != 0) {
       continue;
     }
     std::vector<Ort::ConstNode> fusion_nodes;
     if (!CanFuseParallelEinsumActivationConcat(concat_node, graph_output_names,
-                                               fused_node_ids, &fusion_nodes)) {
+                                               accepted_node_ids,
+                                               &fusion_nodes)) {
       continue;
-    }
-    for (Ort::ConstNode node : fusion_nodes) {
-      fused_node_ids.insert(node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

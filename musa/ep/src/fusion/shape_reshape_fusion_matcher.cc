@@ -27,10 +27,10 @@ bool CanFuseShapeReshapeFromGather(
     Ort::ConstNode gather_node,
     const std::unordered_map<std::string, Ort::ConstNode>& producers,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids,
+    const std::unordered_set<size_t>& accepted_node_ids,
     std::unordered_set<size_t>& group_node_ids) {
   if (!IsOnnxOp(gather_node, "Gather") ||
-      fused_node_ids.count(gather_node.GetId()) != 0 ||
+      accepted_node_ids.count(gather_node.GetId()) != 0 ||
       GetIntAttribute(gather_node, "axis").value_or(0) != 0) {
     return false;
   }
@@ -45,7 +45,7 @@ bool CanFuseShapeReshapeFromGather(
 
   Ort::ConstNode cast_node = FindProducer(producers, gather_inputs[0]);
   if (!cast_node || !IsOnnxOp(cast_node, "Cast") ||
-      fused_node_ids.count(cast_node.GetId()) != 0) {
+      accepted_node_ids.count(cast_node.GetId()) != 0) {
     return false;
   }
   auto cast_to = GetIntAttribute(cast_node, "to");
@@ -73,7 +73,7 @@ bool CanFuseShapeReshapeFromGather(
   bool include_shape_node = false;
   if (IsOnnxOp(shape_input_producer, "Shape")) {
     shape_node = shape_input_producer;
-    if (fused_node_ids.count(shape_node.GetId()) != 0) {
+    if (accepted_node_ids.count(shape_node.GetId()) != 0) {
       return false;
     }
 
@@ -86,7 +86,7 @@ bool CanFuseShapeReshapeFromGather(
     include_shape_node = HasOnlyConsumer(shape_outputs[0], cast_node, 0);
   } else if (IsOnnxOp(shape_input_producer, "Gather")) {
     pre_gather_node = shape_input_producer;
-    if (fused_node_ids.count(pre_gather_node.GetId()) != 0 ||
+    if (accepted_node_ids.count(pre_gather_node.GetId()) != 0 ||
         GetIntAttribute(pre_gather_node, "axis").value_or(0) != 0) {
       return false;
     }
@@ -104,7 +104,7 @@ bool CanFuseShapeReshapeFromGather(
 
     shape_node = FindProducer(producers, pre_gather_inputs[0]);
     if (!shape_node || !IsOnnxOp(shape_node, "Shape") ||
-        fused_node_ids.count(shape_node.GetId()) != 0) {
+        accepted_node_ids.count(shape_node.GetId()) != 0) {
       return false;
     }
 
@@ -138,7 +138,7 @@ bool CanFuseShapeReshapeFromGather(
   for (const auto& gather_consumer : gather_consumers) {
     Ort::ConstNode concat_node = gather_consumer.node;
     if (!IsOnnxOp(concat_node, "Concat") ||
-        fused_node_ids.count(concat_node.GetId()) != 0 ||
+        accepted_node_ids.count(concat_node.GetId()) != 0 ||
         GetIntAttribute(concat_node, "axis").value_or(0) != 0) {
       return false;
     }
@@ -170,7 +170,7 @@ bool CanFuseShapeReshapeFromGather(
 
     Ort::ConstNode final_cast_node = concat_consumers[0].node;
     if (!IsOnnxOp(final_cast_node, "Cast") ||
-        fused_node_ids.count(final_cast_node.GetId()) != 0 ||
+        accepted_node_ids.count(final_cast_node.GetId()) != 0 ||
         GetIntAttribute(final_cast_node, "to").value_or(-1) !=
             ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
       return false;
@@ -195,7 +195,7 @@ bool CanFuseShapeReshapeFromGather(
     for (const auto& reshape_consumer : reshape_consumers) {
       Ort::ConstNode reshape_node = reshape_consumer.node;
       if (reshape_consumer.index != 1 || !IsOnnxOp(reshape_node, "Reshape") ||
-          fused_node_ids.count(reshape_node.GetId()) != 0) {
+          accepted_node_ids.count(reshape_node.GetId()) != 0) {
         return false;
       }
 
@@ -217,14 +217,14 @@ bool CanFuseShapeReshapeFromGather(
 std::vector<std::vector<Ort::ConstNode>> FindShapeReshapeFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
   auto producers = BuildProducerMap(all_nodes);
 
   for (Ort::ConstNode node : all_nodes) {
     std::unordered_set<size_t> group_node_ids;
     if (!CanFuseShapeReshapeFromGather(node, producers, graph_output_names,
-                                       fused_node_ids, group_node_ids)) {
+                                       accepted_node_ids, group_node_ids)) {
       continue;
     }
 
@@ -236,7 +236,6 @@ std::vector<std::vector<Ort::ConstNode>> FindShapeReshapeFusions(
     }
     if (!fusion_nodes.empty()) {
       fusions.push_back(std::move(fusion_nodes));
-      fused_node_ids.insert(group_node_ids.begin(), group_node_ids.end());
     }
   }
 

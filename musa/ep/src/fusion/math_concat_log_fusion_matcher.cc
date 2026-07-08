@@ -27,10 +27,10 @@ bool CanFuseMathConcatLog(
     Ort::ConstNode output_mul_node,
     const std::unordered_map<std::string, Ort::ConstNode>& producers,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids,
+    const std::unordered_set<size_t>& accepted_node_ids,
     std::vector<Ort::ConstNode>& fusion_nodes) {
   if (!IsOnnxOp(output_mul_node, "Mul") ||
-      fused_node_ids.count(output_mul_node.GetId()) != 0) {
+      accepted_node_ids.count(output_mul_node.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> mul_inputs = output_mul_node.GetInputs();
@@ -54,7 +54,7 @@ bool CanFuseMathConcatLog(
       }
     }
   }
-  if (!log_node || fused_node_ids.count(log_node.GetId()) != 0 ||
+  if (!log_node || accepted_node_ids.count(log_node.GetId()) != 0 ||
       !IsConstantInitializerValueInfo(scale_input)) {
     return false;
   }
@@ -70,7 +70,7 @@ bool CanFuseMathConcatLog(
 
   Ort::ConstNode add_node = FindProducer(producers, log_inputs[0]);
   if (!IsOnnxOp(add_node, "Add") ||
-      fused_node_ids.count(add_node.GetId()) != 0) {
+      accepted_node_ids.count(add_node.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> add_inputs = add_node.GetInputs();
@@ -96,7 +96,7 @@ bool CanFuseMathConcatLog(
       }
     }
   }
-  if (!max_node || fused_node_ids.count(max_node.GetId()) != 0 ||
+  if (!max_node || accepted_node_ids.count(max_node.GetId()) != 0 ||
       !IsConstantInitializerValueInfo(add_input)) {
     return false;
   }
@@ -136,7 +136,8 @@ bool CanFuseMathConcatLog(
   std::unordered_set<size_t> selected_node_ids;
   fusion_nodes.clear();
   for (Ort::ConstNode node : {max_node, add_node, log_node, output_mul_node}) {
-    if (!AddFusionNode(node, fused_node_ids, selected_node_ids, fusion_nodes)) {
+    if (!AddFusionNode(node, accepted_node_ids, selected_node_ids,
+                       fusion_nodes)) {
       return false;
     }
   }
@@ -154,17 +155,14 @@ bool CanFuseMathConcatLog(
 std::vector<std::vector<Ort::ConstNode>> FindMathConcatLogFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
   auto producers = BuildProducerMap(all_nodes);
   for (Ort::ConstNode output_mul_node : all_nodes) {
     std::vector<Ort::ConstNode> fusion_nodes;
     if (!CanFuseMathConcatLog(output_mul_node, producers, graph_output_names,
-                              fused_node_ids, fusion_nodes)) {
+                              accepted_node_ids, fusion_nodes)) {
       continue;
-    }
-    for (Ort::ConstNode node : fusion_nodes) {
-      fused_node_ids.insert(node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

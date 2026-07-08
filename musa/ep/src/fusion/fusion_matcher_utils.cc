@@ -102,10 +102,10 @@ bool HasOnlyConsumer(Ort::ConstValueInfo output, Ort::ConstNode expected_node,
 }
 
 bool AddFusionNode(Ort::ConstNode node,
-                   const std::unordered_set<size_t>& fused_node_ids,
+                   const std::unordered_set<size_t>& accepted_node_ids,
                    std::unordered_set<size_t>& selected_node_ids,
                    std::vector<Ort::ConstNode>& fusion_nodes) {
-  if (!node || fused_node_ids.count(node.GetId()) != 0) {
+  if (!node || accepted_node_ids.count(node.GetId()) != 0) {
     return false;
   }
   if (selected_node_ids.insert(node.GetId()).second) {

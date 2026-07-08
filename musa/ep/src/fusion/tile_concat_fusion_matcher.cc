@@ -27,10 +27,10 @@ bool CanFuseTileConcat(
     Ort::ConstNode concat_node,
     const std::unordered_map<std::string, Ort::ConstNode>& producers,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids,
+    const std::unordered_set<size_t>& accepted_node_ids,
     std::vector<Ort::ConstNode>& fusion_nodes) {
   if (!IsOnnxOp(concat_node, "Concat") ||
-      fused_node_ids.count(concat_node.GetId()) != 0) {
+      accepted_node_ids.count(concat_node.GetId()) != 0) {
     return false;
   }
 
@@ -52,7 +52,7 @@ bool CanFuseTileConcat(
     }
 
     Ort::ConstNode tile_node = producer_it->second;
-    if (fused_node_ids.count(tile_node.GetId()) != 0) {
+    if (accepted_node_ids.count(tile_node.GetId()) != 0) {
       return false;
     }
     std::vector<Ort::ConstValueInfo> tile_inputs = tile_node.GetInputs();
@@ -65,7 +65,7 @@ bool CanFuseTileConcat(
     }
 
     found_tile_input = true;
-    if (!AddFusionNode(tile_node, fused_node_ids, selected_node_ids,
+    if (!AddFusionNode(tile_node, accepted_node_ids, selected_node_ids,
                        fusion_nodes)) {
       return false;
     }
@@ -74,7 +74,7 @@ bool CanFuseTileConcat(
   if (!found_tile_input) {
     return false;
   }
-  if (!AddFusionNode(concat_node, fused_node_ids, selected_node_ids,
+  if (!AddFusionNode(concat_node, accepted_node_ids, selected_node_ids,
                      fusion_nodes)) {
     return false;
   }
@@ -89,17 +89,14 @@ bool CanFuseTileConcat(
 std::vector<std::vector<Ort::ConstNode>> FindTileConcatFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
   auto producers = BuildProducerMap(all_nodes);
   for (Ort::ConstNode node : all_nodes) {
     std::vector<Ort::ConstNode> fusion_nodes;
-    if (!CanFuseTileConcat(node, producers, graph_output_names, fused_node_ids,
-                           fusion_nodes)) {
+    if (!CanFuseTileConcat(node, producers, graph_output_names,
+                           accepted_node_ids, fusion_nodes)) {
       continue;
-    }
-    for (Ort::ConstNode fusion_node : fusion_nodes) {
-      fused_node_ids.insert(fusion_node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

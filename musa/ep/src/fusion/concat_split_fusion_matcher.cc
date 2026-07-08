@@ -26,6 +26,7 @@ namespace musa_ep {
 bool CanFuseConcatSplit(
     Ort::ConstNode concat_node, Ort::ConstNode split_node,
     const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& accepted_node_ids,
     std::vector<Ort::ConstNode>& fusion_nodes) {
   std::vector<Ort::ConstValueInfo> concat_inputs = concat_node.GetInputs();
   std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
@@ -115,6 +116,10 @@ bool CanFuseConcatSplit(
   for (Ort::ConstValueInfo split_output : split_outputs) {
     for (const auto& consumer : split_output.GetConsumers()) {
       Ort::ConstNode downstream_node = consumer.node;
+      if (!downstream_node ||
+          accepted_node_ids.count(downstream_node.GetId()) != 0) {
+        continue;
+      }
       if (IsOnnxOp(downstream_node, "Concat")) {
         auto axis_attr = GetIntAttribute(downstream_node, "axis");
         int64_t downstream_axis = 0;
@@ -179,12 +184,12 @@ bool CanFuseConcatSplit(
 std::vector<std::vector<Ort::ConstNode>> FindConcatSplitFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
 
   for (Ort::ConstNode concat_node : all_nodes) {
     if (!IsOnnxOp(concat_node, "Concat") ||
-        fused_node_ids.count(concat_node.GetId()) != 0) {
+        accepted_node_ids.count(concat_node.GetId()) != 0) {
       continue;
     }
 
@@ -200,18 +205,14 @@ std::vector<std::vector<Ort::ConstNode>> FindConcatSplitFusions(
 
     Ort::ConstNode split_node = consumers[0].node;
     if (!IsOnnxOp(split_node, "Split") ||
-        fused_node_ids.count(split_node.GetId()) != 0) {
+        accepted_node_ids.count(split_node.GetId()) != 0) {
       continue;
     }
 
     std::vector<Ort::ConstNode> fusion_nodes;
     if (!CanFuseConcatSplit(concat_node, split_node, graph_output_names,
-                            fusion_nodes)) {
+                            accepted_node_ids, fusion_nodes)) {
       continue;
-    }
-
-    for (Ort::ConstNode node : fusion_nodes) {
-      fused_node_ids.insert(node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

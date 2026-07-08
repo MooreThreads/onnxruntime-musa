@@ -146,12 +146,12 @@ bool CanFuseSplitConcatReorder(
 std::vector<std::vector<Ort::ConstNode>> FindSplitConcatReorderFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
 
   for (Ort::ConstNode split_node : all_nodes) {
     if (!IsOnnxOp(split_node, "Split") ||
-        fused_node_ids.count(split_node.GetId()) != 0) {
+        accepted_node_ids.count(split_node.GetId()) != 0) {
       continue;
     }
 
@@ -164,7 +164,7 @@ std::vector<std::vector<Ort::ConstNode>> FindSplitConcatReorderFusions(
     Ort::ValueInfoConsumerProducerInfo producer =
         split_inputs[0].GetProducerNode();
     if (!producer.node || !IsOnnxOp(producer.node, "Reshape") ||
-        fused_node_ids.count(producer.node.GetId()) != 0) {
+        accepted_node_ids.count(producer.node.GetId()) != 0) {
       continue;
     }
     Ort::ConstNode reshape_node = producer.node;
@@ -193,7 +193,7 @@ std::vector<std::vector<Ort::ConstNode>> FindSplitConcatReorderFusions(
       }
     }
     if (!all_outputs_feed_same_concat || !concat_node ||
-        fused_node_ids.count(concat_node.GetId()) != 0) {
+        accepted_node_ids.count(concat_node.GetId()) != 0) {
       continue;
     }
 
@@ -203,9 +203,6 @@ std::vector<std::vector<Ort::ConstNode>> FindSplitConcatReorderFusions(
     }
 
     fusions.push_back({reshape_node, split_node, concat_node});
-    fused_node_ids.insert(reshape_node.GetId());
-    fused_node_ids.insert(split_node.GetId());
-    fused_node_ids.insert(concat_node.GetId());
   }
 
   return fusions;

@@ -180,12 +180,12 @@ bool CanFuseGemmActivation(Ort::ConstNode gemm_node,
 std::vector<std::vector<Ort::ConstNode>> FindGemmActivationFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
 
   for (Ort::ConstNode gemm_node : all_nodes) {
     if (!IsOnnxOp(gemm_node, "Gemm") ||
-        fused_node_ids.count(gemm_node.GetId()) != 0) {
+        accepted_node_ids.count(gemm_node.GetId()) != 0) {
       continue;
     }
 
@@ -203,7 +203,7 @@ std::vector<std::vector<Ort::ConstNode>> FindGemmActivationFusions(
 
     Ort::ConstNode activation_node = gemm_consumers[0].node;
     if (!IsLinearActivationNode(activation_node) ||
-        fused_node_ids.count(activation_node.GetId()) != 0) {
+        accepted_node_ids.count(activation_node.GetId()) != 0) {
       continue;
     }
 
@@ -212,8 +212,6 @@ std::vector<std::vector<Ort::ConstNode>> FindGemmActivationFusions(
     }
 
     fusions.push_back({gemm_node, activation_node});
-    fused_node_ids.insert(gemm_node.GetId());
-    fused_node_ids.insert(activation_node.GetId());
   }
 
   return fusions;
@@ -222,12 +220,12 @@ std::vector<std::vector<Ort::ConstNode>> FindGemmActivationFusions(
 std::vector<std::vector<Ort::ConstNode>> FindFusedGemmFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
 
   for (Ort::ConstNode matmul_node : all_nodes) {
     if (!IsOnnxOp(matmul_node, "MatMul") ||
-        fused_node_ids.count(matmul_node.GetId()) != 0) {
+        accepted_node_ids.count(matmul_node.GetId()) != 0) {
       continue;
     }
 
@@ -246,7 +244,7 @@ std::vector<std::vector<Ort::ConstNode>> FindFusedGemmFusions(
 
     Ort::ConstNode add_node = matmul_consumers[0].node;
     if (!IsOnnxOp(add_node, "Add") ||
-        fused_node_ids.count(add_node.GetId()) != 0) {
+        accepted_node_ids.count(add_node.GetId()) != 0) {
       continue;
     }
 
@@ -261,13 +259,10 @@ std::vector<std::vector<Ort::ConstNode>> FindFusedGemmFusions(
     if (add_consumers.size() == 1 && add_consumers[0].index == 0) {
       Ort::ConstNode activation_node = add_consumers[0].node;
       if (IsLinearActivationNode(activation_node) &&
-          fused_node_ids.count(activation_node.GetId()) == 0 &&
+          accepted_node_ids.count(activation_node.GetId()) == 0 &&
           CanFuseMatMulAddActivation(matmul_node, add_node, activation_node,
                                      matmul_consumers[0].index)) {
         fusions.push_back({matmul_node, add_node, activation_node});
-        fused_node_ids.insert(matmul_node.GetId());
-        fused_node_ids.insert(add_node.GetId());
-        fused_node_ids.insert(activation_node.GetId());
         continue;
       }
     }
@@ -277,8 +272,6 @@ std::vector<std::vector<Ort::ConstNode>> FindFusedGemmFusions(
     }
 
     fusions.push_back({matmul_node, add_node});
-    fused_node_ids.insert(matmul_node.GetId());
-    fused_node_ids.insert(add_node.GetId());
   }
 
   return fusions;

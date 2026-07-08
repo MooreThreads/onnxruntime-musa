@@ -27,10 +27,10 @@ bool CanFuseModuloGather(
     Ort::ConstNode gather_node,
     const std::unordered_map<std::string, Ort::ConstNode>& producers,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids,
+    const std::unordered_set<size_t>& accepted_node_ids,
     std::vector<Ort::ConstNode>& fusion_nodes) {
   if (!IsOnnxOp(gather_node, "Gather") ||
-      fused_node_ids.count(gather_node.GetId()) != 0 ||
+      accepted_node_ids.count(gather_node.GetId()) != 0 ||
       GetIntAttribute(gather_node, "axis").value_or(0) != 0) {
     return false;
   }
@@ -48,7 +48,7 @@ bool CanFuseModuloGather(
     return false;
   }
   Ort::ConstNode final_mul = final_mul_it->second;
-  if (fused_node_ids.count(final_mul.GetId()) != 0) {
+  if (accepted_node_ids.count(final_mul.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> final_mul_inputs = final_mul.GetInputs();
@@ -70,8 +70,9 @@ bool CanFuseModuloGather(
       cast_node = it->second;
     }
   }
-  if (!add_node || !cast_node || fused_node_ids.count(add_node.GetId()) != 0 ||
-      fused_node_ids.count(cast_node.GetId()) != 0) {
+  if (!add_node || !cast_node ||
+      accepted_node_ids.count(add_node.GetId()) != 0 ||
+      accepted_node_ids.count(cast_node.GetId()) != 0) {
     return false;
   }
 
@@ -94,7 +95,7 @@ bool CanFuseModuloGather(
     }
   }
   std::optional<int64_t> offset = ReadScalarIntInitializer(offset_input);
-  if (!sub_node || fused_node_ids.count(sub_node.GetId()) != 0 ||
+  if (!sub_node || accepted_node_ids.count(sub_node.GetId()) != 0 ||
       !offset.has_value() || *offset < 0) {
     return false;
   }
@@ -113,7 +114,7 @@ bool CanFuseModuloGather(
     return false;
   }
   Ort::ConstNode product_mul = product_it->second;
-  if (fused_node_ids.count(product_mul.GetId()) != 0) {
+  if (accepted_node_ids.count(product_mul.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> product_inputs = product_mul.GetInputs();
@@ -136,7 +137,7 @@ bool CanFuseModuloGather(
     }
   }
   std::optional<int64_t> modulus = ReadScalarIntInitializer(modulus_input);
-  if (!div_node || fused_node_ids.count(div_node.GetId()) != 0 ||
+  if (!div_node || accepted_node_ids.count(div_node.GetId()) != 0 ||
       !modulus.has_value() || *modulus <= 0) {
     return false;
   }
@@ -164,7 +165,7 @@ bool CanFuseModuloGather(
     return false;
   }
   Ort::ConstNode not_node = not_it->second;
-  if (fused_node_ids.count(not_node.GetId()) != 0) {
+  if (accepted_node_ids.count(not_node.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> not_inputs = not_node.GetInputs();
@@ -179,7 +180,7 @@ bool CanFuseModuloGather(
     return false;
   }
   Ort::ConstNode equal_node = equal_it->second;
-  if (fused_node_ids.count(equal_node.GetId()) != 0) {
+  if (accepted_node_ids.count(equal_node.GetId()) != 0) {
     return false;
   }
   std::vector<Ort::ConstValueInfo> equal_inputs = equal_node.GetInputs();
@@ -213,7 +214,8 @@ bool CanFuseModuloGather(
   for (Ort::ConstNode node :
        {equal_node, not_node, cast_node, div_node, product_mul, sub_node,
         add_node, final_mul, gather_node}) {
-    if (!AddFusionNode(node, fused_node_ids, selected_node_ids, fusion_nodes)) {
+    if (!AddFusionNode(node, accepted_node_ids, selected_node_ids,
+                       fusion_nodes)) {
       return false;
     }
   }
@@ -231,17 +233,14 @@ bool CanFuseModuloGather(
 std::vector<std::vector<Ort::ConstNode>> FindModuloGatherFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
   auto producers = BuildProducerMap(all_nodes);
   for (Ort::ConstNode gather_node : all_nodes) {
     std::vector<Ort::ConstNode> fusion_nodes;
     if (!CanFuseModuloGather(gather_node, producers, graph_output_names,
-                             fused_node_ids, fusion_nodes)) {
+                             accepted_node_ids, fusion_nodes)) {
       continue;
-    }
-    for (Ort::ConstNode node : fusion_nodes) {
-      fused_node_ids.insert(node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

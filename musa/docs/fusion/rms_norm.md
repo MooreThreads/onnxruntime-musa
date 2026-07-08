@@ -7,6 +7,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 - GetCapability priority: **12**
 - Finder: `FindRmsNormFusions`
+- Finder implementation: `musa/ep/src/fusion/rms_norm_fusion_matcher.cc`
 - Compile detector: `IsRmsNormFusionGraph`
 - Runtime factory: `CreateRmsNormFusion`
 - Runtime compute: `RmsNormFusionCompute`

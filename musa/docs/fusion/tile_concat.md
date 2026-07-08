@@ -7,6 +7,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 - GetCapability priority: **6**
 - Finder: `FindTileConcatFusions`
+- Finder implementation: `musa/ep/src/fusion/tile_concat_fusion_matcher.cc`
 - Compile detector: `IsTileConcatFusionGraph`
 - Runtime factory: `CreateTileConcatFusion`
 - Runtime compute: `TileConcatFusionCompute`

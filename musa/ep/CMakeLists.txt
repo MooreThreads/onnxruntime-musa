@@ -12,6 +12,8 @@ set(MUSA_PLUGIN_SOURCES
   src/ep_data_transfer.cc
   src/ep_profiling.cc
   src/ep_stream.cc
+  src/graph/cpu_preferred_nodes.cc
+  src/graph/graph_utils.cc
   src/graph_mermaid_dump.cc
   src/runtime_graph_dump.cc
 )

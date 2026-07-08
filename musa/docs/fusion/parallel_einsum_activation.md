@@ -7,12 +7,13 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 - GetCapability priority: **15**
 - Finder: `FindParallelEinsumActivationFusions`
+- Finder implementation: `musa/ep/src/fusion/parallel_einsum_activation_fusion_matcher.cc`
 - Compile detector: `IsParallelEinsumActivationFusionGraph`
 - Runtime factory: `CreateParallelEinsumActivationFusion`
 - Runtime compute: `ParallelEinsumActivationFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/parallel_einsum_activation_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `MusaEp::GetCapabilityImpl` finder source
+- Before-graph topology source: `musa/ep/src/fusion/parallel_einsum_activation_fusion_matcher.cc` finder source
 
 ## Extracted ONNX Ops
 

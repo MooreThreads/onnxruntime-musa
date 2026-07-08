@@ -277,6 +277,14 @@ struct TileConcatFusionCompute : FusionNodeCompute {
       void* output, const std::vector<const void*>& input_data,
       const std::vector<int64_t>& input_axis_dims, int64_t outer, int64_t inner,
       int64_t output_row_elements, int32_t elem_size, musaStream_t stream) {
+    if (input_data.size() <=
+        static_cast<size_t>(kMusaConcatSmallRowsMaxInputs)) {
+      return LaunchStatus(LaunchMusaConcatManySmallRowsDirect(
+          output, input_data.data(), input_axis_dims.data(),
+          static_cast<int64_t>(input_data.size()), outer, inner,
+          output_row_elements, elem_size, stream));
+    }
+
     std::vector<MusaConcatElementDesc> element_descriptors(
         static_cast<size_t>(output_row_elements));
     int64_t output_offset = 0;

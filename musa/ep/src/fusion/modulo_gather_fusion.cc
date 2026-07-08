@@ -3,7 +3,6 @@
 
 #include "fusion/modulo_gather_fusion.h"
 
-#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -69,25 +68,31 @@ size_t GetMappedIndex(const std::unordered_map<std::string, size_t>& indices,
   return it->second;
 }
 
-int64_t ReadScalarInt(Ort::ConstValue value, musaStream_t stream,
-                      const char* name) {
+int64_t ReadScalarIntInitializer(Ort::ConstValueInfo value_info,
+                                 const char* name) {
+  if (value_info == nullptr || !value_info.IsConstantInitializer()) {
+    throw std::runtime_error(std::string("ModuloGather ") + name +
+                             " must be a constant initializer");
+  }
+
+  Ort::ConstValue value{nullptr};
+  Ort::Status status = value_info.GetInitializer(value);
+  if (!status.IsOK() || !value) {
+    throw std::runtime_error(std::string("ModuloGather failed to read ") +
+                             name + " initializer");
+  }
+
   auto info = value.GetTensorTypeAndShapeInfo();
   if (info.GetElementCount() != 1) {
     throw std::runtime_error(std::string("ModuloGather ") + name +
                              " must be scalar or single-element tensor");
   }
-  std::vector<uint8_t> bytes;
-  Ort::ThrowOnError(CopyToHost(value, bytes, stream));
   ONNXTensorElementDataType elem_type = info.GetElementType();
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-    int64_t result = 0;
-    std::memcpy(&result, bytes.data(), sizeof(result));
-    return result;
+    return value.GetTensorData<int64_t>()[0];
   }
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
-    int32_t result = 0;
-    std::memcpy(&result, bytes.data(), sizeof(result));
-    return static_cast<int64_t>(result);
+    return static_cast<int64_t>(value.GetTensorData<int32_t>()[0]);
   }
   throw std::runtime_error(std::string("ModuloGather ") + name +
                            " must be int32/int64");
@@ -95,13 +100,13 @@ int64_t ReadScalarInt(Ort::ConstValue value, musaStream_t stream,
 
 struct ModuloGatherFusionCompute : FusionNodeCompute {
   ModuloGatherFusionCompute(size_t table_index, size_t input_index,
-                            size_t modulus_index, size_t offset_index,
-                            size_t invalid_index, size_t output_index)
+                            int64_t modulus, int64_t offset, int64_t invalid,
+                            size_t output_index)
       : table_index(table_index),
         input_index(input_index),
-        modulus_index(modulus_index),
-        offset_index(offset_index),
-        invalid_index(invalid_index),
+        modulus(modulus),
+        offset(offset),
+        invalid(invalid),
         output_index(output_index) {}
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override {
@@ -109,9 +114,6 @@ struct ModuloGatherFusionCompute : FusionNodeCompute {
       Ort::KernelContext ctx(kernel_context);
       Ort::ConstValue table = ctx.GetInput(table_index);
       Ort::ConstValue input = ctx.GetInput(input_index);
-      Ort::ConstValue modulus_value = ctx.GetInput(modulus_index);
-      Ort::ConstValue offset_value = ctx.GetInput(offset_index);
-      Ort::ConstValue invalid_value = ctx.GetInput(invalid_index);
 
       if (!IsGpuMemory(table.GetTensorMemoryInfo()) ||
           !IsGpuMemory(input.GetTensorMemoryInfo())) {
@@ -155,12 +157,6 @@ struct ModuloGatherFusionCompute : FusionNodeCompute {
         block_size *= table_shape[i];
       }
       const int64_t indices_count = NumElements(input_shape);
-      const int64_t modulus =
-          ReadScalarInt(modulus_value, GetComputeStream(ctx), "modulus");
-      const int64_t offset =
-          ReadScalarInt(offset_value, GetComputeStream(ctx), "offset");
-      const int64_t invalid =
-          ReadScalarInt(invalid_value, GetComputeStream(ctx), "invalid value");
       if (modulus <= 0 || offset < 0 || offset + modulus > table_shape[0]) {
         return Ort::GetApi().CreateStatus(
             ORT_INVALID_ARGUMENT, "ModuloGather invalid modulus/offset");
@@ -185,9 +181,9 @@ struct ModuloGatherFusionCompute : FusionNodeCompute {
 
   size_t table_index;
   size_t input_index;
-  size_t modulus_index;
-  size_t offset_index;
-  size_t invalid_index;
+  int64_t modulus;
+  int64_t offset;
+  int64_t invalid;
   size_t output_index;
 };
 
@@ -326,11 +322,13 @@ std::unique_ptr<FusionNodeCompute> CreateModuloGatherFusion(
 
   auto fused_inputs = FusedInputIndices(fused_node);
   auto fused_outputs = FusedOutputIndices(fused_node);
+  const int64_t modulus = ReadScalarIntInitializer(modulus_input, "modulus");
+  const int64_t offset = ReadScalarIntInitializer(offset_input, "offset");
+  const int64_t invalid =
+      ReadScalarIntInitializer(invalid_input, "invalid value");
   return std::make_unique<ModuloGatherFusionCompute>(
       GetMappedIndex(fused_inputs, Name(gather_inputs[0]), "table input"),
-      GetMappedIndex(fused_inputs, Name(source_input), "source input"),
-      GetMappedIndex(fused_inputs, Name(modulus_input), "modulus input"),
-      GetMappedIndex(fused_inputs, Name(offset_input), "offset input"),
-      GetMappedIndex(fused_inputs, Name(invalid_input), "invalid input"),
+      GetMappedIndex(fused_inputs, Name(source_input), "source input"), modulus,
+      offset, invalid,
       GetMappedIndex(fused_outputs, Name(gather_outputs[0]), "output"));
 }

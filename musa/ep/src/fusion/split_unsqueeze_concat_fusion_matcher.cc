@@ -324,12 +324,12 @@ bool CanFuseSplitUnsqueezeConcat(
 std::vector<std::vector<Ort::ConstNode>> FindSplitUnsqueezeConcatFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
 
   for (Ort::ConstNode split_node : all_nodes) {
     if (!IsOnnxOp(split_node, "Split") ||
-        fused_node_ids.count(split_node.GetId()) != 0) {
+        accepted_node_ids.count(split_node.GetId()) != 0) {
       continue;
     }
 
@@ -343,7 +343,7 @@ std::vector<std::vector<Ort::ConstNode>> FindSplitUnsqueezeConcatFusions(
     Ort::ValueInfoConsumerProducerInfo producer =
         split_inputs[0].GetProducerNode();
     if (producer.node && IsOnnxOp(producer.node, "Reshape") &&
-        fused_node_ids.count(producer.node.GetId()) == 0) {
+        accepted_node_ids.count(producer.node.GetId()) == 0) {
       std::vector<Ort::ConstValueInfo> reshape_outputs =
           producer.node.GetOutputs();
       if (reshape_outputs.size() == 1 &&
@@ -361,7 +361,7 @@ std::vector<std::vector<Ort::ConstNode>> FindSplitUnsqueezeConcatFusions(
           split_output.GetConsumers();
       if (split_consumers.size() != 1 ||
           !IsOnnxOp(split_consumers[0].node, "Unsqueeze") ||
-          fused_node_ids.count(split_consumers[0].node.GetId()) != 0) {
+          accepted_node_ids.count(split_consumers[0].node.GetId()) != 0) {
         all_outputs_feed_same_concat = false;
         break;
       }
@@ -389,7 +389,7 @@ std::vector<std::vector<Ort::ConstNode>> FindSplitUnsqueezeConcatFusions(
       unsqueeze_nodes.push_back(unsqueeze_node);
     }
     if (!all_outputs_feed_same_concat || !concat_node ||
-        fused_node_ids.count(concat_node.GetId()) != 0) {
+        accepted_node_ids.count(concat_node.GetId()) != 0) {
       continue;
     }
 
@@ -400,7 +400,7 @@ std::vector<std::vector<Ort::ConstNode>> FindSplitUnsqueezeConcatFusions(
           concat_outputs[0].GetConsumers();
       if (concat_consumers.size() == 1 &&
           IsOnnxOp(concat_consumers[0].node, "Transpose") &&
-          fused_node_ids.count(concat_consumers[0].node.GetId()) == 0) {
+          accepted_node_ids.count(concat_consumers[0].node.GetId()) == 0) {
         transpose_node = concat_consumers[0].node;
       }
     }
@@ -428,10 +428,6 @@ std::vector<std::vector<Ort::ConstNode>> FindSplitUnsqueezeConcatFusions(
     fusion_nodes.push_back(concat_node);
     if (fuse_transpose) {
       fusion_nodes.push_back(transpose_node);
-    }
-
-    for (Ort::ConstNode node : fusion_nodes) {
-      fused_node_ids.insert(node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

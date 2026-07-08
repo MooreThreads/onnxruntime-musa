@@ -570,8 +570,11 @@ std::unique_ptr<FusionNodeCompute> CreateConcatMatMulFusion(
 
   std::vector<Ort::ConstValueInfo> fused_inputs = fused_node.GetInputs();
   std::unordered_map<std::string, size_t> fused_input_indices;
+  std::vector<std::string> fused_input_names;
+  fused_input_names.reserve(fused_inputs.size());
   for (size_t i = 0; i < fused_inputs.size(); ++i) {
-    fused_input_indices.emplace(Name(fused_inputs[i]), i);
+    fused_input_names.push_back(Name(fused_inputs[i]));
+    fused_input_indices.emplace(fused_input_names.back(), i);
   }
 
   std::vector<size_t> concat_input_indices;
@@ -594,16 +597,19 @@ std::unique_ptr<FusionNodeCompute> CreateConcatMatMulFusion(
 
   return std::make_unique<ConcatMatMulFusionCompute>(
       ReadIntAttribute(concat_node, "axis"), concat_input_idx,
-      std::move(concat_input_indices), other_it->second);
+      std::move(concat_input_indices), other_it->second,
+      std::move(fused_input_names));
 }
 
 ConcatMatMulFusionCompute::ConcatMatMulFusionCompute(
     int64_t axis, int64_t concat_input_idx,
-    std::vector<size_t> concat_input_indices, size_t other_input_index)
+    std::vector<size_t> concat_input_indices, size_t other_input_index,
+    std::vector<std::string> fused_input_names)
     : axis(axis),
       concat_input_idx(concat_input_idx),
       concat_input_indices(std::move(concat_input_indices)),
-      other_input_index(other_input_index) {}
+      other_input_index(other_input_index),
+      fused_input_names(std::move(fused_input_names)) {}
 
 ConcatMatMulFusionCompute::~ConcatMatMulFusionCompute() = default;
 
@@ -615,9 +621,27 @@ OrtStatus* ConcatMatMulFusionCompute::Compute(
     std::vector<Ort::ConstValue> concat_inputs;
     concat_inputs.reserve(concat_input_indices.size());
     for (size_t index : concat_input_indices) {
-      concat_inputs.push_back(ctx.GetInput(index));
+      try {
+        concat_inputs.push_back(ctx.GetInput(index));
+      } catch (const Ort::Exception& ex) {
+        std::string name =
+            index < fused_input_names.size() ? fused_input_names[index] : "?";
+        throw std::runtime_error(
+            "ConcatMatMul failed to get concat fused input index " +
+            std::to_string(index) + " (" + name + "): " + ex.what());
+      }
     }
-    Ort::ConstValue other_input = ctx.GetInput(other_input_index);
+    Ort::ConstValue other_input{nullptr};
+    try {
+      other_input = ctx.GetInput(other_input_index);
+    } catch (const Ort::Exception& ex) {
+      std::string name = other_input_index < fused_input_names.size()
+                             ? fused_input_names[other_input_index]
+                             : "?";
+      throw std::runtime_error(
+          "ConcatMatMul failed to get MatMul fused input index " +
+          std::to_string(other_input_index) + " (" + name + "): " + ex.what());
+    }
 
     ValidateFloatTensor(other_input, "MatMul input");
     std::vector<int64_t> concat_shape = ComputeConcatShape(concat_inputs, axis);

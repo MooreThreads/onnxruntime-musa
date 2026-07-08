@@ -27,10 +27,10 @@ bool CanFuseRmsNorm(
     Ort::ConstNode output_mul_node,
     const std::unordered_map<std::string, Ort::ConstNode>& producers,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids,
+    const std::unordered_set<size_t>& accepted_node_ids,
     std::vector<Ort::ConstNode>& fusion_nodes) {
   if (!IsOnnxOp(output_mul_node, "Mul") ||
-      fused_node_ids.count(output_mul_node.GetId()) != 0) {
+      accepted_node_ids.count(output_mul_node.GetId()) != 0) {
     return false;
   }
 
@@ -57,7 +57,7 @@ bool CanFuseRmsNorm(
       gamma_input = output_mul_inputs[0];
     }
   }
-  if (!div_node || fused_node_ids.count(div_node.GetId()) != 0 ||
+  if (!div_node || accepted_node_ids.count(div_node.GetId()) != 0 ||
       !IsFloatTensorValueInfo(gamma_input)) {
     return false;
   }
@@ -98,8 +98,8 @@ bool CanFuseRmsNorm(
   Ort::ConstNode sqrt_node = producer_it->second;
   std::vector<Ort::ConstValueInfo> sqrt_inputs = sqrt_node.GetInputs();
   std::vector<Ort::ConstValueInfo> sqrt_outputs = sqrt_node.GetOutputs();
-  if (fused_node_ids.count(sqrt_node.GetId()) != 0 || sqrt_inputs.size() != 1 ||
-      sqrt_outputs.size() != 1 ||
+  if (accepted_node_ids.count(sqrt_node.GetId()) != 0 ||
+      sqrt_inputs.size() != 1 || sqrt_outputs.size() != 1 ||
       graph_output_names.count(Name(sqrt_outputs[0])) != 0 ||
       !IsFloatTensorValueInfo(sqrt_outputs[0]) ||
       !HasOnlyConsumer(sqrt_outputs[0], div_node, 1)) {
@@ -113,8 +113,8 @@ bool CanFuseRmsNorm(
   Ort::ConstNode add_node = producer_it->second;
   std::vector<Ort::ConstValueInfo> add_inputs = add_node.GetInputs();
   std::vector<Ort::ConstValueInfo> add_outputs = add_node.GetOutputs();
-  if (fused_node_ids.count(add_node.GetId()) != 0 || add_inputs.size() != 2 ||
-      add_outputs.size() != 1 ||
+  if (accepted_node_ids.count(add_node.GetId()) != 0 ||
+      add_inputs.size() != 2 || add_outputs.size() != 1 ||
       graph_output_names.count(Name(add_outputs[0])) != 0 ||
       !IsFloatTensorValueInfo(add_outputs[0]) ||
       !HasOnlyConsumer(add_outputs[0], sqrt_node, 0)) {
@@ -136,7 +136,7 @@ bool CanFuseRmsNorm(
       epsilon_input = add_inputs[0];
     }
   }
-  if (!reduce_node || fused_node_ids.count(reduce_node.GetId()) != 0 ||
+  if (!reduce_node || accepted_node_ids.count(reduce_node.GetId()) != 0 ||
       !ReadScalarFloatInitializer(epsilon_input).has_value()) {
     return false;
   }
@@ -160,7 +160,7 @@ bool CanFuseRmsNorm(
   Ort::ConstNode square_node = producer_it->second;
   std::vector<Ort::ConstValueInfo> square_inputs = square_node.GetInputs();
   std::vector<Ort::ConstValueInfo> square_outputs = square_node.GetOutputs();
-  if (fused_node_ids.count(square_node.GetId()) != 0 ||
+  if (accepted_node_ids.count(square_node.GetId()) != 0 ||
       square_inputs.size() != 2 || square_outputs.size() != 1 ||
       graph_output_names.count(Name(square_outputs[0])) != 0 ||
       Name(square_inputs[0]) != Name(div_inputs[0]) ||
@@ -174,7 +174,8 @@ bool CanFuseRmsNorm(
   fusion_nodes.clear();
   for (Ort::ConstNode node : {square_node, reduce_node, add_node, sqrt_node,
                               div_node, output_mul_node}) {
-    if (!AddFusionNode(node, fused_node_ids, selected_node_ids, fusion_nodes)) {
+    if (!AddFusionNode(node, accepted_node_ids, selected_node_ids,
+                       fusion_nodes)) {
       return false;
     }
   }
@@ -192,17 +193,14 @@ bool CanFuseRmsNorm(
 std::vector<std::vector<Ort::ConstNode>> FindRmsNormFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
   auto producers = BuildProducerMap(all_nodes);
   for (Ort::ConstNode output_mul_node : all_nodes) {
     std::vector<Ort::ConstNode> fusion_nodes;
     if (!CanFuseRmsNorm(output_mul_node, producers, graph_output_names,
-                        fused_node_ids, fusion_nodes)) {
+                        accepted_node_ids, fusion_nodes)) {
       continue;
-    }
-    for (Ort::ConstNode node : fusion_nodes) {
-      fused_node_ids.insert(node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

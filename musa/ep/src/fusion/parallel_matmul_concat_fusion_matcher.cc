@@ -26,7 +26,7 @@ namespace musa_ep {
 bool CanFuseParallelMatMulConcat(
     Ort::ConstNode concat_node,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids,
+    const std::unordered_set<size_t>& accepted_node_ids,
     std::vector<Ort::ConstNode>& fusion_nodes) {
   std::vector<Ort::ConstValueInfo> concat_inputs = concat_node.GetInputs();
   std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
@@ -65,7 +65,7 @@ bool CanFuseParallelMatMulConcat(
     Ort::ValueInfoConsumerProducerInfo producer =
         concat_input.GetProducerNode();
     if (!producer.node || !IsOnnxOp(producer.node, "Unsqueeze") ||
-        fused_node_ids.count(producer.node.GetId()) != 0) {
+        accepted_node_ids.count(producer.node.GetId()) != 0) {
       return false;
     }
     Ort::ConstNode unsqueeze_node = producer.node;
@@ -92,7 +92,7 @@ bool CanFuseParallelMatMulConcat(
     Ort::ValueInfoConsumerProducerInfo matmul_producer =
         matmul_output.GetProducerNode();
     if (!matmul_producer.node || !IsOnnxOp(matmul_producer.node, "MatMul") ||
-        fused_node_ids.count(matmul_producer.node.GetId()) != 0) {
+        accepted_node_ids.count(matmul_producer.node.GetId()) != 0) {
       return false;
     }
     Ort::ConstNode matmul_node = matmul_producer.node;
@@ -201,23 +201,19 @@ bool CanFuseParallelMatMulConcat(
 std::vector<std::vector<Ort::ConstNode>> FindParallelMatMulConcatFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
 
   for (Ort::ConstNode concat_node : all_nodes) {
     if (!IsOnnxOp(concat_node, "Concat") ||
-        fused_node_ids.count(concat_node.GetId()) != 0) {
+        accepted_node_ids.count(concat_node.GetId()) != 0) {
       continue;
     }
 
     std::vector<Ort::ConstNode> fusion_nodes;
     if (!CanFuseParallelMatMulConcat(concat_node, graph_output_names,
-                                     fused_node_ids, fusion_nodes)) {
+                                     accepted_node_ids, fusion_nodes)) {
       continue;
-    }
-
-    for (Ort::ConstNode node : fusion_nodes) {
-      fused_node_ids.insert(node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

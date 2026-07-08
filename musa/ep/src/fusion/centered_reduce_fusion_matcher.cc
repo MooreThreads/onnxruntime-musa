@@ -26,10 +26,10 @@ namespace musa_ep {
 bool CanFuseCenteredReduce(
     Ort::ConstNode first_reduce_node,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids,
+    const std::unordered_set<size_t>& accepted_node_ids,
     std::vector<Ort::ConstNode>& fusion_nodes) {
   if (!IsReduceSumOrProd(first_reduce_node) ||
-      fused_node_ids.count(first_reduce_node.GetId()) != 0 ||
+      accepted_node_ids.count(first_reduce_node.GetId()) != 0 ||
       GetIntAttribute(first_reduce_node, "keepdims").value_or(1) != 1) {
     return false;
   }
@@ -61,7 +61,7 @@ bool CanFuseCenteredReduce(
       break;
     }
   }
-  if (!sub_node || fused_node_ids.count(sub_node.GetId()) != 0 ||
+  if (!sub_node || accepted_node_ids.count(sub_node.GetId()) != 0 ||
       !ValueHasExternalConsumerOrGraphOutput(first_reduce_outputs[0], sub_node,
                                              graph_output_names)) {
     return false;
@@ -86,7 +86,7 @@ bool CanFuseCenteredReduce(
       break;
     }
   }
-  if (!mul_node || fused_node_ids.count(mul_node.GetId()) != 0 ||
+  if (!mul_node || accepted_node_ids.count(mul_node.GetId()) != 0 ||
       !ValueHasOnlyConsumers(sub_outputs[0], mul_node)) {
     return false;
   }
@@ -111,7 +111,7 @@ bool CanFuseCenteredReduce(
     }
   }
   if (!second_reduce_node ||
-      fused_node_ids.count(second_reduce_node.GetId()) != 0 ||
+      accepted_node_ids.count(second_reduce_node.GetId()) != 0 ||
       !ValueHasOnlyConsumers(mul_outputs[0], second_reduce_node) ||
       GetIntAttribute(second_reduce_node, "keepdims").value_or(1) != 1) {
     return false;
@@ -131,7 +131,8 @@ bool CanFuseCenteredReduce(
   std::unordered_set<size_t> selected_node_ids;
   for (Ort::ConstNode node :
        {first_reduce_node, sub_node, mul_node, second_reduce_node}) {
-    if (!AddFusionNode(node, fused_node_ids, selected_node_ids, fusion_nodes)) {
+    if (!AddFusionNode(node, accepted_node_ids, selected_node_ids,
+                       fusion_nodes)) {
       return false;
     }
   }
@@ -149,16 +150,13 @@ bool CanFuseCenteredReduce(
 std::vector<std::vector<Ort::ConstNode>> FindCenteredReduceFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
   for (Ort::ConstNode first_reduce_node : all_nodes) {
     std::vector<Ort::ConstNode> fusion_nodes;
     if (!CanFuseCenteredReduce(first_reduce_node, graph_output_names,
-                               fused_node_ids, fusion_nodes)) {
+                               accepted_node_ids, fusion_nodes)) {
       continue;
-    }
-    for (Ort::ConstNode node : fusion_nodes) {
-      fused_node_ids.insert(node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

@@ -26,10 +26,10 @@ namespace musa_ep {
 bool CanFuseSplitReduce(
     Ort::ConstNode split_node,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& fused_node_ids,
+    const std::unordered_set<size_t>& accepted_node_ids,
     std::vector<Ort::ConstNode>& fusion_nodes) {
   if (!IsOnnxOp(split_node, "Split") ||
-      fused_node_ids.count(split_node.GetId()) != 0 ||
+      accepted_node_ids.count(split_node.GetId()) != 0 ||
       GetIntAttribute(split_node, "axis").value_or(0) != 1) {
     return false;
   }
@@ -76,7 +76,7 @@ bool CanFuseSplitReduce(
     }
 
     Ort::ConstNode reduce_node = consumers[0].node;
-    if (fused_node_ids.count(reduce_node.GetId()) != 0 ||
+    if (accepted_node_ids.count(reduce_node.GetId()) != 0 ||
         !(IsOnnxOp(reduce_node, "ReduceProd") ||
           IsOnnxOp(reduce_node, "ReduceMean")) ||
         GetIntAttribute(reduce_node, "keepdims").value_or(1) != 0 ||
@@ -97,17 +97,14 @@ bool CanFuseSplitReduce(
 std::vector<std::vector<Ort::ConstNode>> FindSplitReduceFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
 
   for (Ort::ConstNode split_node : all_nodes) {
     std::vector<Ort::ConstNode> fusion_nodes;
-    if (!CanFuseSplitReduce(split_node, graph_output_names, fused_node_ids,
+    if (!CanFuseSplitReduce(split_node, graph_output_names, accepted_node_ids,
                             fusion_nodes)) {
       continue;
-    }
-    for (Ort::ConstNode node : fusion_nodes) {
-      fused_node_ids.insert(node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

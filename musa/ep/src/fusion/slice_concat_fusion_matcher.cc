@@ -194,12 +194,12 @@ bool CanFuseSliceConcat(
 std::vector<std::vector<Ort::ConstNode>> FindSliceConcatFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    std::unordered_set<size_t>& fused_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
 
   for (Ort::ConstNode concat_node : all_nodes) {
     if (!IsOnnxOp(concat_node, "Concat") ||
-        fused_node_ids.count(concat_node.GetId()) != 0) {
+        accepted_node_ids.count(concat_node.GetId()) != 0) {
       continue;
     }
 
@@ -210,17 +210,13 @@ std::vector<std::vector<Ort::ConstNode>> FindSliceConcatFusions(
 
     bool overlaps_existing_fusion = false;
     for (Ort::ConstNode node : fusion_nodes) {
-      if (fused_node_ids.count(node.GetId()) != 0) {
+      if (accepted_node_ids.count(node.GetId()) != 0) {
         overlaps_existing_fusion = true;
         break;
       }
     }
     if (overlaps_existing_fusion) {
       continue;
-    }
-
-    for (Ort::ConstNode node : fusion_nodes) {
-      fused_node_ids.insert(node.GetId());
     }
     fusions.push_back(std::move(fusion_nodes));
   }

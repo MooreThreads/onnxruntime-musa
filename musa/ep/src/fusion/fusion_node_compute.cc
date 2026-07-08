@@ -20,6 +20,7 @@
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/concat_split_fusion.h"
 #include "fusion/linear_fusion.h"
+#include "fusion/math_concat_log_fusion.h"
 #include "fusion/modulo_gather_fusion.h"
 #include "fusion/parallel_einsum_activation_fusion.h"
 #include "fusion/parallel_matmul_concat_fusion.h"
@@ -224,6 +225,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
             CreateParallelEinsumActivationFusion(graph, fused_node);
       } else if (IsParallelMatMulConcatFusionGraph(graph)) {
         fusion_compute = CreateParallelMatMulConcatFusion(graph, fused_node);
+      } else if (IsMathConcatLogFusionGraph(graph)) {
+        fusion_compute = CreateMathConcatLogFusion(graph, fused_node);
       } else {
         fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
       }

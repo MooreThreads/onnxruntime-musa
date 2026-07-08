@@ -22,6 +22,7 @@ This file is generated from `MusaEp::GetCapabilityImpl` and `MusaEp::CompileImpl
 | 13 | Modulo + Gather Fusion | `FindModuloGatherFusions` | `false` | [modulo_gather.md](fusion/modulo_gather.md) |
 | 14 | Parallel + MatMul + Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
 | 15 | Parallel + Einsum + Activation Fusion | `FindParallelEinsumActivationFusions` | `false` | [parallel_einsum_activation.md](fusion/parallel_einsum_activation.md) |
+| 16 | Math + Concat + Log Fusion | `FindMathConcatLogFusions` | `false` | [math_concat_log.md](fusion/math_concat_log.md) |
 
 ## Compile Dispatch Order
 
@@ -40,4 +41,5 @@ This file is generated from `MusaEp::GetCapabilityImpl` and `MusaEp::CompileImpl
 | 11 | `IsModuloGatherFusionGraph` | `CreateModuloGatherFusion` | [modulo_gather](fusion/modulo_gather.md) |
 | 12 | `IsParallelEinsumActivationFusionGraph` | `CreateParallelEinsumActivationFusion` | [parallel_einsum_activation](fusion/parallel_einsum_activation.md) |
 | 13 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
-| 14 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
+| 14 | `IsMathConcatLogFusionGraph` | `CreateMathConcatLogFusion` | [math_concat_log](fusion/math_concat_log.md) |
+| 15 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |

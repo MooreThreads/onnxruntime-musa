@@ -21,6 +21,7 @@
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/concat_split_fusion.h"
 #include "fusion/linear_fusion.h"
+#include "fusion/masked_embedding_lookup_fusion.h"
 #include "fusion/math_concat_log_fusion.h"
 #include "fusion/modulo_gather_fusion.h"
 #include "fusion/parallel_einsum_activation_fusion.h"
@@ -233,6 +234,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateSparseIdToMaskFusion(graph, fused_node);
       } else if (IsBucketizeGatherFusionGraph(graph)) {
         fusion_compute = CreateBucketizeGatherFusion(graph, fused_node);
+      } else if (IsMaskedEmbeddingLookupFusionGraph(graph)) {
+        fusion_compute = CreateMaskedEmbeddingLookupFusion(graph, fused_node);
       } else {
         fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
       }

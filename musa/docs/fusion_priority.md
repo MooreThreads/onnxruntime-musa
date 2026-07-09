@@ -7,22 +7,23 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 
 | Priority | Fusion | Finder | `drop_constant_initializers` | Doc |
 | --- | --- | --- | --- | --- |
-| 1 | Split + Unsqueeze + Concat Fusion | `FindSplitUnsqueezeConcatFusions` | `false` | [split_unsqueeze_concat.md](fusion/split_unsqueeze_concat.md) |
-| 2 | Split + Concat + Reorder Fusion | `FindSplitConcatReorderFusions` | `false` | [split_concat_reorder.md](fusion/split_concat_reorder.md) |
-| 3 | Concat + MatMul Fusion | `FindConcatMatMulFusions` | `false` | [concat_matmul.md](fusion/concat_matmul.md) |
-| 4 | Concat + Split Fusion | `FindConcatSplitFusions` | `false` | [concat_split.md](fusion/concat_split.md) |
-| 5 | Slice + Concat Fusion | `FindSliceConcatFusions` | `false` | [slice_concat.md](fusion/slice_concat.md) |
-| 6 | Tile + Concat Fusion | `FindTileConcatFusions` | `false` | [tile_concat.md](fusion/tile_concat.md) |
-| 7 | Gemm + Activation Fusion | `FindGemmActivationFusions` | `false` | [gemm_activation.md](fusion/gemm_activation.md) |
-| 8 | Fused + Gemm Fusion | `FindFusedGemmFusions` | `false` | [fused_gemm.md](fusion/fused_gemm.md) |
-| 9 | Shape + Reshape Fusion | `FindShapeReshapeFusions` | `true` | [shape_reshape.md](fusion/shape_reshape.md) |
-| 10 | Centered + Reduce Fusion | `FindCenteredReduceFusions` | `false` | [centered_reduce.md](fusion/centered_reduce.md) |
-| 11 | Split + Reduce Fusion | `FindSplitReduceFusions` | `false` | [split_reduce.md](fusion/split_reduce.md) |
-| 12 | Rms + Norm Fusion | `FindRmsNormFusions` | `false` | [rms_norm.md](fusion/rms_norm.md) |
-| 13 | Modulo + Gather Fusion | `FindModuloGatherFusions` | `false` | [modulo_gather.md](fusion/modulo_gather.md) |
-| 14 | Parallel + MatMul + Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
-| 15 | Parallel + Einsum + Activation Fusion | `FindParallelEinsumActivationFusions` | `false` | [parallel_einsum_activation.md](fusion/parallel_einsum_activation.md) |
-| 16 | Math + Concat + Log Fusion | `FindMathConcatLogFusions` | `false` | [math_concat_log.md](fusion/math_concat_log.md) |
+| 1 | Split Unsqueeze Concat Fusion | `FindSplitUnsqueezeConcatFusions` | `false` | [split_unsqueeze_concat.md](fusion/split_unsqueeze_concat.md) |
+| 2 | Split Concat Reorder Fusion | `FindSplitConcatReorderFusions` | `false` | [split_concat_reorder.md](fusion/split_concat_reorder.md) |
+| 3 | Concat MatMul Fusion | `FindConcatMatMulFusions` | `false` | [concat_matmul.md](fusion/concat_matmul.md) |
+| 4 | Concat Split Fusion | `FindConcatSplitFusions` | `false` | [concat_split.md](fusion/concat_split.md) |
+| 5 | Slice Concat Fusion | `FindSliceConcatFusions` | `false` | [slice_concat.md](fusion/slice_concat.md) |
+| 6 | Tile Concat Fusion | `FindTileConcatFusions` | `false` | [tile_concat.md](fusion/tile_concat.md) |
+| 7 | Gemm Activation Fusion | `FindGemmActivationFusions` | `false` | [gemm_activation.md](fusion/gemm_activation.md) |
+| 8 | Fused Gemm Fusion | `FindFusedGemmFusions` | `false` | [fused_gemm.md](fusion/fused_gemm.md) |
+| 9 | Shape Reshape Fusion | `FindShapeReshapeFusions` | `true` | [shape_reshape.md](fusion/shape_reshape.md) |
+| 10 | Centered Reduce Fusion | `FindCenteredReduceFusions` | `false` | [centered_reduce.md](fusion/centered_reduce.md) |
+| 11 | Split Reduce Fusion | `FindSplitReduceFusions` | `false` | [split_reduce.md](fusion/split_reduce.md) |
+| 12 | Rms Norm Fusion | `FindRmsNormFusions` | `false` | [rms_norm.md](fusion/rms_norm.md) |
+| 13 | Modulo Gather Fusion | `FindModuloGatherFusions` | `false` | [modulo_gather.md](fusion/modulo_gather.md) |
+| 14 | Parallel MatMul Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
+| 15 | Parallel Einsum Activation Fusion | `FindParallelEinsumActivationFusions` | `false` | [parallel_einsum_activation.md](fusion/parallel_einsum_activation.md) |
+| 16 | Math Concat Log Fusion | `FindMathConcatLogFusions` | `false` | [math_concat_log.md](fusion/math_concat_log.md) |
+| 17 | Sparse Id To Mask Fusion | `FindSparseIdToMaskFusions` | `false` | [sparse_id_to_mask.md](fusion/sparse_id_to_mask.md) |
 
 ## Compile Dispatch Order
 
@@ -42,4 +43,5 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 12 | `IsParallelEinsumActivationFusionGraph` | `CreateParallelEinsumActivationFusion` | [parallel_einsum_activation](fusion/parallel_einsum_activation.md) |
 | 13 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
 | 14 | `IsMathConcatLogFusionGraph` | `CreateMathConcatLogFusion` | [math_concat_log](fusion/math_concat_log.md) |
-| 15 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
+| 15 | `IsSparseIdToMaskFusionGraph` | `CreateSparseIdToMaskFusion` | [sparse_id_to_mask](fusion/sparse_id_to_mask.md) |
+| 16 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |

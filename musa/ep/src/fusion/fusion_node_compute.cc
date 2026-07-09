@@ -27,6 +27,7 @@
 #include "fusion/rms_norm_fusion.h"
 #include "fusion/shape_reshape_fusion.h"
 #include "fusion/slice_concat_fusion.h"
+#include "fusion/sparse_id_to_mask_fusion.h"
 #include "fusion/split_concat_reorder_fusion.h"
 #include "fusion/split_reduce_fusion.h"
 #include "fusion/split_unsqueeze_concat_fusion.h"
@@ -227,6 +228,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateParallelMatMulConcatFusion(graph, fused_node);
       } else if (IsMathConcatLogFusionGraph(graph)) {
         fusion_compute = CreateMathConcatLogFusion(graph, fused_node);
+      } else if (IsSparseIdToMaskFusionGraph(graph)) {
+        fusion_compute = CreateSparseIdToMaskFusion(graph, fused_node);
       } else {
         fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
       }

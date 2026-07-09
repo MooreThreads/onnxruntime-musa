@@ -187,7 +187,7 @@ def _key_from_stem(stem: str, known_ops: set[str]) -> str:
 
 
 def _title_from_stem(stem: str, known_ops: set[str]) -> str:
-    return " + ".join(_stem_words(stem, known_ops)) + " Fusion"
+    return " ".join(_stem_words(stem, known_ops)) + " Fusion"
 
 
 def _relative(path: Path) -> str:

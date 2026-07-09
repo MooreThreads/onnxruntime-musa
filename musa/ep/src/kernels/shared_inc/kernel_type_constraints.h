@@ -210,6 +210,13 @@ inline std::vector<const OrtDataType*> TopKTensorTypes() {
   };
 }
 
+inline std::vector<const OrtDataType*> UniqueTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+  };
+}
+
 inline std::vector<const OrtDataType*> GatherNDTensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),

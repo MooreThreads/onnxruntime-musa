@@ -109,7 +109,13 @@ void WriteEdge(std::ostream& out, std::unordered_set<std::string>& seen,
 }
 
 std::string NodeLabel(const Ort::ConstNode& node) {
-  return node.GetOperatorType();
+  std::string label = node.GetOperatorType();
+  const std::string node_name = node.GetName();
+  if (!node_name.empty()) {
+    label += " | ";
+    label += node_name;
+  }
+  return label;
 }
 
 void WriteGraph(std::ostream& out, const OrtGraph& ort_graph,

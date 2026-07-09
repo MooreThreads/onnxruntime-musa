@@ -177,6 +177,11 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindMathConcatLogFusions", false,
                  std::move(math_concat_log_fusions), accepted_node_ids);
 
+  auto sparse_id_to_mask_fusions = FindSparseIdToMaskFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindSparseIdToMaskFusions", false,
+                 std::move(sparse_id_to_mask_fusions), accepted_node_ids);
+
   const bool no_overlap = FusionMatchesHaveNoOverlap(matches);
   assert(no_overlap);
   (void)no_overlap;

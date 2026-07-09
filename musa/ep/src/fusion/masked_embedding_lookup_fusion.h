@@ -1,0 +1,17 @@
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
+// Licensed under the MIT License.
+
+#pragma once
+
+#include <memory>
+
+#define ORT_API_MANUAL_INIT
+#include "onnxruntime_cxx_api.h"
+#undef ORT_API_MANUAL_INIT
+
+#include "fusion/fusion_node_compute.h"
+
+bool IsMaskedEmbeddingLookupFusionGraph(Ort::ConstGraph graph);
+
+std::unique_ptr<FusionNodeCompute> CreateMaskedEmbeddingLookupFusion(
+    Ort::ConstGraph graph, Ort::ConstNode fused_node);

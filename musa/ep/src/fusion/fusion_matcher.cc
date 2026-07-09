@@ -182,6 +182,11 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindSparseIdToMaskFusions", false,
                  std::move(sparse_id_to_mask_fusions), accepted_node_ids);
 
+  auto bucketize_gather_fusions = FindBucketizeGatherFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindBucketizeGatherFusions", false,
+                 std::move(bucketize_gather_fusions), accepted_node_ids);
+
   const bool no_overlap = FusionMatchesHaveNoOverlap(matches);
   assert(no_overlap);
   (void)no_overlap;

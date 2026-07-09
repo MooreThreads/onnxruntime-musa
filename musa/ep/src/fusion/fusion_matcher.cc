@@ -192,6 +192,11 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindMaskedEmbeddingLookupFusions", false,
                  std::move(masked_embedding_lookup_fusions), accepted_node_ids);
 
+  auto concat_reshape_fusions = FindConcatReshapeFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindConcatReshapeFusions", true,
+                 std::move(concat_reshape_fusions), accepted_node_ids);
+
   const bool no_overlap = FusionMatchesHaveNoOverlap(matches);
   assert(no_overlap);
   (void)no_overlap;

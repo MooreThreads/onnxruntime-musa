@@ -1,10 +1,78 @@
 // Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 // Licensed under the MIT License.
 
+#include <limits>
+
 #include "math/topk_impl.h"
+#include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
 
 namespace {
+
+bool TryMudnnTopK(Ort::KernelContext& ctx,
+                  const std::vector<int64_t>& input_shape,
+                  const std::vector<int64_t>& output_shape,
+                  ONNXTensorElementDataType elem_type, int64_t axis, int64_t k,
+                  int64_t largest, int64_t sorted, Ort::ConstValue input,
+                  Ort::UnownedValue values, Ort::UnownedValue indices,
+                  MusaTopKParams params, MusaElementType musa_elem_type) {
+  if (sorted != 1 || axis > std::numeric_limits<int>::max() ||
+      k > std::numeric_limits<int>::max() ||
+      elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 ||
+      !IsGpuMemory(input.GetTensorMemoryInfo()) ||
+      !IsGpuMemory(values.GetTensorMemoryInfo()) ||
+      !IsGpuMemory(indices.GetTensorMemoryInfo())) {
+    return false;
+  }
+
+  ::musa::dnn::Handle* handle = nullptr;
+  musaStream_t stream = GetComputeStream(ctx);
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, stream);
+  if (handle_status != nullptr) {
+    Ort::GetApi().ReleaseStatus(handle_status);
+    return false;
+  }
+
+  ::musa::dnn::Tensor input_tensor;
+  ::musa::dnn::Tensor values_tensor;
+  ::musa::dnn::Tensor indices_tensor;
+  if (!SetMudnnTensor(input_tensor, input.GetTensorRawData(), input_shape,
+                      elem_type) ||
+      !SetMudnnTensor(values_tensor, values.GetTensorMutableRawData(),
+                      output_shape, elem_type) ||
+      !SetMudnnTensor(indices_tensor, indices.GetTensorMutableData<int64_t>(),
+                      output_shape, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64)) {
+    return false;
+  }
+
+  ::musa::dnn::TopK op;
+  if (op.SetK(static_cast<int>(k)) != ::musa::dnn::Status::SUCCESS ||
+      op.SetDim(static_cast<int>(axis)) != ::musa::dnn::Status::SUCCESS ||
+      op.SetLargest(largest != 0) != ::musa::dnn::Status::SUCCESS ||
+      op.SetSorted(true) != ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+
+  ::musa::dnn::MemoryMaintainer maintainer =
+      [stream](size_t bytes) -> ::musa::dnn::MemoryHandler {
+    void* ptr = nullptr;
+    if (bytes != 0 && musaMalloc(&ptr, bytes) != musaSuccess) {
+      ptr = nullptr;
+    }
+    return ::musa::dnn::MemoryHandler(
+        ptr, [stream](void* p) { FreeDeviceMemoryOnStream(p, stream); });
+  };
+
+  if (op.Run(*handle, values_tensor, indices_tensor, input_tensor,
+             maintainer) != ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+
+  return LaunchMusaTopKStableIndicesKernel(
+             input.GetTensorRawData(), values.GetTensorMutableRawData(),
+             indices.GetTensorMutableData<int64_t>(), params, musa_elem_type,
+             stream) == musaSuccess;
+}
 
 class TopK : public OpKernelBase<TopK> {
  public:
@@ -83,7 +151,6 @@ OrtStatus* TopK::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "TopK requires MUSA output tensors");
   }
-
   int64_t inner = 1;
   for (size_t dim = static_cast<size_t>(axis) + 1; dim < input_shape.size();
        ++dim) {
@@ -105,6 +172,11 @@ OrtStatus* TopK::Compute(Ort::KernelContext& ctx) const {
   params.output_elements = NumElements(output_shape);
   params.largest = largest_ == 0 ? 0 : 1;
   params.sorted = sorted_ == 0 ? 0 : 1;
+
+  if (TryMudnnTopK(ctx, input_shape, output_shape, elem_type, axis, k, largest_,
+                   sorted_, input, values, indices, params, musa_elem_type)) {
+    return nullptr;
+  }
 
   musaError_t status = LaunchMusaTopKKernel(
       input.GetTensorRawData(), values.GetTensorMutableRawData(),

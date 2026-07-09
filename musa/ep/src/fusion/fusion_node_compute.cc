@@ -16,6 +16,7 @@
 #endif
 
 #include "ep.h"
+#include "fusion/bucketize_gather_fusion.h"
 #include "fusion/centered_reduce_fusion.h"
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/concat_split_fusion.h"
@@ -230,6 +231,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateMathConcatLogFusion(graph, fused_node);
       } else if (IsSparseIdToMaskFusionGraph(graph)) {
         fusion_compute = CreateSparseIdToMaskFusion(graph, fused_node);
+      } else if (IsBucketizeGatherFusionGraph(graph)) {
+        fusion_compute = CreateBucketizeGatherFusion(graph, fused_node);
       } else {
         fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
       }

@@ -54,11 +54,15 @@ class Sigmoid : public OpKernelBase<Sigmoid> {
 OrtStatus* Sigmoid::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto elem_type = info.GetElementType();
-  if (TryMudnnSigmoid(ctx, info.GetShape(), elem_type)) {
+  auto shape = info.GetShape();
+  if (OutputEmptyTensorIfNeeded(ctx, shape)) {
     return nullptr;
   }
-  return UnaryDeviceCompute(ctx, info.GetShape(), elem_type,
-                            MusaUnaryOp::Sigmoid, "Sigmoid");
+  if (TryMudnnSigmoid(ctx, shape, elem_type)) {
+    return nullptr;
+  }
+  return UnaryDeviceCompute(ctx, shape, elem_type, MusaUnaryOp::Sigmoid,
+                            "Sigmoid");
 }
 }  // namespace
 

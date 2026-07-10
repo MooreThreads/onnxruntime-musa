@@ -179,6 +179,15 @@ inline OrtStatus* UnaryDeviceCompute(Ort::KernelContext& ctx,
   return LaunchStatus(status);
 }
 
+inline bool OutputEmptyTensorIfNeeded(Ort::KernelContext& ctx,
+                                      const std::vector<int64_t>& shape) {
+  if (NumElements(shape) != 0) {
+    return false;
+  }
+  ctx.GetOutput(0, shape);
+  return true;
+}
+
 template <typename T>
 inline bool CompareHostValue(T lhs, T rhs, MusaCompareOp op) {
   switch (op) {

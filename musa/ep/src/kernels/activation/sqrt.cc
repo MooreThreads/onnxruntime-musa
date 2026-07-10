@@ -54,11 +54,14 @@ class Sqrt : public OpKernelBase<Sqrt> {
 OrtStatus* Sqrt::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto elem_type = info.GetElementType();
-  if (TryMudnnSqrt(ctx, info.GetShape(), elem_type)) {
+  auto shape = info.GetShape();
+  if (OutputEmptyTensorIfNeeded(ctx, shape)) {
     return nullptr;
   }
-  return UnaryDeviceCompute(ctx, info.GetShape(), elem_type, MusaUnaryOp::Sqrt,
-                            "Sqrt");
+  if (TryMudnnSqrt(ctx, shape, elem_type)) {
+    return nullptr;
+  }
+  return UnaryDeviceCompute(ctx, shape, elem_type, MusaUnaryOp::Sqrt, "Sqrt");
 }
 }  // namespace
 

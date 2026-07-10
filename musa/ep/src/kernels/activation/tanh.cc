@@ -54,11 +54,14 @@ class Tanh : public OpKernelBase<Tanh> {
 OrtStatus* Tanh::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto elem_type = info.GetElementType();
-  if (TryMudnnTanh(ctx, info.GetShape(), elem_type)) {
+  auto shape = info.GetShape();
+  if (OutputEmptyTensorIfNeeded(ctx, shape)) {
     return nullptr;
   }
-  return UnaryDeviceCompute(ctx, info.GetShape(), elem_type, MusaUnaryOp::Tanh,
-                            "Tanh");
+  if (TryMudnnTanh(ctx, shape, elem_type)) {
+    return nullptr;
+  }
+  return UnaryDeviceCompute(ctx, shape, elem_type, MusaUnaryOp::Tanh, "Tanh");
 }
 }  // namespace
 

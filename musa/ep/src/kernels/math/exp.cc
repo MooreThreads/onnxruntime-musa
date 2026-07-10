@@ -55,6 +55,9 @@ OrtStatus* Exp::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto elem_type = info.GetElementType();
   auto shape = info.GetShape();
+  if (OutputEmptyTensorIfNeeded(ctx, shape)) {
+    return nullptr;
+  }
   if (TryMudnnExp(ctx, shape, elem_type)) {
     return nullptr;
   }

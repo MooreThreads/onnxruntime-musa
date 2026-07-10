@@ -55,11 +55,15 @@ class Reciprocal : public OpKernelBase<Reciprocal> {
 OrtStatus* Reciprocal::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto elem_type = info.GetElementType();
-  if (TryMudnnReciprocal(ctx, info.GetShape(), elem_type)) {
+  auto shape = info.GetShape();
+  if (OutputEmptyTensorIfNeeded(ctx, shape)) {
     return nullptr;
   }
-  return UnaryDeviceCompute(ctx, info.GetShape(), elem_type,
-                            MusaUnaryOp::Reciprocal, "Reciprocal");
+  if (TryMudnnReciprocal(ctx, shape, elem_type)) {
+    return nullptr;
+  }
+  return UnaryDeviceCompute(ctx, shape, elem_type, MusaUnaryOp::Reciprocal,
+                            "Reciprocal");
 }
 }  // namespace
 

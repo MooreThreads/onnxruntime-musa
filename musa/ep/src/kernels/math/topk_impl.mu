@@ -255,7 +255,6 @@ __global__ void TopKStableIndicesKernel(const T* input, const T* values,
         outer_index * params.k * params.inner + inner_index;
     const int64_t output_index = output_base + k_index * params.inner;
     const T value = values[output_index];
-    const int64_t current_index = indices[output_index];
 
     int64_t occurrence = 0;
     for (int64_t previous = 0; previous < k_index; ++previous) {
@@ -265,7 +264,7 @@ __global__ void TopKStableIndicesKernel(const T* input, const T* values,
       }
     }
 
-    for (int64_t candidate_index = 0; candidate_index < current_index;
+    for (int64_t candidate_index = 0; candidate_index < params.dim;
          ++candidate_index) {
       if (!TopKValueEqual(input[input_base + candidate_index * params.inner],
                           value)) {

@@ -3,6 +3,8 @@
 
 #include "ep.h"
 
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <span>
 #include <string>
@@ -28,6 +30,16 @@ std::unordered_set<std::string> GetGraphOutputNames(Ort::ConstGraph graph) {
     graph_output_names.insert(output.GetName());
   }
   return graph_output_names;
+}
+
+bool EnvFlagEnabled(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+}
+
+bool DisableAllFusions() {
+  static const bool disabled = EnvFlagEnabled("ORT_MUSA_DISABLE_ALL_FUSIONS");
+  return disabled;
 }
 
 OrtStatus* RegisterFusionMatches(
@@ -214,10 +226,12 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
 
     std::unordered_set<std::string> graph_output_names =
         GetGraphOutputNames(graph);
-    std::vector<FusionMatch> fusion_matches =
-        FindFusionMatches(all_nodes, graph_output_names);
-    RETURN_IF_ERROR(
-        RegisterFusionMatches(ep->ep_api_, graph_support_info, fusion_matches));
+    std::vector<FusionMatch> fusion_matches;
+    if (!DisableAllFusions()) {
+      fusion_matches = FindFusionMatches(all_nodes, graph_output_names);
+      RETURN_IF_ERROR(RegisterFusionMatches(ep->ep_api_, graph_support_info,
+                                            fusion_matches));
+    }
 
     SupportedNodeCandidates candidates;
     RETURN_IF_ERROR(CollectSupportedNodeCandidates(

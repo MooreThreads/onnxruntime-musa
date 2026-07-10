@@ -58,6 +58,20 @@ MUSA_VISIBLE_DEVICES=0 ./.venv/bin/python -m pytest test/ops/test_matmul.py -q
 
 ## MUSA EP 调试开关
 
+### `ORT_MUSA_DISABLE_ALL_FUSIONS`
+
+- 读取位置：`musa/ep/src/ep.cc`
+- 用途：在 `MusaEp::GetCapabilityImpl()` 中跳过全部 MUSA EP fusion matcher 和 fused node 注册，只保留普通单节点 capability。
+- 默认值：未设置时关闭该禁用开关，也就是默认启用 fusion。
+- 启用方式：设置为非空且不是 `0` 的值，例如 `1`。
+- 关闭方式：未设置、空值或设置为 `0`。
+- 注意：该开关只影响 fusion 注册，不会关闭普通 MUSA kernel。默认未设置时只在进程内首次进入该路径读取一次环境变量，不会给默认 fusion 路径增加 per-matcher 或 runtime compute 开销。
+- 示例：
+
+```bash
+ORT_MUSA_DISABLE_ALL_FUSIONS=1 ./.venv/bin/python your_script.py
+```
+
 ### `ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID`
 
 - 读取位置：`musa/ep/src/graph_mermaid_dump.cc`
@@ -207,6 +221,7 @@ MUSA_ENABLE_TF32=1 ./.venv/bin/python your_script.py
 | `LD_LIBRARY_PATH` | 动态链接 | 系统值 | 让运行时找到 MUSA toolkit 动态库 |
 | `MUSA_HOME` | CMake cache | `/usr/local/musa` | 指定 MUSA toolkit 安装目录 |
 | `MUSA_VISIBLE_DEVICES` | MUSA runtime | runtime 默认 | 限制可见 MUSA 设备 |
+| `ORT_MUSA_DISABLE_ALL_FUSIONS` | EP 调试 | 关闭 | 跳过全部 MUSA EP fusion matcher 和 fused node 注册 |
 | `ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID` | EP 调试 | 关闭 | GetCapability 前 dump Mermaid graph |
 | `ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID_PATH` | EP 调试 | `musa_ep_get_capability_graph_<n>.mmd` | 指定 GetCapability Mermaid 输出文件 |
 | `ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID` | EP 调试 | 关闭 | 运行结束时 dump runtime execution graph |

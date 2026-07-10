@@ -96,6 +96,13 @@ std::vector<FusionMatch> FindFusionMatches(
   std::unordered_set<size_t> accepted_node_ids;
   std::vector<FusionMatch> matches;
 
+  auto mhta_scaled_dot_product_attention_fusions =
+      FindMhtaScaledDotProductAttentionFusions(all_nodes, graph_output_names,
+                                               accepted_node_ids);
+  AddFusionMatch(matches, "FindMhtaScaledDotProductAttentionFusions", false,
+                 std::move(mhta_scaled_dot_product_attention_fusions),
+                 accepted_node_ids);
+
   auto split_unsqueeze_concat_fusions = FindSplitUnsqueezeConcatFusions(
       all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindSplitUnsqueezeConcatFusions", false,

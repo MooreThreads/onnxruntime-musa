@@ -9,7 +9,13 @@ import numpy as np
 import onnxruntime as ort
 from onnx import helper, numpy_helper
 
-from op_test_utils import TensorProto, build_graph_model, musa_devices, run_model_and_compare
+from op_test_utils import (
+    TensorProto,
+    build_graph_model,
+    musa_devices,
+    run_model_and_compare,
+    run_model_and_compare_with_cpu_fallback,
+)
 
 
 def _profile_musa_session(model: bytes, feeds: dict[str, np.ndarray], tmp_path, prefix: str):
@@ -120,3 +126,73 @@ def test_concat_unsqueeze_reshape_fusion(tmp_path):
     assert "Concat" not in musa_ops
     assert "Unsqueeze" not in musa_ops
     assert "Reshape" not in musa_ops
+
+
+def test_concat_reshape_fusion_accepts_cpu_produced_input(tmp_path):
+    rng = np.random.default_rng(41)
+    feeds = {
+        "X0": rng.standard_normal((2, 2)).astype(np.float32),
+        "X1": rng.standard_normal((2, 2)).astype(np.float32),
+    }
+    weight = rng.standard_normal((4, 3)).astype(np.float32)
+    target_shape = np.array([2, 4], dtype=np.int64)
+
+    model = build_graph_model(
+        [
+            helper.make_node("Sin", ["X1"], ["S"]),
+            helper.make_node("Concat", ["X0", "S"], ["C"], axis=1),
+            helper.make_node("Reshape", ["C", "target_shape"], ["R"]),
+            helper.make_node("MatMul", ["R", "W"], ["Y"]),
+        ],
+        inputs=feeds,
+        outputs=[("Y", TensorProto.FLOAT)],
+        initializers=[
+            numpy_helper.from_array(target_shape, name="target_shape"),
+            numpy_helper.from_array(weight, name="W"),
+        ],
+        name="concat_reshape_cpu_produced_input_graph",
+    )
+
+    run_model_and_compare_with_cpu_fallback(model, feeds, rtol=1e-5, atol=1e-5)
+    _, events = _profile_musa_session(
+        model, feeds, tmp_path, "concat_reshape_cpu_produced_input"
+    )
+    musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
+    fused_ops = {op for op in musa_ops if str(op).startswith("MUSAExecutionProvider_")}
+
+    assert fused_ops
+    assert "Concat" not in musa_ops
+    assert "Reshape" not in musa_ops
+
+
+def test_concat_reshape_skips_constant_data_input():
+    rng = np.random.default_rng(37)
+    feeds = {
+        "X": rng.standard_normal((2, 2)).astype(np.float32),
+    }
+    const_input = rng.standard_normal((2, 2)).astype(np.float32)
+    weight = rng.standard_normal((4, 3)).astype(np.float32)
+    target_shape = np.array([2, 4], dtype=np.int64)
+
+    model = build_graph_model(
+        [
+            helper.make_node(
+                "Constant",
+                [],
+                ["C"],
+                value=numpy_helper.from_array(const_input),
+            ),
+            helper.make_node("Concat", ["X", "C"], ["ConcatOut"], axis=0),
+            helper.make_node("Reshape", ["ConcatOut", "target_shape"], ["R"]),
+            helper.make_node("MatMul", ["R", "W"], ["Y"]),
+        ],
+        inputs=feeds,
+        outputs=[("Y", TensorProto.FLOAT)],
+        initializers=[
+            numpy_helper.from_array(target_shape, name="target_shape"),
+            numpy_helper.from_array(weight, name="W"),
+        ],
+        name="concat_reshape_constant_data_input_graph",
+    )
+
+    run_model_and_compare(model, feeds, rtol=1e-5, atol=1e-5)

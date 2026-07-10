@@ -6,10 +6,12 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -42,8 +44,11 @@ struct ConcatReshapeFusionCompute : FusionNodeCompute {
       Ort::KernelContext ctx(kernel_context);
       std::vector<std::vector<int64_t>> shapes;
       std::vector<const void*> input_data;
+      std::vector<std::unique_ptr<DeviceInputBuffer>> input_buffers;
       shapes.reserve(input_indices.size());
       input_data.reserve(input_indices.size());
+      input_buffers.reserve(input_indices.size());
+      musaStream_t stream = GetComputeStream(ctx);
 
       ONNXTensorElementDataType elem_type =
           ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
@@ -64,12 +69,11 @@ struct ConcatReshapeFusionCompute : FusionNodeCompute {
               ORT_NOT_IMPLEMENTED,
               "ConcatReshape requires uniform input dtype");
         }
-        if (!IsGpuMemory(input.GetTensorMemoryInfo())) {
-          return Ort::GetApi().CreateStatus(
-              ORT_NOT_IMPLEMENTED, "ConcatReshape requires MUSA inputs");
-        }
         shapes.push_back(input_info.GetShape());
-        input_data.push_back(input.GetTensorRawData());
+        auto input_buffer = std::make_unique<DeviceInputBuffer>();
+        RETURN_IF_ERROR(input_buffer->Bind(input, stream));
+        input_data.push_back(input_buffer->data());
+        input_buffers.push_back(std::move(input_buffer));
       }
       if (shapes.empty()) {
         return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
@@ -142,8 +146,6 @@ struct ConcatReshapeFusionCompute : FusionNodeCompute {
       const size_t element_descriptor_bytes =
           static_cast<size_t>(output_row_elements) *
           sizeof(MusaConcatElementDesc);
-      musaStream_t stream = GetComputeStream(ctx);
-
       if (ShouldUseConcatSmallRows(
               input_data.size(), kConcatManySmallInputCount, max_width_bytes,
               kConcatManySmallMaxWidthBytes, output_row_elements,
@@ -311,6 +313,130 @@ std::string Name(Ort::ConstValueInfo value_info) {
   return value_info ? value_info.GetName() : std::string{};
 }
 
+bool HasOnlyConsumer(Ort::ConstValueInfo output, Ort::ConstNode expected_node,
+                     int64_t expected_input_index) {
+  if (output == nullptr) {
+    return false;
+  }
+
+  std::vector<Ort::ValueInfoConsumerProducerInfo> consumers =
+      output.GetConsumers();
+  return consumers.size() == 1 &&
+         consumers[0].node.GetId() == expected_node.GetId() &&
+         consumers[0].index == expected_input_index;
+}
+
+bool IsSmallIntegerInitializer(Ort::ConstValueInfo input) {
+  if (input == nullptr || !input.IsConstantInitializer()) {
+    return false;
+  }
+
+  Ort::ConstTypeInfo type_info = input.TypeInfo();
+  if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+  ONNXTensorElementDataType elem_type =
+      type_info.GetTensorTypeAndShapeInfo().GetElementType();
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
+}
+
+std::unordered_map<std::string, Ort::ConstNode> BuildProducerMap(
+    const std::vector<Ort::ConstNode>& nodes) {
+  std::unordered_map<std::string, Ort::ConstNode> producers;
+  for (Ort::ConstNode node : nodes) {
+    for (Ort::ConstValueInfo output : node.GetOutputs()) {
+      producers.emplace(Name(output), node);
+    }
+  }
+  return producers;
+}
+
+Ort::ConstNode FindProducer(
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    Ort::ConstValueInfo input) {
+  auto it = producers.find(Name(input));
+  return it == producers.end() ? Ort::ConstNode{nullptr} : it->second;
+}
+
+bool IsStrictConcatReshapeGraph(Ort::ConstGraph graph) {
+  std::vector<Ort::ConstNode> nodes = graph.GetNodes();
+  auto producers = BuildProducerMap(nodes);
+
+  Ort::ConstNode concat_node{nullptr};
+  Ort::ConstNode unsqueeze_node{nullptr};
+  Ort::ConstNode reshape_node{nullptr};
+  std::unordered_set<size_t> pattern_node_ids;
+
+  for (Ort::ConstNode node : nodes) {
+    if (IsOnnxOp(node, "Reshape")) {
+      if (reshape_node) {
+        return false;
+      }
+      reshape_node = node;
+    }
+  }
+  if (!reshape_node) {
+    return false;
+  }
+
+  std::vector<Ort::ConstValueInfo> reshape_inputs = reshape_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> reshape_outputs = reshape_node.GetOutputs();
+  if (reshape_inputs.size() != 2 || reshape_outputs.size() != 1 ||
+      !IsSmallIntegerInitializer(reshape_inputs[1])) {
+    return false;
+  }
+
+  Ort::ConstValueInfo concat_or_unsqueeze_output = reshape_inputs[0];
+  concat_node = FindProducer(producers, reshape_inputs[0]);
+  if (IsOnnxOp(concat_node, "Unsqueeze")) {
+    unsqueeze_node = concat_node;
+    std::vector<Ort::ConstValueInfo> unsqueeze_inputs =
+        unsqueeze_node.GetInputs();
+    std::vector<Ort::ConstValueInfo> unsqueeze_outputs =
+        unsqueeze_node.GetOutputs();
+    if (unsqueeze_inputs.size() != 2 || unsqueeze_outputs.size() != 1 ||
+        !IsSmallIntegerInitializer(unsqueeze_inputs[1]) ||
+        !HasOnlyConsumer(unsqueeze_outputs[0], reshape_node, 0)) {
+      return false;
+    }
+    concat_node = FindProducer(producers, unsqueeze_inputs[0]);
+    concat_or_unsqueeze_output = unsqueeze_inputs[0];
+    pattern_node_ids.insert(unsqueeze_node.GetId());
+  }
+
+  if (!IsOnnxOp(concat_node, "Concat")) {
+    return false;
+  }
+
+  std::vector<Ort::ConstValueInfo> concat_inputs = concat_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
+  if (concat_inputs.empty() || concat_outputs.size() != 1 ||
+      !HasOnlyConsumer(concat_outputs[0],
+                       unsqueeze_node ? unsqueeze_node : reshape_node, 0) ||
+      Name(concat_outputs[0]) != Name(concat_or_unsqueeze_output)) {
+    return false;
+  }
+
+  for (Ort::ConstValueInfo concat_input : concat_inputs) {
+    if (concat_input == nullptr || concat_input.IsConstantInitializer() ||
+        IsOnnxOp(FindProducer(producers, concat_input), "Constant")) {
+      return false;
+    }
+  }
+
+  pattern_node_ids.insert(concat_node.GetId());
+  pattern_node_ids.insert(reshape_node.GetId());
+  for (Ort::ConstNode node : nodes) {
+    if (pattern_node_ids.count(node.GetId()) != 0 ||
+        IsOnnxOp(node, "Constant")) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 int64_t ReadIntAttribute(Ort::ConstNode node, const std::string& name,
                          int64_t default_value) {
   Ort::ConstOpAttr attr;
@@ -389,13 +515,7 @@ size_t GetIndex(const std::unordered_map<std::string, size_t>& indices,
 }  // namespace
 
 bool IsConcatReshapeFusionGraph(Ort::ConstGraph graph) {
-  bool has_concat = false;
-  bool has_reshape = false;
-  for (Ort::ConstNode node : graph.GetNodes()) {
-    has_concat = has_concat || IsOnnxOp(node, "Concat");
-    has_reshape = has_reshape || IsOnnxOp(node, "Reshape");
-  }
-  return has_concat && has_reshape;
+  return IsStrictConcatReshapeGraph(graph);
 }
 
 std::unique_ptr<FusionNodeCompute> CreateConcatReshapeFusion(

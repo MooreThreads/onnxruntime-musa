@@ -24,6 +24,7 @@
 #include "fusion/linear_fusion.h"
 #include "fusion/masked_embedding_lookup_fusion.h"
 #include "fusion/math_concat_log_fusion.h"
+#include "fusion/mhta_scaled_dot_product_attention_fusion.h"
 #include "fusion/modulo_gather_fusion.h"
 #include "fusion/parallel_einsum_activation_fusion.h"
 #include "fusion/parallel_matmul_concat_fusion.h"
@@ -202,7 +203,10 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
 
       std::string fused_node_name = fused_node.GetName();
       auto& fusion_compute = ep->GetFusionComputes()[fused_node_name];
-      if (IsCenteredReduceFusionGraph(graph)) {
+      if (IsMhtaScaledDotProductAttentionFusionGraph(graph)) {
+        fusion_compute =
+            CreateMhtaScaledDotProductAttentionFusion(graph, fused_node);
+      } else if (IsCenteredReduceFusionGraph(graph)) {
         fusion_compute = CreateCenteredReduceFusion(graph, fused_node);
       } else if (IsShapeReshapeFusionGraph(graph)) {
         fusion_compute = CreateShapeReshapeFusion(graph, fused_node);

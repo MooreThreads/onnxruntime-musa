@@ -103,6 +103,40 @@ def test_topk_full_last_axis_k_equals_dim_opset13():
     )
 
 
+def test_topk_smallest_full_axis_real_token_merger_opset13():
+    x = np.array(
+        [
+            [
+                0.0,
+                1.0,
+                9.8013570e06,
+                1.0715436e07,
+                1.0715513e07,
+                1.0715654e07,
+                1.0819043e07,
+                1.0823217e07,
+                0.0,
+                1.0,
+                0.0,
+                1.0715497e07,
+                1.0715646e07,
+                1.0849186e07,
+            ]
+        ],
+        dtype=np.float32,
+    )
+    k = np.array([14], dtype=np.int64)
+    run_and_compare(
+        "TopK",
+        inputs={"X": x, "K": k},
+        outputs=[("Values", TensorProto.FLOAT), ("Indices", TensorProto.INT64)],
+        attrs={"axis": -1, "largest": 0, "sorted": 1},
+        opset=13,
+        rtol=0,
+        atol=0,
+    )
+
+
 def test_topk_int64_small_dim_large_k_opset13():
     rng = np.random.default_rng(20260710)
     x = rng.integers(-10000, 10000, size=(2, 1024), dtype=np.int64)

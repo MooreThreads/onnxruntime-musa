@@ -63,12 +63,16 @@ class LeakyRelu : public OpKernelBase<LeakyRelu> {
 OrtStatus* LeakyRelu::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
   auto elem_type = info.GetElementType();
+  auto shape = info.GetShape();
   float alpha = alpha_;
-  if (TryMudnnLeakyRelu(ctx, info.GetShape(), alpha, elem_type)) {
+  if (OutputEmptyTensorIfNeeded(ctx, shape)) {
     return nullptr;
   }
-  return UnaryDeviceCompute(ctx, info.GetShape(), elem_type,
-                            MusaUnaryOp::LeakyRelu, "LeakyRelu", alpha);
+  if (TryMudnnLeakyRelu(ctx, shape, alpha, elem_type)) {
+    return nullptr;
+  }
+  return UnaryDeviceCompute(ctx, shape, elem_type, MusaUnaryOp::LeakyRelu,
+                            "LeakyRelu", alpha);
 }
 }  // namespace
 

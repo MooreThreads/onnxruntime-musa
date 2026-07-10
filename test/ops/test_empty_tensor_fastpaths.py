@@ -3,6 +3,7 @@
 """Empty tensor coverage for MUSA kernels that prefer muDNN fast paths."""
 
 import numpy as np
+import pytest
 
 from op_test_utils import TensorProto, run_and_compare
 
@@ -14,6 +15,34 @@ def test_transpose_empty_float_dim():
         inputs={"X": x},
         outputs=[("Y", TensorProto.FLOAT)],
         attrs={"perm": [0, 2, 1]},
+    )
+
+
+@pytest.mark.parametrize(
+    "op_type",
+    [
+        "Abs",
+        "Ceil",
+        "Erf",
+        "Exp",
+        "LeakyRelu",
+        "Log",
+        "Reciprocal",
+        "Relu",
+        "Round",
+        "Sigmoid",
+        "Sqrt",
+        "Tanh",
+    ],
+)
+def test_unary_empty_float_dim(op_type):
+    x = np.empty((12, 0, 7), dtype=np.float32)
+    attrs = {"alpha": 0.2} if op_type == "LeakyRelu" else None
+    run_and_compare(
+        op_type,
+        inputs={"X": x},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs=attrs,
     )
 
 

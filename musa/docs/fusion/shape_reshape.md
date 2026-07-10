@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **9**
+- GetCapability priority: **10**
 - Finder: `FindShapeReshapeFusions`
 - Finder implementation: `musa/ep/src/fusion/shape_reshape_fusion_matcher.cc`
 - Compile detector: `IsShapeReshapeFusionGraph`

@@ -67,6 +67,12 @@ bool CanFuseConcatReshape(
       Name(concat_outputs[0]) != Name(concat_or_unsqueeze_output)) {
     return false;
   }
+  for (Ort::ConstValueInfo concat_input : concat_inputs) {
+    if (concat_input == nullptr || concat_input.IsConstantInitializer() ||
+        IsOnnxOp(FindProducer(producers, concat_input), "Constant")) {
+      return false;
+    }
+  }
 
   std::unordered_set<size_t> selected_node_ids;
   fusion_nodes.clear();

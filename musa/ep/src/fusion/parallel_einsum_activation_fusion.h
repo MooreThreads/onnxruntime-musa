@@ -15,7 +15,6 @@
 #include "fusion/fusion_node_compute.h"
 
 struct ParallelEinsumActivationDeviceConstants;
-struct ParallelEinsumActivationRuntimeScratch;
 
 struct ParallelEinsumActivationBranchInputs {
   size_t w1_index;
@@ -39,9 +38,6 @@ struct ParallelEinsumActivationFusionCompute : FusionNodeCompute {
   bool constants_are_initializers;
   mutable std::unique_ptr<ParallelEinsumActivationDeviceConstants> constants;
   mutable std::mutex constants_mutex;
-  mutable std::unique_ptr<ParallelEinsumActivationRuntimeScratch>
-      runtime_scratch;
-  mutable std::mutex runtime_scratch_mutex;
 };
 
 bool IsParallelEinsumActivationFusionGraph(Ort::ConstGraph graph);

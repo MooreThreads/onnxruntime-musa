@@ -10,12 +10,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <vector>
 
 #include "fusion/fusion_node_compute.h"
-
-struct ParallelMatMulConcatScratch;
 
 struct ParallelMatMulConcatFusionCompute : FusionNodeCompute {
   ParallelMatMulConcatFusionCompute(size_t input_index,
@@ -30,8 +27,6 @@ struct ParallelMatMulConcatFusionCompute : FusionNodeCompute {
   std::vector<size_t> weight_indices;
   int64_t concat_axis;
   bool weights_are_initializers;
-  mutable std::unique_ptr<ParallelMatMulConcatScratch> scratch;
-  mutable std::mutex scratch_mutex;
 };
 
 bool IsParallelMatMulConcatFusionGraph(Ort::ConstGraph graph);

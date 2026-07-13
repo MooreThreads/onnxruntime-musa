@@ -3,7 +3,7 @@
 
 #include "fusion/split_reduce_fusion.h"
 
-#include <mutex>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -215,7 +215,13 @@ struct SplitReduceFusionCompute : FusionNodeCompute {
         output_data[output.output_index] = y.GetTensorMutableData<float>();
       }
 
-      std::lock_guard<std::mutex> lock(scratch_mutex);
+      thread_local std::unordered_map<musaStream_t,
+                                      std::unique_ptr<DeviceBuffer>>
+          scratch_output_by_stream;
+      auto& scratch_output = scratch_output_by_stream[stream];
+      if (!scratch_output) {
+        scratch_output = std::make_unique<DeviceBuffer>();
+      }
       for (size_t i = 0; i < outputs.size(); i += 2) {
         const SplitReduceOutput& first = outputs[i];
         const SplitReduceOutput* second =
@@ -230,9 +236,9 @@ struct SplitReduceFusionCompute : FusionNodeCompute {
           second_width = second->width;
           second_mode = second->mode;
         } else {
-          scratch_output.Resize(
+          scratch_output->Resize(
               static_cast<size_t>(batch * inner) * sizeof(float), stream);
-          second_output = scratch_output.data<float>();
+          second_output = scratch_output->data<float>();
         }
 
         OrtStatus* status = LaunchStatus(LaunchMusaSplitReduce2Float(
@@ -253,8 +259,6 @@ struct SplitReduceFusionCompute : FusionNodeCompute {
   }
 
   std::vector<SplitReduceOutput> outputs;
-  mutable DeviceBuffer scratch_output;
-  mutable std::mutex scratch_mutex;
 };
 
 bool IsSplitReduceFusionGraph(Ort::ConstGraph graph) {

@@ -92,6 +92,22 @@ struct ParallelMatMulConcatScratch {
   bool merged_initializer_weights_valid = false;
 };
 
+static ParallelMatMulConcatScratch& ThreadLocalScratchForStream(
+    const ParallelMatMulConcatFusionCompute* owner, musaStream_t stream) {
+  using StreamScratchMap =
+      std::unordered_map<musaStream_t,
+                         std::unique_ptr<ParallelMatMulConcatScratch>>;
+  thread_local std::unordered_map<const ParallelMatMulConcatFusionCompute*,
+                                  StreamScratchMap>
+      scratch_by_owner;
+  auto& scratch_by_stream = scratch_by_owner[owner];
+  auto& scratch = scratch_by_stream[stream];
+  if (!scratch) {
+    scratch = std::make_unique<ParallelMatMulConcatScratch>();
+  }
+  return *scratch;
+}
+
 namespace {
 
 bool IsOnnxDomain(const std::string& domain) {
@@ -448,12 +464,10 @@ OrtStatus* ParallelMatMulConcatFusionCompute::Compute(
         matmul_output_shape, part_count, part_width, concat_axis);
 
     Ort::UnownedValue y = ctx.GetOutput(0, concat_output_shape);
-    std::lock_guard<std::mutex> lock(scratch_mutex);
-    if (!scratch) {
-      scratch = std::make_unique<ParallelMatMulConcatScratch>();
-    }
+    ParallelMatMulConcatScratch& scratch =
+        ThreadLocalScratchForStream(this, stream);
     return ComputeDeviceParallelMatMulConcat(y, input, weights, concat_axis,
-                                             weights_are_initializers, *scratch,
+                                             weights_are_initializers, scratch,
                                              stream);
   } catch (const Ort::Exception& ex) {
     Ort::Status status(ex);

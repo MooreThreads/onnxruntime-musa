@@ -204,11 +204,20 @@ struct ParallelEinsumActivationRuntimeBuffers {
   DeviceBuffer stage1;
 };
 
-struct ParallelEinsumActivationRuntimeScratch {
-  std::unordered_map<musaStream_t,
-                     std::unique_ptr<ParallelEinsumActivationRuntimeBuffers>>
-      buffers_by_stream;
-};
+ParallelEinsumActivationRuntimeBuffers& ThreadLocalRuntimeBuffersForStream(
+    const ParallelEinsumActivationFusionCompute* owner, musaStream_t stream) {
+  using StreamBufferMap = std::unordered_map<
+      musaStream_t, std::unique_ptr<ParallelEinsumActivationRuntimeBuffers>>;
+  thread_local std::unordered_map<const ParallelEinsumActivationFusionCompute*,
+                                  StreamBufferMap>
+      buffers_by_owner;
+  auto& buffers_by_stream = buffers_by_owner[owner];
+  auto& buffers = buffers_by_stream[stream];
+  if (!buffers) {
+    buffers = std::make_unique<ParallelEinsumActivationRuntimeBuffers>();
+  }
+  return *buffers;
+}
 
 bool IsParallelEinsumActivationFusionGraph(Ort::ConstGraph graph) {
   size_t concat_count = 0;
@@ -499,31 +508,20 @@ OrtStatus* ParallelEinsumActivationFusionCompute::Compute(
       bias_data = static_cast<const float*>(temporary_buffers.back()->data());
     }
 
-    ParallelEinsumActivationRuntimeBuffers* runtime_buffers = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(runtime_scratch_mutex);
-      if (!runtime_scratch) {
-        runtime_scratch =
-            std::make_unique<ParallelEinsumActivationRuntimeScratch>();
-      }
-      auto& buffers = runtime_scratch->buffers_by_stream[stream];
-      if (!buffers) {
-        buffers = std::make_unique<ParallelEinsumActivationRuntimeBuffers>();
-      }
-      runtime_buffers = buffers.get();
-      RETURN_IF_ERROR(runtime_buffers->stage1.Resize(
-          static_cast<size_t>(batch * kParallelEinsumActivationHeads *
+    ParallelEinsumActivationRuntimeBuffers& runtime_buffers =
+        ThreadLocalRuntimeBuffersForStream(this, stream);
+    RETURN_IF_ERROR(runtime_buffers.stage1.Resize(
+        static_cast<size_t>(batch * kParallelEinsumActivationHeads *
+                            hidden_dim) *
+            sizeof(float),
+        stream));
+    if (!constants_are_initializers) {
+      RETURN_IF_ERROR(runtime_buffers.dynamic_packed_w1.Resize(
+          static_cast<size_t>(input_dim * kParallelEinsumActivationHeads *
                               hidden_dim) *
               sizeof(float),
           stream));
-      if (!constants_are_initializers) {
-        RETURN_IF_ERROR(runtime_buffers->dynamic_packed_w1.Resize(
-            static_cast<size_t>(input_dim * kParallelEinsumActivationHeads *
-                                hidden_dim) *
-                sizeof(float),
-            stream));
-        packed_w1_data = runtime_buffers->dynamic_packed_w1.data<float>();
-      }
+      packed_w1_data = runtime_buffers.dynamic_packed_w1.data<float>();
     }
 
     if (!constants_are_initializers) {
@@ -542,18 +540,18 @@ OrtStatus* ParallelEinsumActivationFusionCompute::Compute(
         static_cast<int64_t>(kParallelEinsumActivationHeads) * hidden_dim};
     RETURN_IF_ERROR(ComputeMusaMatMulDevice(
         static_cast<const float*>(mlp_input_buffer.data()), packed_w1_data,
-        runtime_buffers->stage1.data<float>(),
+        runtime_buffers.stage1.data<float>(),
         ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, mlp_matmul_shape,
         stage1_weight_shape, stage1_shape, false, false, false, false, 1.0f,
         stream));
     MusaBroadcastParams stage1_params =
         MakeBroadcastParams(stage1_shape, stage1_shape, {1});
     RETURN_IF_ERROR(LaunchStatus(LaunchMusaGemmPostFloatKernel(
-        runtime_buffers->stage1.data<float>(), nullptr, stage1_params, false,
+        runtime_buffers.stage1.data<float>(), nullptr, stage1_params, false,
         0.0f, MusaUnaryOp::Tanh, true, 0.0f, stream)));
 
     return LaunchStatus(LaunchMusaParallelEinsumActivationStage23Kernel(
-        runtime_buffers->stage1.data<float>(),
+        runtime_buffers.stage1.data<float>(),
         static_cast<const float*>(gate_input_buffer.data()), w2_data[0],
         w2_data[1], w2_data[2], w2_data[3], w3_data[0], w3_data[1], w3_data[2],
         w3_data[3], bias_data, output.GetTensorMutableData<float>(), batch,

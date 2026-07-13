@@ -4,7 +4,6 @@
 #pragma once
 
 #include <memory>
-#include <mutex>
 #include <vector>
 
 #include "fusion/fusion_node_compute.h"
@@ -33,8 +32,6 @@ struct ConcatSplitSumSpec {
   std::vector<ConcatSplitSumTermSpec> terms;
 };
 
-struct ConcatSplitScratch;
-
 struct ConcatSplitFusionCompute : FusionNodeCompute {
   ConcatSplitFusionCompute(std::vector<ConcatSplitOutput> outputs,
                            std::vector<ConcatSplitSegmentSpec> segments,
@@ -46,8 +43,6 @@ struct ConcatSplitFusionCompute : FusionNodeCompute {
   std::vector<ConcatSplitOutput> outputs;
   std::vector<ConcatSplitSegmentSpec> segments;
   std::vector<ConcatSplitSumSpec> sums;
-  mutable std::mutex scratch_mutex;
-  mutable std::unique_ptr<ConcatSplitScratch> scratch;
 };
 
 bool IsConcatSplitFusionGraph(Ort::ConstGraph graph);

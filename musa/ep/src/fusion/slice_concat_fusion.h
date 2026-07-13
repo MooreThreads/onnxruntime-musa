@@ -4,7 +4,6 @@
 #pragma once
 
 #include <memory>
-#include <mutex>
 #include <vector>
 
 #include "fusion/fusion_node_compute.h"
@@ -19,8 +18,6 @@ struct SliceConcatInput {
   bool zero_fill = false;
 };
 
-struct SliceConcatScratch;
-
 struct SliceConcatFusionCompute : FusionNodeCompute {
   SliceConcatFusionCompute(int64_t output_cols,
                            std::vector<SliceConcatInput> inputs);
@@ -33,8 +30,6 @@ struct SliceConcatFusionCompute : FusionNodeCompute {
   size_t input_slot_count = 0;
   int64_t equal_width = 0;
   int32_t equal_width_shift = -1;
-  mutable std::mutex scratch_mutex;
-  mutable std::unique_ptr<SliceConcatScratch> scratch;
 };
 
 bool IsSliceConcatFusionGraph(Ort::ConstGraph graph);

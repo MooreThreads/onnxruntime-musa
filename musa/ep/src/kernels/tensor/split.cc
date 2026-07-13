@@ -100,11 +100,11 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
       }
 
       MusaSplitElementDesc* device_element_descriptors = nullptr;
-      musaError_t status =
-          musaMalloc(reinterpret_cast<void**>(&device_element_descriptors),
-                     element_descriptor_bytes);
-      if (status != musaSuccess) {
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+      device_element_descriptors = reinterpret_cast<MusaSplitElementDesc*>(
+          AllocateDeviceMemoryOnStream(element_descriptor_bytes, stream));
+      if (device_element_descriptors == nullptr) {
+        return Ort::GetApi().CreateStatus(
+            ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
       }
 
       OrtStatus* copy_status = CopyTemporaryHostToDevice(
@@ -118,7 +118,8 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
       OrtStatus* launch_status = LaunchStatus(LaunchMusaSplitManySmallRows(
           input0.GetTensorRawData(), device_element_descriptors, outer,
           input_row_elements, static_cast<int32_t>(elem_size), stream));
-      FreeDeviceMemoryOnStream(device_element_descriptors, stream);
+      FreeDeviceMemoryOnStream(device_element_descriptors, stream,
+                               element_descriptor_bytes);
       return launch_status;
     }
 
@@ -133,10 +134,11 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
     MusaSplitCopyDesc* device_descriptors = nullptr;
     const size_t descriptor_bytes =
         descriptors.size() * sizeof(MusaSplitCopyDesc);
-    musaError_t status = musaMalloc(
-        reinterpret_cast<void**>(&device_descriptors), descriptor_bytes);
-    if (status != musaSuccess) {
-      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    device_descriptors = reinterpret_cast<MusaSplitCopyDesc*>(
+        AllocateDeviceMemoryOnStream(descriptor_bytes, stream));
+    if (device_descriptors == nullptr) {
+      return Ort::GetApi().CreateStatus(
+          ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
     }
 
     OrtStatus* copy_status = CopyTemporaryHostToDevice(
@@ -151,7 +153,7 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
         static_cast<int64_t>(output_data.size()), outer, inner,
         shape0[static_cast<size_t>(axis)], static_cast<int32_t>(elem_size),
         stream));
-    FreeDeviceMemoryOnStream(device_descriptors, stream);
+    FreeDeviceMemoryOnStream(device_descriptors, stream, descriptor_bytes);
     return launch_status;
   }
 

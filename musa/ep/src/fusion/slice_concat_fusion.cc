@@ -429,11 +429,9 @@ OrtStatus* SliceConcatFusionCompute::Compute(
     }
     if (scratch->capacity < inputs.size()) {
       if (scratch->device_segments != nullptr) {
-        musaError_t free_status = musaFree(scratch->device_segments);
-        if (free_status != musaSuccess) {
-          return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                            MusaErrorString(free_status));
-        }
+        FreeDeviceMemoryOnStream(
+            scratch->device_segments, stream,
+            scratch->capacity * sizeof(MusaSliceConcatSegment));
       }
       if (scratch->pinned_segments != nullptr) {
         (void)musaDeviceSynchronize();
@@ -445,13 +443,13 @@ OrtStatus* SliceConcatFusionCompute::Compute(
         scratch->pinned_segments = nullptr;
       }
       const size_t bytes = inputs.size() * sizeof(MusaSliceConcatSegment);
-      musaError_t alloc_status = musaMalloc(
-          reinterpret_cast<void**>(&scratch->device_segments), bytes);
-      if (alloc_status != musaSuccess) {
+      scratch->device_segments = reinterpret_cast<MusaSliceConcatSegment*>(
+          AllocateDeviceMemoryOnStream(bytes, stream));
+      if (scratch->device_segments == nullptr) {
         scratch->device_segments = nullptr;
         scratch->capacity = 0;
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                          MusaErrorString(alloc_status));
+        return Ort::GetApi().CreateStatus(
+            ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
       }
       musaError_t host_alloc_status =
           musaHostAlloc(reinterpret_cast<void**>(&scratch->pinned_segments),

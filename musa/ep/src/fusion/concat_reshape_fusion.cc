@@ -213,11 +213,11 @@ struct ConcatReshapeFusionCompute : FusionNodeCompute {
     const size_t element_descriptor_bytes =
         static_cast<size_t>(output_row_elements) *
         sizeof(MusaConcatElementDesc);
-    musaError_t status =
-        musaMalloc(reinterpret_cast<void**>(&device_element_descriptors),
-                   element_descriptor_bytes);
-    if (status != musaSuccess) {
-      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    device_element_descriptors = reinterpret_cast<MusaConcatElementDesc*>(
+        AllocateDeviceMemoryOnStream(element_descriptor_bytes, stream));
+    if (device_element_descriptors == nullptr) {
+      return Ort::GetApi().CreateStatus(
+          ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
     }
 
     OrtStatus* copy_status = CopyTemporaryHostToDevice(
@@ -231,7 +231,8 @@ struct ConcatReshapeFusionCompute : FusionNodeCompute {
     OrtStatus* launch_status = LaunchStatus(
         LaunchMusaConcatManySmallRows(output, device_element_descriptors, outer,
                                       output_row_elements, elem_size, stream));
-    FreeDeviceMemoryOnStream(device_element_descriptors, stream);
+    FreeDeviceMemoryOnStream(device_element_descriptors, stream,
+                             element_descriptor_bytes);
     return launch_status;
   }
 

@@ -9,14 +9,18 @@ namespace {
 class MusaDeviceBuffer {
  public:
   explicit MusaDeviceBuffer(size_t bytes, musaStream_t stream = nullptr)
-      : stream_(stream) {
-    if (bytes != 0) {
-      Ort::ThrowOnError(LaunchStatus(musaMalloc(&ptr_, bytes)));
+      : bytes_(bytes), stream_(stream) {
+    if (bytes_ != 0) {
+      ptr_ = AllocateDeviceMemoryOnStream(bytes_, stream_);
+      if (ptr_ == nullptr) {
+        Ort::ThrowOnError(Ort::GetApi().CreateStatus(
+            ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation)));
+      }
     }
   }
   ~MusaDeviceBuffer() {
     if (ptr_ != nullptr) {
-      FreeDeviceMemoryOnStream(ptr_, stream_);
+      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
     }
   }
   MusaDeviceBuffer(const MusaDeviceBuffer&) = delete;
@@ -25,6 +29,7 @@ class MusaDeviceBuffer {
 
  private:
   void* ptr_ = nullptr;
+  size_t bytes_ = 0;
   musaStream_t stream_ = nullptr;
 };
 

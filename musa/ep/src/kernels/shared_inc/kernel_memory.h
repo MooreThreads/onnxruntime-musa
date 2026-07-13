@@ -9,8 +9,10 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -77,12 +79,39 @@ class DeferredDeviceFreeQueue {
       }
       (void)musaFree(pending.ptr);
     }
+    // Keep completed cached blocks until process exit. Freeing device memory
+    // from static teardown can race MUSA runtime destruction.
+    cached_.clear();
+    cached_bytes_ = 0;
   }
 
-  void Free(void* ptr, musaStream_t stream) {
+  void* Allocate(size_t bytes, musaStream_t stream) {
+    if (bytes == 0) {
+      return nullptr;
+    }
+
+    const size_t rounded_bytes = RoundSize(bytes);
+    (void)stream;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (auto it = cached_.lower_bound(rounded_bytes); it != cached_.end();
+           ++it) {
+        void* ptr = it->second.ptr;
+        cached_bytes_ -= it->first;
+        cached_.erase(it);
+        return ptr;
+      }
+    }
+
+    void* ptr = nullptr;
+    return musaMalloc(&ptr, rounded_bytes) == musaSuccess ? ptr : nullptr;
+  }
+
+  void Free(void* ptr, musaStream_t stream, size_t bytes = 0) {
     if (ptr == nullptr) {
       return;
     }
+    const size_t rounded_bytes = bytes == 0 ? 0 : RoundSize(bytes);
     if (stream == nullptr) {
       (void)musaFree(ptr);
       return;
@@ -103,7 +132,7 @@ class DeferredDeviceFreeQueue {
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    pending_.push_back({ptr, event});
+    pending_.push_back({ptr, event, rounded_bytes});
     cv_.notify_one();
   }
 
@@ -111,7 +140,41 @@ class DeferredDeviceFreeQueue {
   struct PendingFree {
     void* ptr = nullptr;
     musaEvent_t event = nullptr;
+    size_t bytes = 0;
   };
+
+  struct CachedBlock {
+    void* ptr = nullptr;
+  };
+
+  static size_t RoundSize(size_t bytes) {
+    constexpr size_t kAlignment = 256;
+    return (bytes + kAlignment - 1) & ~(kAlignment - 1);
+  }
+
+  static size_t CacheLimitBytes() {
+    const char* env = std::getenv("ORT_MUSA_DEFERRED_FREE_CACHE_LIMIT_MB");
+    if (env != nullptr && *env != '\0') {
+      long mb = std::strtol(env, nullptr, 10);
+      return mb <= 0 ? 0 : static_cast<size_t>(mb) * 1024 * 1024;
+    }
+    return 256 * 1024 * 1024;
+  }
+
+  bool CacheCompleted(PendingFree& pending) {
+    if (pending.bytes == 0) {
+      return false;
+    }
+    const size_t limit = CacheLimitBytes();
+    if (limit == 0 || cached_bytes_ + pending.bytes > limit) {
+      return false;
+    }
+
+    cached_.emplace(pending.bytes, CachedBlock{pending.ptr});
+    cached_bytes_ += pending.bytes;
+    pending.ptr = nullptr;
+    return true;
+  }
 
   void PollLoop() {
     while (true) {
@@ -137,7 +200,9 @@ class DeferredDeviceFreeQueue {
       musaError_t status = musaEventQuery(it->event);
       if (status == musaSuccess) {
         (void)musaEventDestroy(it->event);
-        (void)musaFree(it->ptr);
+        if (!CacheCompleted(*it)) {
+          (void)musaFree(it->ptr);
+        }
         it = pending_.erase(it);
       } else if (status == musaErrorNotReady) {
         ++it;
@@ -152,6 +217,8 @@ class DeferredDeviceFreeQueue {
   std::mutex mutex_;
   std::condition_variable cv_;
   std::list<PendingFree> pending_;
+  std::multimap<size_t, CachedBlock> cached_;
+  size_t cached_bytes_ = 0;
   bool stop_ = false;
   std::thread worker_;
 };
@@ -163,6 +230,15 @@ inline DeferredDeviceFreeQueue& GetDeferredDeviceFreeQueue() {
 
 inline void FreeDeviceMemoryOnStream(void* ptr, musaStream_t stream) {
   GetDeferredDeviceFreeQueue().Free(ptr, stream);
+}
+
+inline void FreeDeviceMemoryOnStream(void* ptr, musaStream_t stream,
+                                     size_t bytes) {
+  GetDeferredDeviceFreeQueue().Free(ptr, stream, bytes);
+}
+
+inline void* AllocateDeviceMemoryOnStream(size_t bytes, musaStream_t stream) {
+  return GetDeferredDeviceFreeQueue().Allocate(bytes, stream);
 }
 
 inline PinnedHostPool* GetKernelPinnedHostPool() {
@@ -248,7 +324,7 @@ class DeviceInputBuffer {
   DeviceInputBuffer() = default;
   ~DeviceInputBuffer() {
     if (ptr_ != nullptr) {
-      FreeDeviceMemoryOnStream(ptr_, stream_);
+      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
     }
   }
 
@@ -267,12 +343,12 @@ class DeviceInputBuffer {
       return nullptr;
     }
 
-    musaError_t alloc_status = musaMalloc(&ptr_, bytes_);
-    if (alloc_status != musaSuccess) {
-      return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                        MusaErrorString(alloc_status));
-    }
     stream_ = stream;
+    ptr_ = AllocateDeviceMemoryOnStream(bytes_, stream_);
+    if (ptr_ == nullptr) {
+      return Ort::GetApi().CreateStatus(
+          ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
+    }
     RETURN_IF_ERROR(CopyTemporaryHostToDevice(ptr_, value.GetTensorRawData(),
                                               bytes_, stream_));
     data_ = ptr_;

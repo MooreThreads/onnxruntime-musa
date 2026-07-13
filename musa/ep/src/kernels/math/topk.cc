@@ -55,12 +55,10 @@ bool TryMudnnTopK(Ort::KernelContext& ctx,
 
   ::musa::dnn::MemoryMaintainer maintainer =
       [stream](size_t bytes) -> ::musa::dnn::MemoryHandler {
-    void* ptr = nullptr;
-    if (bytes != 0 && musaMalloc(&ptr, bytes) != musaSuccess) {
-      ptr = nullptr;
-    }
-    return ::musa::dnn::MemoryHandler(
-        ptr, [stream](void* p) { FreeDeviceMemoryOnStream(p, stream); });
+    void* ptr = AllocateDeviceMemoryOnStream(bytes, stream);
+    return ::musa::dnn::MemoryHandler(ptr, [stream, bytes](void* p) {
+      FreeDeviceMemoryOnStream(p, stream, bytes);
+    });
   };
 
   if (op.Run(*handle, values_tensor, indices_tensor, input_tensor,

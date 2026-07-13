@@ -20,7 +20,8 @@ struct ParallelMatMulConcatScratch;
 struct ParallelMatMulConcatFusionCompute : FusionNodeCompute {
   ParallelMatMulConcatFusionCompute(size_t input_index,
                                     std::vector<size_t> weight_indices,
-                                    int64_t concat_axis);
+                                    int64_t concat_axis,
+                                    bool weights_are_initializers);
   ~ParallelMatMulConcatFusionCompute() override;
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override;
@@ -28,6 +29,7 @@ struct ParallelMatMulConcatFusionCompute : FusionNodeCompute {
   size_t input_index;
   std::vector<size_t> weight_indices;
   int64_t concat_axis;
+  bool weights_are_initializers;
   mutable std::unique_ptr<ParallelMatMulConcatScratch> scratch;
   mutable std::mutex scratch_mutex;
 };

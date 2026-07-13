@@ -36,7 +36,7 @@ def _profile_musa_node_names(model_bytes, feeds, branch_count):
     return [event.get("name", "") for event in events if event.get("cat") == "Node"]
 
 
-def _build_model(branch_count):
+def _build_model(branch_count, initializer_weights=False):
     rng = np.random.default_rng(branch_count)
     x = rng.standard_normal((3, 8)).astype(np.float32)
     weights = {
@@ -44,6 +44,7 @@ def _build_model(branch_count):
         for i in range(branch_count)
     }
     axes = numpy_helper.from_array(np.array([1], dtype=np.int64), name="axes")
+    initializers = [axes]
 
     nodes = []
     concat_inputs = []
@@ -72,18 +73,28 @@ def _build_model(branch_count):
         )
     )
 
-    feeds = {"X": x, **weights}
+    feeds = {"X": x}
+    if not initializer_weights:
+        feeds.update(weights)
+
     inputs = [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["batch", 8])]
-    inputs.extend(
-        helper.make_tensor_value_info(name, TensorProto.FLOAT, list(weight.shape))
-        for name, weight in weights.items()
-    )
+    if initializer_weights:
+        initializers.extend(
+            numpy_helper.from_array(weight, name=name)
+            for name, weight in weights.items()
+        )
+    else:
+        inputs.extend(
+            helper.make_tensor_value_info(name, TensorProto.FLOAT, list(weight.shape))
+            for name, weight in weights.items()
+        )
+
     graph = helper.make_graph(
         nodes,
         f"parallel_matmul_concat_fusion_{branch_count}_graph",
         inputs,
         [helper.make_tensor_value_info("Z", TensorProto.FLOAT, ["batch", branch_count, 5])],
-        initializer=[axes],
+        initializer=initializers,
         value_info=value_info,
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
@@ -96,6 +107,16 @@ def test_parallel_matmul_concat_fusion(branch_count):
     model, feeds = _build_model(branch_count)
     run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
     node_names = _profile_musa_node_names(model, feeds, branch_count)
+    assert any(name.startswith("MUSAExecutionProvider_") for name in node_names)
+    assert not any(
+        name.startswith(("MatMul_", "Unsqueeze_", "Concat_")) for name in node_names
+    )
+
+
+def test_parallel_matmul_concat_fusion_initializer_weights():
+    model, feeds = _build_model(4, initializer_weights=True)
+    run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
+    node_names = _profile_musa_node_names(model, feeds, 4)
     assert any(name.startswith("MUSAExecutionProvider_") for name in node_names)
     assert not any(
         name.startswith(("MatMul_", "Unsqueeze_", "Concat_")) for name in node_names

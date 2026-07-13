@@ -88,6 +88,8 @@ class DeviceBuffer {
 
 struct ParallelMatMulConcatScratch {
   DeviceBuffer weight_buffer;
+  size_t merged_weight_bytes = 0;
+  bool merged_initializer_weights_valid = false;
 };
 
 namespace {
@@ -218,7 +220,8 @@ std::vector<int64_t> ComputeConcatOutputShape(
 OrtStatus* ComputeDeviceParallelMatMulConcat(
     Ort::UnownedValue y, Ort::ConstValue input,
     const std::vector<Ort::ConstValue>& weights, int64_t concat_axis,
-    ParallelMatMulConcatScratch& scratch, musaStream_t stream) {
+    bool weights_are_initializers, ParallelMatMulConcatScratch& scratch,
+    musaStream_t stream) {
   if (!IsGpuValue(input)) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED, "ParallelMatMulConcat requires MUSA input");
@@ -261,11 +264,18 @@ OrtStatus* ComputeDeviceParallelMatMulConcat(
   std::vector<int64_t> concat_output_shape = ComputeConcatOutputShape(
       matmul_output_shape, part_count, part_width, concat_axis);
 
-  scratch.weight_buffer.Resize(
-      static_cast<size_t>(NumElements(merged_weight_shape)) * sizeof(float),
-      stream);
-  RunMudnnWeightConcat(weights, merged_weight_shape,
-                       scratch.weight_buffer.data<float>(), stream);
+  const size_t merged_weight_bytes =
+      static_cast<size_t>(NumElements(merged_weight_shape)) * sizeof(float);
+  if (scratch.merged_weight_bytes != merged_weight_bytes) {
+    scratch.merged_initializer_weights_valid = false;
+    scratch.merged_weight_bytes = merged_weight_bytes;
+  }
+  scratch.weight_buffer.Resize(merged_weight_bytes, stream);
+  if (!weights_are_initializers || !scratch.merged_initializer_weights_valid) {
+    RunMudnnWeightConcat(weights, merged_weight_shape,
+                         scratch.weight_buffer.data<float>(), stream);
+    scratch.merged_initializer_weights_valid = weights_are_initializers;
+  }
 
   float* y_data = y.GetTensorMutableData<float>();
   return ComputeMusaMatMulDevice(
@@ -342,6 +352,7 @@ std::unique_ptr<FusionNodeCompute> CreateParallelMatMulConcatFusion(
   std::string common_input_name;
   std::vector<size_t> weight_indices;
   weight_indices.reserve(concat_inputs.size());
+  bool weights_are_initializers = true;
 
   for (Ort::ConstValueInfo concat_input : concat_inputs) {
     auto unsqueeze_it = producer_by_output.find(Name(concat_input));
@@ -379,6 +390,8 @@ std::unique_ptr<FusionNodeCompute> CreateParallelMatMulConcatFusion(
     }
     weight_indices.push_back(
         GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[1])));
+    weights_are_initializers =
+        weights_are_initializers && matmul_inputs[1].IsConstantInitializer();
   }
 
   int64_t concat_axis = 0;
@@ -389,14 +402,17 @@ std::unique_ptr<FusionNodeCompute> CreateParallelMatMulConcatFusion(
   }
 
   return std::make_unique<ParallelMatMulConcatFusionCompute>(
-      input_index, std::move(weight_indices), concat_axis);
+      input_index, std::move(weight_indices), concat_axis,
+      weights_are_initializers);
 }
 
 ParallelMatMulConcatFusionCompute::ParallelMatMulConcatFusionCompute(
-    size_t input_index, std::vector<size_t> weight_indices, int64_t concat_axis)
+    size_t input_index, std::vector<size_t> weight_indices, int64_t concat_axis,
+    bool weights_are_initializers)
     : input_index(input_index),
       weight_indices(std::move(weight_indices)),
-      concat_axis(concat_axis) {}
+      concat_axis(concat_axis),
+      weights_are_initializers(weights_are_initializers) {}
 
 ParallelMatMulConcatFusionCompute::~ParallelMatMulConcatFusionCompute() =
     default;
@@ -437,7 +453,8 @@ OrtStatus* ParallelMatMulConcatFusionCompute::Compute(
       scratch = std::make_unique<ParallelMatMulConcatScratch>();
     }
     return ComputeDeviceParallelMatMulConcat(y, input, weights, concat_axis,
-                                             *scratch, stream);
+                                             weights_are_initializers, *scratch,
+                                             stream);
   } catch (const Ort::Exception& ex) {
     Ort::Status status(ex);
     return status.release();

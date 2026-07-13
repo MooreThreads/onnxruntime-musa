@@ -147,11 +147,11 @@ OrtStatus* LaunchConcatSmallRows(void* output,
   MusaConcatElementDesc* device_element_descriptors = nullptr;
   const size_t element_descriptor_bytes =
       static_cast<size_t>(output_row_elements) * sizeof(MusaConcatElementDesc);
-  musaError_t status =
-      musaMalloc(reinterpret_cast<void**>(&device_element_descriptors),
-                 element_descriptor_bytes);
-  if (status != musaSuccess) {
-    return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+  device_element_descriptors = reinterpret_cast<MusaConcatElementDesc*>(
+      AllocateDeviceMemoryOnStream(element_descriptor_bytes, stream));
+  if (device_element_descriptors == nullptr) {
+    return Ort::GetApi().CreateStatus(
+        ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
   }
 
   OrtStatus* copy_status = CopyTemporaryHostToDevice(
@@ -165,7 +165,8 @@ OrtStatus* LaunchConcatSmallRows(void* output,
   OrtStatus* launch_status = LaunchStatus(
       LaunchMusaConcatManySmallRows(output, device_element_descriptors, outer,
                                     output_row_elements, elem_size, stream));
-  FreeDeviceMemoryOnStream(device_element_descriptors, stream);
+  FreeDeviceMemoryOnStream(device_element_descriptors, stream,
+                           element_descriptor_bytes);
   return launch_status;
 }
 
@@ -278,10 +279,10 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
     void* concat_output = output_data;
     void* temp_output = nullptr;
     if (output_overlaps_input && output_bytes > 0) {
-      musaError_t alloc_status = musaMalloc(&temp_output, output_bytes);
-      if (alloc_status != musaSuccess) {
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                          MusaErrorString(alloc_status));
+      temp_output = AllocateDeviceMemoryOnStream(output_bytes, stream);
+      if (temp_output == nullptr) {
+        return Ort::GetApi().CreateStatus(
+            ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
       }
       concat_output = temp_output;
     }
@@ -298,7 +299,7 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
                                               MusaErrorString(copy_status));
         }
       }
-      FreeDeviceMemoryOnStream(temp_output, stream);
+      FreeDeviceMemoryOnStream(temp_output, stream, output_bytes);
       return status;
     };
 

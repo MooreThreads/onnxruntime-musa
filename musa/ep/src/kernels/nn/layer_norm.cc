@@ -14,12 +14,13 @@ class DeviceTempBuffer {
   DeviceTempBuffer(size_t bytes, musaStream_t stream)
       : bytes_(bytes), stream_(stream) {
     if (bytes_ != 0) {
-      status_ = musaMalloc(&ptr_, bytes_);
+      ptr_ = AllocateDeviceMemoryOnStream(bytes_, stream_);
+      status_ = ptr_ != nullptr ? musaSuccess : musaErrorMemoryAllocation;
     }
   }
   ~DeviceTempBuffer() {
     if (ptr_ != nullptr) {
-      FreeDeviceMemoryOnStream(ptr_, stream_);
+      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
     }
   }
   DeviceTempBuffer(const DeviceTempBuffer&) = delete;
@@ -156,12 +157,10 @@ bool LayerNormalization::TryMudnn(Ort::KernelContext& ctx,
 
   ::musa::dnn::MemoryMaintainer maintainer =
       [stream](size_t bytes) -> ::musa::dnn::MemoryHandler {
-    void* ptr = nullptr;
-    if (bytes != 0 && musaMalloc(&ptr, bytes) != musaSuccess) {
-      ptr = nullptr;
-    }
-    return ::musa::dnn::MemoryHandler(
-        ptr, [stream](void* p) { FreeDeviceMemoryOnStream(p, stream); });
+    void* ptr = AllocateDeviceMemoryOnStream(bytes, stream);
+    return ::musa::dnn::MemoryHandler(ptr, [stream, bytes](void* p) {
+      FreeDeviceMemoryOnStream(p, stream, bytes);
+    });
   };
 
   auto status = op.Run(*handle, output_tensor, mean_tensor, inv_std_tensor,

@@ -43,7 +43,7 @@ struct TileConcatFusionCompute : FusionNodeCompute {
 
       std::vector<std::vector<int64_t>> shapes;
       std::vector<const void*> input_data;
-      std::vector<void*> temp_buffers;
+      std::vector<std::pair<void*, size_t>> temp_buffers;
       shapes.reserve(inputs.size());
       input_data.reserve(inputs.size());
 
@@ -52,8 +52,8 @@ struct TileConcatFusionCompute : FusionNodeCompute {
       size_t elem_size = 0;
 
       auto cleanup_temps = [&]() {
-        for (void* ptr : temp_buffers) {
-          FreeDeviceMemoryOnStream(ptr, stream);
+        for (auto [ptr, bytes] : temp_buffers) {
+          FreeDeviceMemoryOnStream(ptr, stream, bytes);
         }
       };
 
@@ -118,13 +118,13 @@ struct TileConcatFusionCompute : FusionNodeCompute {
             const size_t output_bytes =
                 static_cast<size_t>(NumElements(effective_shape)) * elem_size;
             void* tile_output = nullptr;
-            musaError_t alloc_status = musaMalloc(&tile_output, output_bytes);
-            if (alloc_status != musaSuccess) {
+            tile_output = AllocateDeviceMemoryOnStream(output_bytes, stream);
+            if (tile_output == nullptr) {
               cleanup_temps();
-              return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                                MusaErrorString(alloc_status));
+              return Ort::GetApi().CreateStatus(
+                  ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
             }
-            temp_buffers.push_back(tile_output);
+            temp_buffers.push_back({tile_output, output_bytes});
             OrtStatus* tile_status = LaunchStatus(LaunchMusaTileKernel(
                 input.GetTensorRawData(), tile_output,
                 static_cast<int32_t>(elem_size),
@@ -303,11 +303,11 @@ struct TileConcatFusionCompute : FusionNodeCompute {
     const size_t element_descriptor_bytes =
         static_cast<size_t>(output_row_elements) *
         sizeof(MusaConcatElementDesc);
-    musaError_t status =
-        musaMalloc(reinterpret_cast<void**>(&device_element_descriptors),
-                   element_descriptor_bytes);
-    if (status != musaSuccess) {
-      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    device_element_descriptors = reinterpret_cast<MusaConcatElementDesc*>(
+        AllocateDeviceMemoryOnStream(element_descriptor_bytes, stream));
+    if (device_element_descriptors == nullptr) {
+      return Ort::GetApi().CreateStatus(
+          ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
     }
 
     OrtStatus* copy_status = CopyTemporaryHostToDevice(
@@ -321,7 +321,8 @@ struct TileConcatFusionCompute : FusionNodeCompute {
     OrtStatus* launch_status = LaunchStatus(
         LaunchMusaConcatManySmallRows(output, device_element_descriptors, outer,
                                       output_row_elements, elem_size, stream));
-    FreeDeviceMemoryOnStream(device_element_descriptors, stream);
+    FreeDeviceMemoryOnStream(device_element_descriptors, stream,
+                             element_descriptor_bytes);
     return launch_status;
   }
 

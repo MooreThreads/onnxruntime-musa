@@ -10,14 +10,16 @@ namespace {
 
 class MusaDeviceBuffer {
  public:
-  MusaDeviceBuffer(size_t bytes, musaStream_t stream) : stream_(stream) {
-    if (bytes != 0) {
-      status_ = musaMalloc(&ptr_, bytes);
+  MusaDeviceBuffer(size_t bytes, musaStream_t stream)
+      : bytes_(bytes), stream_(stream) {
+    if (bytes_ != 0) {
+      ptr_ = AllocateDeviceMemoryOnStream(bytes_, stream_);
+      status_ = ptr_ != nullptr ? musaSuccess : musaErrorMemoryAllocation;
     }
   }
   ~MusaDeviceBuffer() {
     if (ptr_ != nullptr) {
-      FreeDeviceMemoryOnStream(ptr_, stream_);
+      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
     }
   }
   MusaDeviceBuffer(const MusaDeviceBuffer&) = delete;
@@ -28,6 +30,7 @@ class MusaDeviceBuffer {
 
  private:
   void* ptr_ = nullptr;
+  size_t bytes_ = 0;
   musaStream_t stream_ = nullptr;
   musaError_t status_ = musaSuccess;
 };

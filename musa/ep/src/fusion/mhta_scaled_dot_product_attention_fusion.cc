@@ -100,16 +100,16 @@ class DeviceBuffer {
       return;
     }
     if (ptr_ != nullptr) {
-      FreeDeviceMemoryOnStream(ptr_, stream_);
+      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
       ptr_ = nullptr;
       bytes_ = 0;
     }
     if (bytes == 0) {
       return;
     }
-    musaError_t status = musaMalloc(&ptr_, bytes);
-    if (status != musaSuccess) {
-      throw std::runtime_error(MusaErrorString(status));
+    ptr_ = AllocateDeviceMemoryOnStream(bytes, stream);
+    if (ptr_ == nullptr) {
+      throw std::runtime_error(MusaErrorString(musaErrorMemoryAllocation));
     }
     stream_ = stream;
     bytes_ = bytes;

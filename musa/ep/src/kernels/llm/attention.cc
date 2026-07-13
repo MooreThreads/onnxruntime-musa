@@ -24,18 +24,20 @@ class DeviceScratch {
 
   ~DeviceScratch() {
     if (ptr_ != nullptr) {
-      FreeDeviceMemoryOnStream(ptr_, stream_);
+      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
     }
   }
 
   OrtStatus* Allocate(size_t bytes, musaStream_t stream) {
+    bytes_ = bytes;
     stream_ = stream;
     if (bytes == 0) {
       return nullptr;
     }
-    musaError_t status = musaMalloc(&ptr_, bytes);
-    if (status != musaSuccess) {
-      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    ptr_ = AllocateDeviceMemoryOnStream(bytes_, stream_);
+    if (ptr_ == nullptr) {
+      return Ort::GetApi().CreateStatus(
+          ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
     }
     return nullptr;
   }
@@ -44,6 +46,7 @@ class DeviceScratch {
 
  private:
   void* ptr_ = nullptr;
+  size_t bytes_ = 0;
   musaStream_t stream_ = nullptr;
 };
 

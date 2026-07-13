@@ -270,20 +270,18 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
     if (!segments.empty()) {
       if (scratch->capacity < segments.size()) {
         if (scratch->device_segments != nullptr) {
-          musaError_t free_status = musaFree(scratch->device_segments);
-          if (free_status != musaSuccess) {
-            return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                              MusaErrorString(free_status));
-          }
+          FreeDeviceMemoryOnStream(
+              scratch->device_segments, stream,
+              scratch->capacity * sizeof(MusaConcatSplitSegment));
         }
         const size_t bytes = segments.size() * sizeof(MusaConcatSplitSegment);
-        musaError_t alloc_status = musaMalloc(
-            reinterpret_cast<void**>(&scratch->device_segments), bytes);
-        if (alloc_status != musaSuccess) {
+        scratch->device_segments = reinterpret_cast<MusaConcatSplitSegment*>(
+            AllocateDeviceMemoryOnStream(bytes, stream));
+        if (scratch->device_segments == nullptr) {
           scratch->device_segments = nullptr;
           scratch->capacity = 0;
-          return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                            MusaErrorString(alloc_status));
+          return Ort::GetApi().CreateStatus(
+              ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
         }
         scratch->capacity = segments.size();
       }
@@ -313,22 +311,20 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
 
       if (scratch->copy_block_capacity < scratch->host_copy_blocks.size()) {
         if (scratch->device_copy_blocks != nullptr) {
-          musaError_t free_status = musaFree(scratch->device_copy_blocks);
-          if (free_status != musaSuccess) {
-            return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                              MusaErrorString(free_status));
-          }
+          FreeDeviceMemoryOnStream(
+              scratch->device_copy_blocks, stream,
+              scratch->copy_block_capacity * sizeof(MusaConcatSplitCopyBlock));
         }
         const size_t block_bytes =
             scratch->host_copy_blocks.size() * sizeof(MusaConcatSplitCopyBlock);
-        musaError_t alloc_status =
-            musaMalloc(reinterpret_cast<void**>(&scratch->device_copy_blocks),
-                       block_bytes);
-        if (alloc_status != musaSuccess) {
+        scratch->device_copy_blocks =
+            reinterpret_cast<MusaConcatSplitCopyBlock*>(
+                AllocateDeviceMemoryOnStream(block_bytes, stream));
+        if (scratch->device_copy_blocks == nullptr) {
           scratch->device_copy_blocks = nullptr;
           scratch->copy_block_capacity = 0;
-          return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                            MusaErrorString(alloc_status));
+          return Ort::GetApi().CreateStatus(
+              ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
         }
         scratch->copy_block_capacity = scratch->host_copy_blocks.size();
       }
@@ -358,39 +354,36 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
     if (!sums.empty()) {
       if (scratch->sum_output_capacity < sums.size()) {
         if (scratch->device_sum_outputs != nullptr) {
-          musaError_t free_status = musaFree(scratch->device_sum_outputs);
-          if (free_status != musaSuccess) {
-            return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                              MusaErrorString(free_status));
-          }
+          FreeDeviceMemoryOnStream(
+              scratch->device_sum_outputs, stream,
+              scratch->sum_output_capacity * sizeof(MusaConcatSplitSumOutput));
         }
         const size_t bytes = sums.size() * sizeof(MusaConcatSplitSumOutput);
-        musaError_t alloc_status = musaMalloc(
-            reinterpret_cast<void**>(&scratch->device_sum_outputs), bytes);
-        if (alloc_status != musaSuccess) {
+        scratch->device_sum_outputs =
+            reinterpret_cast<MusaConcatSplitSumOutput*>(
+                AllocateDeviceMemoryOnStream(bytes, stream));
+        if (scratch->device_sum_outputs == nullptr) {
           scratch->device_sum_outputs = nullptr;
           scratch->sum_output_capacity = 0;
-          return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                            MusaErrorString(alloc_status));
+          return Ort::GetApi().CreateStatus(
+              ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
         }
         scratch->sum_output_capacity = sums.size();
       }
       if (scratch->sum_term_capacity < sum_term_count) {
         if (scratch->device_sum_terms != nullptr) {
-          musaError_t free_status = musaFree(scratch->device_sum_terms);
-          if (free_status != musaSuccess) {
-            return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                              MusaErrorString(free_status));
-          }
+          FreeDeviceMemoryOnStream(
+              scratch->device_sum_terms, stream,
+              scratch->sum_term_capacity * sizeof(MusaConcatSplitSumTerm));
         }
         const size_t bytes = sum_term_count * sizeof(MusaConcatSplitSumTerm);
-        musaError_t alloc_status = musaMalloc(
-            reinterpret_cast<void**>(&scratch->device_sum_terms), bytes);
-        if (alloc_status != musaSuccess) {
+        scratch->device_sum_terms = reinterpret_cast<MusaConcatSplitSumTerm*>(
+            AllocateDeviceMemoryOnStream(bytes, stream));
+        if (scratch->device_sum_terms == nullptr) {
           scratch->device_sum_terms = nullptr;
           scratch->sum_term_capacity = 0;
-          return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                            MusaErrorString(alloc_status));
+          return Ort::GetApi().CreateStatus(
+              ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
         }
         scratch->sum_term_capacity = sum_term_count;
       }

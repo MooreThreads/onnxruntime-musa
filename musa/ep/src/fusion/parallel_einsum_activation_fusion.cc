@@ -104,15 +104,15 @@ class CachedDeviceValue {
 
     if (ptr_ == nullptr || bytes_ != bytes || host_data_ != host_data) {
       if (ptr_ != nullptr) {
-        FreeDeviceMemoryOnStream(ptr_, stream_);
+        FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
         ptr_ = nullptr;
         bytes_ = 0;
         host_data_ = nullptr;
       }
-      musaError_t alloc_status = musaMalloc(&ptr_, bytes);
-      if (alloc_status != musaSuccess) {
-        return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
-                                          MusaErrorString(alloc_status));
+      ptr_ = AllocateDeviceMemoryOnStream(bytes, stream);
+      if (ptr_ == nullptr) {
+        return Ort::GetApi().CreateStatus(
+            ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
       }
       stream_ = stream;
       RETURN_IF_ERROR(
@@ -160,16 +160,17 @@ class DeviceBuffer {
       return nullptr;
     }
     if (ptr_ != nullptr) {
-      FreeDeviceMemoryOnStream(ptr_, stream_);
+      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
       ptr_ = nullptr;
       bytes_ = 0;
     }
     if (bytes == 0) {
       return nullptr;
     }
-    musaError_t status = musaMalloc(&ptr_, bytes);
-    if (status != musaSuccess) {
-      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    ptr_ = AllocateDeviceMemoryOnStream(bytes, stream);
+    if (ptr_ == nullptr) {
+      return Ort::GetApi().CreateStatus(
+          ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
     }
     stream_ = stream;
     bytes_ = bytes;

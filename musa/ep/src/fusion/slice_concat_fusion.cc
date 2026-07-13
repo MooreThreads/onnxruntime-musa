@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -353,6 +354,17 @@ struct SliceConcatScratch {
   std::vector<RuntimeInput> runtime_inputs;
 };
 
+static SliceConcatScratch& ThreadLocalScratchForStream(musaStream_t stream) {
+  thread_local std::unordered_map<musaStream_t,
+                                  std::unique_ptr<SliceConcatScratch>>
+      scratch_by_stream;
+  auto& scratch = scratch_by_stream[stream];
+  if (!scratch) {
+    scratch = std::make_unique<SliceConcatScratch>();
+  }
+  return *scratch;
+}
+
 SliceConcatFusionCompute::SliceConcatFusionCompute(
     int64_t output_cols, std::vector<SliceConcatInput> inputs)
     : output_cols(output_cols), inputs(std::move(inputs)) {
@@ -423,49 +435,46 @@ OrtStatus* SliceConcatFusionCompute::Compute(
                                         "SliceConcat requires MUSA output");
     }
 
-    std::lock_guard<std::mutex> lock(scratch_mutex);
-    if (!scratch) {
-      scratch = std::make_unique<SliceConcatScratch>();
-    }
-    if (scratch->capacity < inputs.size()) {
-      if (scratch->device_segments != nullptr) {
+    SliceConcatScratch& scratch = ThreadLocalScratchForStream(stream);
+    if (scratch.capacity < inputs.size()) {
+      if (scratch.device_segments != nullptr) {
         FreeDeviceMemoryOnStream(
-            scratch->device_segments, stream,
-            scratch->capacity * sizeof(MusaSliceConcatSegment));
+            scratch.device_segments, stream,
+            scratch.capacity * sizeof(MusaSliceConcatSegment));
       }
-      if (scratch->pinned_segments != nullptr) {
+      if (scratch.pinned_segments != nullptr) {
         (void)musaDeviceSynchronize();
-        musaError_t free_host_status = musaFreeHost(scratch->pinned_segments);
+        musaError_t free_host_status = musaFreeHost(scratch.pinned_segments);
         if (free_host_status != musaSuccess) {
           return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                             MusaErrorString(free_host_status));
         }
-        scratch->pinned_segments = nullptr;
+        scratch.pinned_segments = nullptr;
       }
       const size_t bytes = inputs.size() * sizeof(MusaSliceConcatSegment);
-      scratch->device_segments = reinterpret_cast<MusaSliceConcatSegment*>(
+      scratch.device_segments = reinterpret_cast<MusaSliceConcatSegment*>(
           AllocateDeviceMemoryOnStream(bytes, stream));
-      if (scratch->device_segments == nullptr) {
-        scratch->device_segments = nullptr;
-        scratch->capacity = 0;
+      if (scratch.device_segments == nullptr) {
+        scratch.device_segments = nullptr;
+        scratch.capacity = 0;
         return Ort::GetApi().CreateStatus(
             ORT_EP_FAIL, MusaErrorString(musaErrorMemoryAllocation));
       }
       musaError_t host_alloc_status =
-          musaHostAlloc(reinterpret_cast<void**>(&scratch->pinned_segments),
+          musaHostAlloc(reinterpret_cast<void**>(&scratch.pinned_segments),
                         bytes, musaHostAllocDefault);
       if (host_alloc_status != musaSuccess) {
-        (void)musaFree(scratch->device_segments);
-        scratch->device_segments = nullptr;
-        scratch->capacity = 0;
+        (void)musaFree(scratch.device_segments);
+        scratch.device_segments = nullptr;
+        scratch.capacity = 0;
         return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                           MusaErrorString(host_alloc_status));
       }
-      scratch->capacity = inputs.size();
+      scratch.capacity = inputs.size();
     }
 
-    scratch->host_segments.resize(inputs.size());
-    scratch->runtime_inputs.assign(input_slot_count, {});
+    scratch.host_segments.resize(inputs.size());
+    scratch.runtime_inputs.assign(input_slot_count, {});
     int64_t total_blocks = 0;
     for (size_t i = 0; i < inputs.size(); ++i) {
       const SliceConcatInput& spec = inputs[i];
@@ -473,18 +482,18 @@ OrtStatus* SliceConcatFusionCompute::Compute(
       const int64_t block_offset = total_blocks;
       total_blocks += block_count;
       if (spec.zero_fill) {
-        scratch->host_segments[i] = MusaSliceConcatSegment{
+        scratch.host_segments[i] = MusaSliceConcatSegment{
             nullptr,      0,           0, spec.width, spec.dst_offset,
             block_offset, block_count, 1};
         continue;
       }
 
-      if (spec.input_index >= scratch->runtime_inputs.size()) {
+      if (spec.input_index >= scratch.runtime_inputs.size()) {
         return Ort::GetApi().CreateStatus(
             ORT_INVALID_ARGUMENT, "SliceConcat input index out of range");
       }
       SliceConcatScratch::RuntimeInput& runtime_input =
-          scratch->runtime_inputs[spec.input_index];
+          scratch.runtime_inputs[spec.input_index];
       if (!runtime_input.initialized) {
         Ort::ConstValue input = ctx.GetInput(spec.input_index);
         if (!IsGpuMemory(input.GetTensorMemoryInfo())) {
@@ -515,29 +524,29 @@ OrtStatus* SliceConcatFusionCompute::Compute(
         return Ort::GetApi().CreateStatus(
             ORT_INVALID_ARGUMENT, "SliceConcat runtime input cols mismatch");
       }
-      scratch->host_segments[i] = MusaSliceConcatSegment{
+      scratch.host_segments[i] = MusaSliceConcatSegment{
           runtime_input.data, runtime_input.cols, spec.start_col, spec.width,
           spec.dst_offset,    block_offset,       block_count,    0,
       };
     }
 
     const size_t bytes = inputs.size() * sizeof(MusaSliceConcatSegment);
-    std::memcpy(scratch->pinned_segments, scratch->host_segments.data(), bytes);
+    std::memcpy(scratch.pinned_segments, scratch.host_segments.data(), bytes);
     musaError_t copy_status =
-        musaMemcpyAsync(scratch->device_segments, scratch->pinned_segments,
-                        bytes, musaMemcpyHostToDevice, stream);
+        musaMemcpyAsync(scratch.device_segments, scratch.pinned_segments, bytes,
+                        musaMemcpyHostToDevice, stream);
     if (copy_status != musaSuccess) {
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                         MusaErrorString(copy_status));
     }
     if (equal_width > 0) {
       return LaunchStatus(LaunchMusaSliceConcatEqualWidthKernel(
-          scratch->device_segments, static_cast<int64_t>(inputs.size()),
+          scratch.device_segments, static_cast<int64_t>(inputs.size()),
           y.GetTensorMutableData<float>(), rows, output_cols, equal_width,
           equal_width_shift, stream));
     }
     return LaunchStatus(LaunchMusaSliceConcatSegmentedKernel(
-        scratch->device_segments, static_cast<int64_t>(inputs.size()),
+        scratch.device_segments, static_cast<int64_t>(inputs.size()),
         total_blocks, y.GetTensorMutableData<float>(), rows, output_cols,
         stream));
   } catch (const Ort::Exception& ex) {

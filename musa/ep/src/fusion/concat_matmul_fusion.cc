@@ -128,6 +128,17 @@ struct ConcatMatMulScratch {
   }
 };
 
+static ConcatMatMulScratch& ThreadLocalScratchForStream(musaStream_t stream) {
+  thread_local std::unordered_map<musaStream_t,
+                                  std::unique_ptr<ConcatMatMulScratch>>
+      scratch_by_stream;
+  auto& scratch = scratch_by_stream[stream];
+  if (!scratch) {
+    scratch = std::make_unique<ConcatMatMulScratch>();
+  }
+  return *scratch;
+}
+
 namespace {
 
 void NoOpDelete(void*) {}
@@ -662,13 +673,10 @@ OrtStatus* ConcatMatMulFusionCompute::Compute(
         ComputeMatMulOutputShape(lhs_shape, rhs_shape);
 
     Ort::UnownedValue y = ctx.GetOutput(0, output_shape);
-    std::lock_guard<std::mutex> lock(scratch_mutex);
-    if (!scratch) {
-      scratch = std::make_unique<ConcatMatMulScratch>();
-    }
+    ConcatMatMulScratch& scratch = ThreadLocalScratchForStream(stream);
     return ComputeDeviceConcatMatMul(
         y, concat_inputs, other_input, concat_shape, other_shape,
-        normalized_axis, concat_input_idx, output_shape, *scratch, stream);
+        normalized_axis, concat_input_idx, output_shape, scratch, stream);
   } catch (const Ort::Exception& ex) {
     Ort::Status status(ex);
     return status.release();

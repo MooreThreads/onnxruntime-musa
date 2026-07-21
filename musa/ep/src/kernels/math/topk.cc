@@ -9,16 +9,52 @@
 
 namespace {
 
+enum class TopKAlgorithm {
+  Empty,
+  PairReduce,
+  MudnnTopKStablePostprocess,
+  BlockSort,
+  SegmentedRadixSort,
+};
+
+bool IsMudnnTopKType(ONNXTensorElementDataType elem_type) {
+  switch (elem_type) {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32:
+      return true;
+    default:
+      return false;
+  }
+}
+
+TopKAlgorithm SelectTopKAlgorithm(ONNXTensorElementDataType elem_type,
+                                  const MusaTopKParams& params) {
+  if (params.output_elements == 0) {
+    return TopKAlgorithm::Empty;
+  }
+  if (params.k == 1) {
+    return TopKAlgorithm::PairReduce;
+  }
+  if (IsMudnnTopKType(elem_type) &&
+      params.k <= kMusaTopKStablePostprocessMaxK) {
+    return TopKAlgorithm::MudnnTopKStablePostprocess;
+  }
+  if (params.dim <= kMusaTopKBlockSortMaxDim) {
+    return TopKAlgorithm::BlockSort;
+  }
+  return TopKAlgorithm::SegmentedRadixSort;
+}
+
 bool TryMudnnTopK(Ort::KernelContext& ctx,
                   const std::vector<int64_t>& input_shape,
                   const std::vector<int64_t>& output_shape,
                   ONNXTensorElementDataType elem_type, int64_t axis, int64_t k,
-                  int64_t largest, int64_t sorted, Ort::ConstValue input,
+                  int64_t largest, Ort::ConstValue input,
                   Ort::UnownedValue values, Ort::UnownedValue indices,
                   MusaTopKParams params, MusaElementType musa_elem_type) {
-  if (sorted != 1 || axis > std::numeric_limits<int>::max() ||
+  if (!IsMudnnTopKType(elem_type) || axis > std::numeric_limits<int>::max() ||
       k > std::numeric_limits<int>::max() ||
-      elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 ||
       !IsGpuMemory(input.GetTensorMemoryInfo()) ||
       !IsGpuMemory(values.GetTensorMemoryInfo()) ||
       !IsGpuMemory(indices.GetTensorMemoryInfo())) {
@@ -66,7 +102,7 @@ bool TryMudnnTopK(Ort::KernelContext& ctx,
     return false;
   }
 
-  return LaunchMusaTopKStableIndicesKernel(
+  return LaunchMusaTopKStablePostprocessKernel(
              input.GetTensorRawData(), values.GetTensorMutableRawData(),
              indices.GetTensorMutableData<int64_t>(), params, musa_elem_type,
              stream) == musaSuccess;
@@ -171,18 +207,53 @@ OrtStatus* TopK::Compute(Ort::KernelContext& ctx) const {
   params.largest = largest_ == 0 ? 0 : 1;
   params.sorted = sorted_ == 0 ? 0 : 1;
 
-  if (TryMudnnTopK(ctx, input_shape, output_shape, elem_type, axis, k, largest_,
-                   sorted_, input, values, indices, params, musa_elem_type)) {
+  const void* input_data = input.GetTensorRawData();
+  void* values_data = values.GetTensorMutableRawData();
+  int64_t* indices_data = indices.GetTensorMutableData<int64_t>();
+  musaStream_t stream = GetComputeStream(ctx);
+  TopKAlgorithm algorithm = SelectTopKAlgorithm(elem_type, params);
+  musaError_t status = musaSuccess;
+
+  if (algorithm == TopKAlgorithm::Empty) {
     return nullptr;
   }
+  if (algorithm == TopKAlgorithm::PairReduce) {
+    status = LaunchMusaTopKPairReduceKernel(
+        input_data, values_data, indices_data, params, musa_elem_type, stream);
+  } else if (algorithm == TopKAlgorithm::MudnnTopKStablePostprocess) {
+    if (TryMudnnTopK(ctx, input_shape, output_shape, elem_type, axis, k,
+                     largest_, input, values, indices, params,
+                     musa_elem_type)) {
+      return nullptr;
+    }
+    algorithm = params.dim <= kMusaTopKBlockSortMaxDim
+                    ? TopKAlgorithm::BlockSort
+                    : TopKAlgorithm::SegmentedRadixSort;
+  }
 
-  musaError_t status = LaunchMusaTopKKernel(
-      input.GetTensorRawData(), values.GetTensorMutableRawData(),
-      indices.GetTensorMutableData<int64_t>(), params, musa_elem_type,
-      GetComputeStream(ctx));
+  if (algorithm == TopKAlgorithm::BlockSort) {
+    status = LaunchMusaTopKBlockSortKernel(
+        input_data, values_data, indices_data, params, musa_elem_type, stream);
+  } else if (algorithm == TopKAlgorithm::SegmentedRadixSort) {
+    size_t workspace_bytes = 0;
+    status = GetMusaTopKRadixSortWorkspaceSize(params, musa_elem_type,
+                                               &workspace_bytes);
+    if (status == musaSuccess) {
+      void* workspace = AllocateDeviceMemoryOnStream(workspace_bytes, stream);
+      if (workspace == nullptr) {
+        return Ort::GetApi().CreateStatus(
+            ORT_FAIL, "TopK failed to allocate radix-sort workspace");
+      }
+      status = LaunchMusaTopKRadixSortKernel(
+          input_data, values_data, indices_data, params, musa_elem_type,
+          workspace, workspace_bytes, stream);
+      FreeDeviceMemoryOnStream(workspace, stream, workspace_bytes);
+    }
+  }
+
   if (status == musaErrorNotSupported) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "TopK unsupported dtype");
+                                      "TopK unsupported dtype or tensor size");
   }
   return LaunchStatus(status);
 }

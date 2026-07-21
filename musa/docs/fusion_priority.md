@@ -28,6 +28,7 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 19 | Bucketize Gather Fusion | `FindBucketizeGatherFusions` | `false` | [bucketize_gather.md](fusion/bucketize_gather.md) |
 | 20 | Masked Embedding Lookup Fusion | `FindMaskedEmbeddingLookupFusions` | `false` | [masked_embedding_lookup.md](fusion/masked_embedding_lookup.md) |
 | 21 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
+| 22 | Replace Invalid Id Fusion | `FindReplaceInvalidIdFusions` | `true` | [replace_invalid_id.md](fusion/replace_invalid_id.md) |
 
 ## Compile Dispatch Order
 
@@ -52,4 +53,5 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 17 | `IsBucketizeGatherFusionGraph` | `CreateBucketizeGatherFusion` | [bucketize_gather](fusion/bucketize_gather.md) |
 | 18 | `IsMaskedEmbeddingLookupFusionGraph` | `CreateMaskedEmbeddingLookupFusion` | [masked_embedding_lookup](fusion/masked_embedding_lookup.md) |
 | 19 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
-| 20 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
+| 20 | `IsReplaceInvalidIdFusionGraph` | `CreateReplaceInvalidIdFusion` | [replace_invalid_id](fusion/replace_invalid_id.md) |
+| 21 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |

@@ -107,6 +107,10 @@ std::vector<std::vector<Ort::ConstNode>> FindConcatReshapeFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
     const std::unordered_set<size_t>& accepted_node_ids);
+std::vector<std::vector<Ort::ConstNode>> FindReplaceInvalidIdFusions(
+    const std::vector<Ort::ConstNode>& all_nodes,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& accepted_node_ids);
 std::vector<std::vector<Ort::ConstNode>>
 FindMhtaScaledDotProductAttentionFusions(
     const std::vector<Ort::ConstNode>& all_nodes,

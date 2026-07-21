@@ -1,6 +1,8 @@
 #include "math/topk_impl.h"
 #include "shared_inc/musa_kernel_common.mu.h"
 
+#include <type_traits>
+
 namespace {
 constexpr int kTopKSortBlockSize = 1024;
 
@@ -279,6 +281,59 @@ __global__ void TopKStableIndicesKernel(const T* input, const T* values,
   }
 }
 
+// twin_graph_2 has three float TopK nodes with [1, 4000] inputs and k=128.
+// Keep the exact ONNX lower-index tie-breaker, but stage each row in shared
+// memory so the stable-index pass does not reread the input from global memory
+// once for every selected value. All other shapes use the generic fallback.
+constexpr int kTwinTopKDim = 4000;
+constexpr int kTwinTopKK = 128;
+
+__global__ void TopKStableIndicesTwinFloatKernel(const float* input,
+                                                 const float* values,
+                                                 int64_t* indices,
+                                                 MusaTopKParams params) {
+  __shared__ float shared_input[kTwinTopKDim];
+  __shared__ float shared_values[kTwinTopKK];
+
+  for (int64_t row = static_cast<int64_t>(blockIdx.x); row < params.rows;
+       row += gridDim.x) {
+    for (int index = static_cast<int>(threadIdx.x); index < kTwinTopKDim;
+         index += blockDim.x) {
+      shared_input[index] = input[row * kTwinTopKDim + index];
+    }
+    for (int index = static_cast<int>(threadIdx.x); index < kTwinTopKK;
+         index += blockDim.x) {
+      shared_values[index] = values[row * kTwinTopKK + index];
+    }
+    __syncthreads();
+
+    for (int k_index = static_cast<int>(threadIdx.x); k_index < kTwinTopKK;
+         k_index += blockDim.x) {
+      const float value = shared_values[k_index];
+      int64_t occurrence = 0;
+      for (int previous = 0; previous < k_index; ++previous) {
+        if (TopKValueEqual(shared_values[previous], value)) {
+          ++occurrence;
+        }
+      }
+
+      const int64_t output_index = row * kTwinTopKK + k_index;
+      for (int candidate_index = 0; candidate_index < kTwinTopKDim;
+           ++candidate_index) {
+        if (!TopKValueEqual(shared_input[candidate_index], value)) {
+          continue;
+        }
+        if (occurrence == 0) {
+          indices[output_index] = candidate_index;
+          break;
+        }
+        --occurrence;
+      }
+    }
+    __syncthreads();
+  }
+}
+
 template <typename T>
 musaError_t LaunchTopKTyped(const void* input, void* values, int64_t* indices,
                             MusaTopKParams params, musaStream_t stream) {
@@ -310,6 +365,17 @@ musaError_t LaunchTopKStableIndicesTyped(const void* input, const void* values,
                                          musaStream_t stream) {
   if (params.output_elements == 0) {
     return musaSuccess;
+  }
+  if constexpr (std::is_same<T, float>::value) {
+    if (params.dim == kTwinTopKDim && params.k == kTwinTopKK &&
+        params.inner == 1) {
+      const int blocks = static_cast<int>(
+          params.rows > kMaxBlocks ? kMaxBlocks : params.rows);
+      TopKStableIndicesTwinFloatKernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+          reinterpret_cast<const float*>(input),
+          reinterpret_cast<const float*>(values), indices, params);
+      return musaGetLastError();
+    }
   }
   const int64_t total = params.rows * params.k;
   const int blocks = static_cast<int>(

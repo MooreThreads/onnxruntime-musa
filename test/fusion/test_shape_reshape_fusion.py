@@ -66,6 +66,18 @@ def _assert_shape_reshape_fused(events):
     assert "MemcpyFromHost" not in all_ops
 
 
+def _assert_single_reshape_not_fused(events):
+    ops_by_provider = _ops_by_provider(events)
+    musa_ops = ops_by_provider.get("MUSAExecutionProvider", set())
+    all_ops = set().union(*ops_by_provider.values())
+    fused_ops = {op for op in musa_ops if str(op).startswith("MUSAExecutionProvider_")}
+
+    assert not fused_ops
+    assert "Reshape" in musa_ops
+    assert "MemcpyToHost" not in all_ops
+    assert "MemcpyFromHost" not in all_ops
+
+
 def _build_shape_metadata_reshape_model() -> bytes:
     gather_index = numpy_helper.from_array(
         np.array([0, 1], dtype=np.int64), name="gather_index"
@@ -178,7 +190,7 @@ def test_shape_reshape_fusion_multiple_reshape_consumers(tmp_path):
     _assert_shape_reshape_fused(events)
 
 
-def test_shape_reshape_fusion_after_pre_gather(tmp_path):
+def test_single_reshape_after_pre_gather_is_not_fused(tmp_path):
     model = _build_shape_pre_gather_metadata_reshape_model()
     feeds = {
         "X": np.zeros((2, 3, 4), dtype=np.float32),
@@ -194,10 +206,10 @@ def test_shape_reshape_fusion_after_pre_gather(tmp_path):
 
     for actual_output, expected_output in zip(actual, expected):
         np.testing.assert_array_equal(actual_output, expected_output)
-    _assert_shape_reshape_fused(events)
+    _assert_single_reshape_not_fused(events)
 
 
-def test_shape_reshape_fusion_resolves_zero_and_inferred_dim(tmp_path):
+def test_single_reshape_with_zero_and_inferred_dim_is_not_fused(tmp_path):
     model = _build_shape_reshape_with_zero_and_infer_dim_model()
     feeds = {
         "X": np.zeros((2, 3, 4), dtype=np.float32),
@@ -213,4 +225,4 @@ def test_shape_reshape_fusion_resolves_zero_and_inferred_dim(tmp_path):
 
     for actual_output, expected_output in zip(actual, expected):
         np.testing.assert_array_equal(actual_output, expected_output)
-    _assert_shape_reshape_fused(events)
+    _assert_single_reshape_not_fused(events)

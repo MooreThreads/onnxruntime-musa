@@ -13,9 +13,13 @@ from onnx import helper, numpy_helper
 from op_test_utils import TensorProto, musa_devices, run_model_and_compare
 
 
-def _build_model(branch_count, with_relu, bias_mask=None, output_widths=None):
+def _build_model(
+    branch_count, with_relu, bias_mask=None, output_widths=None, x_shape=None
+):
     rng = np.random.default_rng(1700 + branch_count + int(with_relu))
-    x = rng.standard_normal((3, 4, 8)).astype(np.float32)
+    if x_shape is None:
+        x_shape = (3, 4, 8)
+    x = rng.standard_normal(x_shape).astype(np.float32)
     if bias_mask is None:
         bias_mask = [True] * branch_count
     if output_widths is None:
@@ -86,7 +90,9 @@ def test_parallel_linear_fusion(with_relu):
     model, feeds = _build_model(branch_count=4, with_relu=with_relu)
     run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
     node_names = _profile_node_names(model, feeds)
-    fused = [name for name in node_names if name.startswith("MUSAExecutionProvider_")]
+    fused = [
+        name for name in node_names if name.startswith("MUSAExecutionProvider_")
+    ]
     assert len(fused) == 1
     assert not any(
         name.startswith(("MatMul_", "Add_", "Relu_")) for name in node_names
@@ -118,6 +124,16 @@ def test_parallel_linear_fusion_mixed_bias():
     assert not any(
         name.startswith(("MatMul_", "Add_", "Relu_")) for name in node_names
     )
+
+
+def test_parallel_linear_fusion_empty_input():
+    model, feeds = _build_model(
+        branch_count=4, with_relu=True, x_shape=(0, 4, 8)
+    )
+    run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
+    node_names = _profile_node_names(model, feeds)
+    fused = [name for name in node_names if name.startswith("MUSAExecutionProvider_")]
+    assert len(fused) == 1
 
 
 def test_parallel_linear_fusion_matches_nine_of_ten_branches():

@@ -135,7 +135,6 @@ bool CanFuseShapeReshapeFromGather(
   group_node_ids.insert(cast_node.GetId());
   group_node_ids.insert(gather_node.GetId());
 
-  size_t reshape_count = 0;
   for (const auto& gather_consumer : gather_consumers) {
     Ort::ConstNode concat_node = gather_consumer.node;
     if (!IsOnnxOp(concat_node, "Concat") ||
@@ -209,15 +208,10 @@ bool CanFuseShapeReshapeFromGather(
         return false;
       }
       group_node_ids.insert(reshape_node.GetId());
-      ++reshape_count;
     }
   }
 
-  // A single Reshape is cheaper on the normal kernel path: its output aliases
-  // the data input, while a compiled fused node has no output-alias contract
-  // and must copy the entire tensor. Fusion is only worthwhile when multiple
-  // Reshapes share the shape-metadata computation.
-  return reshape_count > 1;
+  return true;
 }
 
 std::vector<std::vector<Ort::ConstNode>> FindShapeReshapeFusions(

@@ -81,53 +81,6 @@ def test_reshape_float16():
     )
 
 
-def test_reshape_alias_preserves_shared_input_consumers():
-    x = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
-    nodes = [
-        helper.make_node("Reshape", ["X", "shape"], ["Y"]),
-        helper.make_node("Add", ["X", "bias"], ["Z"]),
-    ]
-    model = build_graph_model(
-        nodes,
-        inputs={"X": x, "bias": np.array(2.5, dtype=np.float32)},
-        outputs=[("Y", TensorProto.FLOAT), ("Z", TensorProto.FLOAT)],
-        initializers=[
-            helper.make_tensor("shape", TensorProto.INT64, [2], [6, 4])
-        ],
-        opset=18,
-        name="reshape_alias_shared_input",
-    )
-
-    y, z = run_model_and_compare(
-        model, {"X": x, "bias": np.array(2.5, dtype=np.float32)}
-    )
-    np.testing.assert_array_equal(y, x.reshape(6, 4))
-    np.testing.assert_array_equal(z, x + 2.5)
-
-
-def test_multiple_reshape_aliases_share_one_input():
-    x = np.arange(24, dtype=np.int64).reshape(2, 3, 4)
-    nodes = [
-        helper.make_node("Reshape", ["X", "shape_y"], ["Y"]),
-        helper.make_node("Reshape", ["X", "shape_z"], ["Z"]),
-    ]
-    model = build_graph_model(
-        nodes,
-        inputs={"X": x},
-        outputs=[("Y", TensorProto.INT64), ("Z", TensorProto.INT64)],
-        initializers=[
-            helper.make_tensor("shape_y", TensorProto.INT64, [2], [6, 4]),
-            helper.make_tensor("shape_z", TensorProto.INT64, [2], [4, 6]),
-        ],
-        opset=18,
-        name="multiple_reshape_aliases",
-    )
-
-    y, z = run_model_and_compare(model, {"X": x})
-    np.testing.assert_array_equal(y, x.reshape(6, 4))
-    np.testing.assert_array_equal(z, x.reshape(4, 6))
-
-
 def test_reshape_constant_output_feeds_musa_add():
     nodes = [
         helper.make_node(

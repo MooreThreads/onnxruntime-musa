@@ -182,6 +182,102 @@ def test_topk_int64_large_dim_fallback_opset13():
     )
 
 
+def test_topk_int64_preserves_values_above_double_integer_precision_opset13():
+    """Regression: integer ordering must never round through double."""
+    x = np.array([[2**53, 2**53 + 1, 2**53 + 2, 0]], dtype=np.int64)
+    k = np.array([2], dtype=np.int64)
+    values, indices = run_and_compare(
+        "TopK",
+        inputs={"X": x, "K": k},
+        outputs=[("Values", TensorProto.INT64), ("Indices", TensorProto.INT64)],
+        attrs={"axis": -1, "largest": 1, "sorted": 1},
+        opset=13,
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_array_equal(values, [[2**53 + 2, 2**53 + 1]])
+    np.testing.assert_array_equal(indices, [[2, 1]])
+
+
+def test_topk_float32_distinguishes_adjacent_values_opset13():
+    """Regression: distinct float32 values must not be treated as ties."""
+    next_value = np.nextafter(np.float32(10.0), np.float32(np.inf))
+    x = np.array([[10.0, next_value, 9.0]], dtype=np.float32)
+    k = np.array([1], dtype=np.int64)
+    values, indices = run_and_compare(
+        "TopK",
+        inputs={"X": x, "K": k},
+        outputs=[("Values", TensorProto.FLOAT), ("Indices", TensorProto.INT64)],
+        attrs={"axis": -1, "largest": 1, "sorted": 1},
+        opset=13,
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_array_equal(values, [[next_value]])
+    np.testing.assert_array_equal(indices, [[1]])
+
+
+def test_topk_k1_non_last_axis_uses_lower_index_tie_break_opset13():
+    x = np.array(
+        [[[4.0, 7.0], [1.0, 7.0], [1.0, 8.0], [3.0, 9.0]]],
+        dtype=np.float32,
+    )
+    k = np.array([1], dtype=np.int64)
+    values, indices = run_and_compare(
+        "TopK",
+        inputs={"X": x, "K": k},
+        outputs=[("Values", TensorProto.FLOAT), ("Indices", TensorProto.INT64)],
+        attrs={"axis": 1, "largest": 0, "sorted": 1},
+        opset=13,
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_array_equal(values, [[[1.0, 7.0]]])
+    np.testing.assert_array_equal(indices, [[[1, 0]]])
+
+
+def test_topk_double_large_dim_segmented_radix_fallback_opset13():
+    rng = np.random.default_rng(20260721)
+    x = rng.uniform(-4.0, 4.0, size=(2, 1300)).astype(np.float64)
+    x[:, 31] = 20.0
+    x[:, 877] = 20.0
+    k = np.array([11], dtype=np.int64)
+    run_and_compare(
+        "TopK",
+        inputs={"X": x, "K": k},
+        outputs=[("Values", TensorProto.DOUBLE), ("Indices", TensorProto.INT64)],
+        attrs={"axis": -1, "largest": 1, "sorted": 1},
+        opset=13,
+        rtol=0,
+        atol=0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("np_dtype", "tensor_type", "largest"),
+    [
+        (np.float32, TensorProto.FLOAT, 0),
+        (np.float16, TensorProto.FLOAT16, 1),
+        (np.int32, TensorProto.INT32, 1),
+    ],
+)
+def test_topk_large_k_segmented_radix_fallback_opset13(
+    np_dtype, tensor_type, largest
+):
+    rng = np.random.default_rng(20260721)
+    x = rng.permutation(np.arange(1300)).astype(np_dtype)[None, :]
+    k = np.array([1100], dtype=np.int64)
+    run_and_compare(
+        "TopK",
+        inputs={"X": x, "K": k},
+        outputs=[("Values", tensor_type), ("Indices", TensorProto.INT64)],
+        attrs={"axis": -1, "largest": largest, "sorted": 1},
+        opset=13,
+        rtol=0,
+        atol=0,
+    )
+
+
 def test_topk_k_zero_empty_output_opset13():
     x = np.array([[3.0, 1.0, 2.0], [6.0, 5.0, 4.0]], dtype=np.float32)
     k = np.array([0], dtype=np.int64)
@@ -197,9 +293,10 @@ def test_topk_k_zero_empty_output_opset13():
     assert values.shape == (2, 0)
     assert indices.shape == (2, 0)
 
+
 @pytest.mark.parametrize("largest", [0, 1])
-def test_topk_twin_fast_path_all_equal_lower_indices_opset13(largest):
-    """The twin shape must preserve the schema lower-index tie-break."""
+def test_topk_large_dim_all_equal_lower_indices_opset13(largest):
+    """The generic muDNN postprocess must restore the lower-index tie-break."""
     x = np.full((1, 4000), 3.25, dtype=np.float32)
     k = np.array([128], dtype=np.int64)
     values, indices = run_and_compare(
@@ -217,8 +314,8 @@ def test_topk_twin_fast_path_all_equal_lower_indices_opset13(largest):
 
 
 @pytest.mark.parametrize("largest", [0, 1])
-def test_topk_twin_fast_path_repeated_signed_values_opset13(largest):
-    """Exercise many positive/negative ties on the exact twin fast-path guard."""
+def test_topk_large_dim_repeated_signed_values_opset13(largest):
+    """Exercise threshold and non-threshold ties on the generic fast path."""
     pattern = np.array([-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 3.0])
     x = np.tile(pattern, 500).astype(np.float32)[None, :]
     k = np.array([128], dtype=np.int64)
@@ -296,10 +393,10 @@ def test_topk_sorted0_valid_set_and_value_index_pairs_opset13(largest):
     ],
     ids=["dim", "k", "inner", "dtype"],
 )
-def test_topk_twin_fast_path_guard_fallback_opset13(
+def test_topk_algorithm_boundary_matrix_opset13(
     np_dtype, shape, axis, k_value, tensor_type
 ):
-    """Every near-miss of the strict twin guard must use the generic fallback."""
+    """Cover nearby dimensions, inner strides, and a non-muDNN dtype."""
     rng = np.random.default_rng(20260720)
     x = rng.integers(-16, 17, size=shape).astype(np_dtype)
     k = np.array([k_value], dtype=np.int64)

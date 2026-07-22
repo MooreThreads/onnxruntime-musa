@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **15**
+- GetCapability priority: **8**
 - Finder: `FindParallelMatMulConcatFusions`
 - Finder implementation: `musa/ep/src/fusion/parallel_matmul_concat_fusion_matcher.cc`
 - Compile detector: `IsParallelMatMulConcatFusionGraph`

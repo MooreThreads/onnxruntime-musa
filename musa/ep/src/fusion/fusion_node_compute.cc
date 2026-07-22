@@ -27,6 +27,7 @@
 #include "fusion/mhta_scaled_dot_product_attention_fusion.h"
 #include "fusion/modulo_gather_fusion.h"
 #include "fusion/parallel_einsum_activation_fusion.h"
+#include "fusion/parallel_linear_fusion.h"
 #include "fusion/parallel_matmul_concat_fusion.h"
 #include "fusion/replace_invalid_id_fusion.h"
 #include "fusion/rms_norm_fusion.h"
@@ -214,6 +215,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateShapeReshapeFusion(graph, fused_node);
       } else if (IsSplitReduceFusionGraph(graph)) {
         fusion_compute = CreateSplitReduceFusion(graph, fused_node);
+      } else if (IsParallelLinearFusionGraph(graph)) {
+        fusion_compute = CreateParallelLinearFusion(graph, fused_node);
       } else if (IsLinearFusionGraph(graph)) {
         fusion_compute = CreateLinearFusion(graph, fused_node);
       } else if (IsConcatSplitFusionGraph(graph)) {

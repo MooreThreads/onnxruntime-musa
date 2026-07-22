@@ -133,6 +133,20 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindTileConcatFusions", false,
                  std::move(tile_concat_fusions), accepted_node_ids);
 
+  // The MatMul -> Unsqueeze -> Concat pattern is more specific than a bare
+  // parallel MatMul and must claim its nodes first.
+  auto parallel_matmul_concat_fusions = FindParallelMatMulConcatFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindParallelMatMulConcatFusions", false,
+                 std::move(parallel_matmul_concat_fusions), accepted_node_ids);
+
+  // This larger, more specific pattern must run before the generic per-branch
+  // linear matchers below; otherwise those matchers consume its nodes first.
+  auto parallel_linear_fusions = FindParallelLinearFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindParallelLinearFusions", false,
+                 std::move(parallel_linear_fusions), accepted_node_ids);
+
   auto gemm_activation_fusions = FindGemmActivationFusions(
       all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindGemmActivationFusions", false,
@@ -167,11 +181,6 @@ std::vector<FusionMatch> FindFusionMatches(
       FindModuloGatherFusions(all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindModuloGatherFusions", false,
                  std::move(modulo_gather_fusions), accepted_node_ids);
-
-  auto parallel_matmul_concat_fusions = FindParallelMatMulConcatFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindParallelMatMulConcatFusions", false,
-                 std::move(parallel_matmul_concat_fusions), accepted_node_ids);
 
   auto parallel_einsum_activation_fusions = FindParallelEinsumActivationFusions(
       all_nodes, graph_output_names, accepted_node_ids);

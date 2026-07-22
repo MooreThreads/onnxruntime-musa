@@ -30,6 +30,7 @@
 #include "fusion/parallel_matmul_concat_fusion.h"
 #include "fusion/replace_invalid_id_fusion.h"
 #include "fusion/rms_norm_fusion.h"
+#include "fusion/segment_max_broadcast_fusion.h"
 #include "fusion/shape_reshape_fusion.h"
 #include "fusion/slice_concat_fusion.h"
 #include "fusion/sparse_id_to_mask_fusion.h"
@@ -246,6 +247,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateConcatReshapeFusion(graph, fused_node);
       } else if (IsReplaceInvalidIdFusionGraph(graph)) {
         fusion_compute = CreateReplaceInvalidIdFusion(graph, fused_node);
+      } else if (IsSegmentMaxBroadcastFusionGraph(graph)) {
+        fusion_compute = CreateSegmentMaxBroadcastFusion(graph, fused_node);
       } else {
         fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
       }

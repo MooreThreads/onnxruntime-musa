@@ -49,8 +49,8 @@ bool EnvFlagEnabled(const char* name, bool default_value) {
   }
 
   std::string_view text{value};
-  return !(text == "0" || text == "false" || text == "FALSE" ||
-           text == "off" || text == "OFF");
+  return !(text == "0" || text == "false" || text == "FALSE" || text == "off" ||
+           text == "OFF");
 }
 
 size_t EnvSizeOrDefault(const char* name, size_t default_value) {
@@ -76,9 +76,8 @@ OrtStatus* CopyPageableHostToDevice(MusaDataTransfer& impl,
       EnvSizeOrDefault("ORT_MUSA_PAGEABLE_H2D_BOUNCE_THRESHOLD_BYTES",
                        kDefaultBounceThresholdBytes);
   if (bytes < bounce_threshold) {
-    return MusaStatus(impl.ort_api_,
-                      musaMemcpy(dst_data, src_data, bytes,
-                                 musaMemcpyHostToDevice));
+    return MusaStatus(impl.ort_api_, musaMemcpy(dst_data, src_data, bytes,
+                                                musaMemcpyHostToDevice));
   }
 
   if (!allow_pageable_bounce || stream == nullptr ||
@@ -126,8 +125,8 @@ OrtStatus* CopyImpl(MusaDataTransfer& impl, const OrtMemoryDevice* src_device,
     }
 
     if (!IsHostAccessible(impl.ep_api_, src_device, impl.vendor_id_)) {
-      return CopyPageableHostToDevice(impl, src_data, dst_data, bytes,
-                                      stream, allow_pageable_bounce);
+      return CopyPageableHostToDevice(impl, src_data, dst_data, bytes, stream,
+                                      allow_pageable_bounce);
     }
 
     return CopyMemcpy(impl.ort_api_, src_data, dst_data, bytes,
@@ -135,12 +134,19 @@ OrtStatus* CopyImpl(MusaDataTransfer& impl, const OrtMemoryDevice* src_device,
   }
 
   if (src_is_gpu_default) {
-    RETURN_IF_ERROR(MusaStatus(impl.ort_api_, musaDeviceSynchronize()));
+    // ORT normally supplies the producer stream for device-to-host metadata
+    // copies. Synchronizing that stream preserves request-local ordering
+    // without stalling unrelated workers. Some CPU fallback edges do not
+    // carry a stream, though; a synchronous D2H copy alone does not order work
+    // submitted to non-blocking MUSA streams, so retain the device-wide
+    // correctness barrier only for that fallback case.
+    if (stream == nullptr) {
+      RETURN_IF_ERROR(MusaStatus(impl.ort_api_, musaDeviceSynchronize()));
+    }
     RETURN_IF_ERROR(CopyMemcpy(impl.ort_api_, src_data, dst_data, bytes,
                                musaMemcpyDeviceToHost, stream));
     if (stream != nullptr) {
-      RETURN_IF_ERROR(
-          MusaStatus(impl.ort_api_, musaStreamSynchronize(stream)));
+      RETURN_IF_ERROR(MusaStatus(impl.ort_api_, musaStreamSynchronize(stream)));
     }
     return nullptr;
   }
@@ -162,12 +168,14 @@ bool ORT_API_CALL MusaDataTransfer::CanCopyImpl(
     const OrtMemoryDevice* dst_memory_device) noexcept {
   const auto& impl = *static_cast<const MusaDataTransfer*>(this_ptr);
   const bool src_is_our_device =
-      impl.ep_api_.MemoryDevice_AreEqual(src_memory_device, impl.device_mem_info) ||
+      impl.ep_api_.MemoryDevice_AreEqual(src_memory_device,
+                                         impl.device_mem_info) ||
       (impl.host_accessible_mem_info != nullptr &&
        impl.ep_api_.MemoryDevice_AreEqual(src_memory_device,
                                           impl.host_accessible_mem_info));
   const bool dst_is_our_device =
-      impl.ep_api_.MemoryDevice_AreEqual(dst_memory_device, impl.device_mem_info) ||
+      impl.ep_api_.MemoryDevice_AreEqual(dst_memory_device,
+                                         impl.device_mem_info) ||
       (impl.host_accessible_mem_info != nullptr &&
        impl.ep_api_.MemoryDevice_AreEqual(dst_memory_device,
                                           impl.host_accessible_mem_info));
@@ -186,8 +194,8 @@ OrtStatus* ORT_API_CALL MusaDataTransfer::CopyTensorsImpl(
       std::span<const OrtValue* const>(src_tensors_ptr, num_tensors);
   auto dst_tensors = std::span<OrtValue*>(dst_tensors_ptr, num_tensors);
   const bool allow_pageable_bounce =
-      num_tensors >= EnvSizeOrDefault(
-                         "ORT_MUSA_PAGEABLE_H2D_BOUNCE_MIN_TENSORS", 1024);
+      num_tensors >=
+      EnvSizeOrDefault("ORT_MUSA_PAGEABLE_H2D_BOUNCE_MIN_TENSORS", 1024);
 
   for (size_t i = 0; i < num_tensors; ++i) {
     const OrtMemoryDevice* src_device =

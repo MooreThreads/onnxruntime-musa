@@ -209,11 +209,6 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindReplaceInvalidIdFusions", true,
                  std::move(replace_invalid_id_fusions), accepted_node_ids);
 
-  auto segment_max_broadcast_fusions = FindSegmentMaxBroadcastFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindSegmentMaxBroadcastFusions", true,
-                 std::move(segment_max_broadcast_fusions), accepted_node_ids);
-
   const bool no_overlap = FusionMatchesHaveNoOverlap(matches);
   assert(no_overlap);
   (void)no_overlap;

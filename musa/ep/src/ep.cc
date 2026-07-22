@@ -3,7 +3,6 @@
 
 #include "ep.h"
 
-#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -40,12 +39,6 @@ bool EnvFlagEnabled(const char* name) {
 
 bool DisableAllFusions() {
   static const bool disabled = EnvFlagEnabled("ORT_MUSA_DISABLE_ALL_FUSIONS");
-  return disabled;
-}
-
-bool DisableShapeReshapeFusion() {
-  static const bool disabled =
-      EnvFlagEnabled("ORT_MUSA_DISABLE_SHAPE_RESHAPE_FUSION");
   return disabled;
 }
 
@@ -236,15 +229,6 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
     std::vector<FusionMatch> fusion_matches;
     if (!DisableAllFusions()) {
       fusion_matches = FindFusionMatches(all_nodes, graph_output_names);
-      if (DisableShapeReshapeFusion()) {
-        fusion_matches.erase(
-            std::remove_if(fusion_matches.begin(), fusion_matches.end(),
-                           [](const FusionMatch& match) {
-                             return std::string(match.finder) ==
-                                    "FindShapeReshapeFusions";
-                           }),
-            fusion_matches.end());
-      }
       RETURN_IF_ERROR(RegisterFusionMatches(ep->ep_api_, graph_support_info,
                                             fusion_matches));
     }

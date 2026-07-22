@@ -109,14 +109,26 @@ std::vector<int64_t> TensorShape(Ort::ConstValue value) {
 
 int64_t NumElementsChecked(const std::vector<int64_t>& shape) {
   int64_t total = 1;
+  bool empty = false;
   for (int64_t dim : shape) {
-    if (dim <= 0 || total > INT64_MAX / dim) {
+    if (dim < 0) {
       throw std::runtime_error(
-          "ParallelLinear requires positive non-overflowing runtime shapes");
+          "ParallelLinear requires non-negative runtime shapes");
+    }
+    // Empty ONNX tensors are valid inputs.  The fused matmul path must
+    // propagate their empty outputs without entering muDNN, which does not
+    // accept zero-element tensor descriptors on all supported versions.
+    if (dim == 0) {
+      empty = true;
+      continue;
+    }
+    if (total > INT64_MAX / dim) {
+      throw std::runtime_error(
+          "ParallelLinear runtime shape element count overflowed");
     }
     total *= dim;
   }
-  return total;
+  return empty ? 0 : total;
 }
 
 void ValidateFloat(Ort::ConstValue value, const char* name) {
@@ -281,6 +293,13 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
               ORT_NOT_IMPLEMENTED, "ParallelLinear requires MUSA outputs");
         }
         output_pointers.push_back(output.GetTensorMutableData<float>());
+      }
+
+      // MatMul with zero rows has empty outputs by ONNX semantics.  Keep the
+      // allocated output tensors and bypass muDNN/device kernels, which do
+      // not consistently accept zero-element descriptors.
+      if (rows == 0) {
+        return nullptr;
       }
 
       ParallelLinearScratch& scratch = ScratchForStream(this, stream);

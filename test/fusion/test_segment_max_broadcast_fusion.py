@@ -1,6 +1,6 @@
 # Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
 # Licensed under the MIT License.
-"""End-to-end tests for the SIM SegmentMaxBroadcast fusion."""
+"""End-to-end tests for the SegmentMaxBroadcast fusion."""
 
 import json
 import os
@@ -13,27 +13,50 @@ from onnx import helper, numpy_helper
 from op_test_utils import TensorProto, musa_devices, run_model_and_compare
 
 
+def _rename_graph_values(graph, prefix):
+    names = {
+        name for node in graph.node for name in (*node.input, *node.output) if name
+    }
+    names.update(value.name for value in graph.input)
+    names.update(value.name for value in graph.output)
+    names.update(value.name for value in graph.value_info)
+    names.update(initializer.name for initializer in graph.initializer)
+    mapping = {
+        name: f"{prefix}value_{index}" for index, name in enumerate(sorted(names))
+    }
+
+    for value in (*graph.input, *graph.output, *graph.value_info):
+        value.name = mapping[value.name]
+    for initializer in graph.initializer:
+        initializer.name = mapping[initializer.name]
+    for node in graph.node:
+        for index, name in enumerate(node.input):
+            if name:
+                node.input[index] = mapping[name]
+        for index, name in enumerate(node.output):
+            if name:
+                node.output[index] = mapping[name]
+    return mapping
+
+
 def _build_segment_max_broadcast_model(
-    *, detached_final_indices=False, downstream_consumer=False
-) -> bytes:
-    axes_minus_one = numpy_helper.from_array(
-        np.array([-1], dtype=np.int64), name="const_fold_opt__11684"
+    *,
+    detached_final_indices=False,
+    downstream_consumer=False,
+    rename_values=False,
+    segment_id_type=TensorProto.INT64,
+):
+    axis_minus_one = numpy_helper.from_array(
+        np.array([-1], dtype=np.int64), name="axis_minus_one"
     )
-    axes_zero = numpy_helper.from_array(
-        np.array([0], dtype=np.int64), name="const_axes__11245"
-    )
-    axes_one = numpy_helper.from_array(
-        np.array([1], dtype=np.int64), name="axes_const__9894"
-    )
+    axis_zero = numpy_helper.from_array(np.array([0], dtype=np.int64), name="axis_zero")
+    axis_one = numpy_helper.from_array(np.array([1], dtype=np.int64), name="axis_one")
     range_start = numpy_helper.from_array(
-        np.array(0, dtype=np.int64),
-        name="VocabFileEmbeddingLookup/brow_300_time_list/GreaterEqual/y:0",
+        np.array(0, dtype=np.int64), name="range_start"
     )
-    range_delta = numpy_helper.from_array(
-        np.array(1, dtype=np.int64), name="add_9/y:0"
-    )
+    range_step = numpy_helper.from_array(np.array(1, dtype=np.int64), name="range_step")
     fill_value = numpy_helper.from_array(
-        np.array([-1], dtype=np.int64), name="value"
+        np.array([-1], dtype=np.int64), name="fill_value"
     )
     output_floor = numpy_helper.from_array(
         np.array(-1.0e30, dtype=np.float32), name="output_floor"
@@ -42,167 +65,171 @@ def _build_segment_max_broadcast_model(
     nodes = [
         helper.make_node(
             "Unique",
-            ["Reshape:0"],
-            ["y__10178", "idx_first__10179", "idx__10180", "counts__10181"],
+            ["segment_ids"],
+            [
+                "unique_values",
+                "unique_indices",
+                "unique_inverse",
+                "unique_counts",
+            ],
             sorted=0,
         ),
         helper.make_node(
             "Cast",
-            ["idx__10180"],
-            ["Unique__10183_cast:0"],
+            ["unique_inverse"],
+            ["inverse_indices_i32"],
             to=TensorProto.INT32,
         ),
         helper.make_node(
             "Cast",
-            ["Unique__10183_cast:0"],
-            ["Cast__11406:0"],
+            ["inverse_indices_i32"],
+            ["inverse_indices_i64"],
             to=TensorProto.INT64,
         ),
-        helper.make_node(
-            "Shape", ["Cast__11406:0"], ["Shape__11411:0"]
-        ),
+        helper.make_node("Shape", ["inverse_indices_i64"], ["inverse_indices_shape"]),
         helper.make_node(
             "TopK",
-            ["Cast__11406:0", "Shape__11411:0"],
-            ["UnsortedSegmentMax_TopK__11415:0", "UnsortedSegmentMax_TopK__11415:1"],
+            ["inverse_indices_i64", "inverse_indices_shape"],
+            ["sorted_segment_ids", "sorted_positions"],
             axis=0,
             largest=0,
             sorted=1,
         ),
         helper.make_node(
             "Unsqueeze",
-            ["UnsortedSegmentMax_TopK__11415:0", "const_fold_opt__11684"],
-            ["Unsqueeze__11434:0"],
+            ["sorted_segment_ids", "axis_minus_one"],
+            ["sorted_segment_ids_column"],
         ),
         helper.make_node(
             "Unique",
-            ["UnsortedSegmentMax_TopK__11415:0"],
-            ["UnsortedSegmentMax_Unique__11417:0", "", "UnsortedSegmentMax_Unique__11417:2", "UnsortedSegmentMax_Unique__11417:3"],
+            ["sorted_segment_ids"],
+            ["ordered_ids", "", "ordered_inverse", "ordered_counts"],
             axis=0,
             sorted=1,
         ),
         helper.make_node(
             "ReduceMax",
-            ["UnsortedSegmentMax_Unique__11417:3", "const_axes__11245"],
-            ["ReduceMax__11420:0"],
+            ["ordered_counts", "axis_zero"],
+            ["largest_group_size"],
             keepdims=1,
         ),
         helper.make_node(
             "Gather",
-            ["UnsortedSegmentMax_Unique__11417:3", "UnsortedSegmentMax_Unique__11417:2"],
-            ["Gather__11425:0"],
+            ["ordered_counts", "ordered_inverse"],
+            ["expanded_counts"],
         ),
         helper.make_node(
             "Squeeze",
-            ["Shape__11411:0", "const_axes__11245"],
-            ["Squeeze__11414:0"],
+            ["inverse_indices_shape", "axis_zero"],
+            ["element_count"],
         ),
         helper.make_node(
             "Range",
-            ["VocabFileEmbeddingLookup/brow_300_time_list/GreaterEqual/y:0", "Squeeze__11414:0", "add_9/y:0"],
-            ["Range__11424:0"],
+            ["range_start", "element_count", "range_step"],
+            ["linear_positions"],
         ),
         helper.make_node(
             "Mod",
-            ["Range__11424:0", "Gather__11425:0"],
-            ["Mod__11428:0"],
+            ["linear_positions", "expanded_counts"],
+            ["group_positions"],
         ),
         helper.make_node(
             "Unsqueeze",
-            ["Mod__11428:0", "const_fold_opt__11684"],
-            ["Unsqueeze__11437:0"],
+            ["group_positions", "axis_minus_one"],
+            ["group_positions_column"],
         ),
         helper.make_node(
             "Concat",
-            ["Unsqueeze__11434:0", "Unsqueeze__11437:0"],
-            ["Concat__11439:0"],
+            ["sorted_segment_ids_column", "group_positions_column"],
+            ["scatter_indices"],
             axis=1,
         ),
-        helper.make_node("Shape", ["y__10178"], ["Shape_1:0"]),
+        helper.make_node("Shape", ["unique_values"], ["unique_values_shape"]),
         helper.make_node(
             "Cast",
-            ["Shape_1:0"],
-            ["Shape_1__10185:0"],
+            ["unique_values_shape"],
+            ["unique_values_shape_i32"],
             to=TensorProto.INT32,
         ),
         helper.make_node(
             "Slice",
-            ["Shape_1__10185:0", "const_axes__11245", "axes_const__9894", "const_axes__11245"],
-            ["strided_slice_1:0"],
+            ["unique_values_shape_i32", "axis_zero", "axis_one", "axis_zero"],
+            ["unique_count_vector_i32"],
         ),
         helper.make_node(
             "Squeeze",
-            ["strided_slice_1:0", "const_axes__11245"],
-            ["strided_slice_1__10189:0"],
+            ["unique_count_vector_i32", "axis_zero"],
+            ["unique_count_i32"],
         ),
         helper.make_node(
             "Cast",
-            ["strided_slice_1__10189:0"],
-            ["Cast__11408:0"],
+            ["unique_count_i32"],
+            ["unique_count_i64"],
             to=TensorProto.INT64,
         ),
         helper.make_node(
             "Unsqueeze",
-            ["Cast__11408:0", "const_axes__11245"],
-            ["Unsqueeze__11410:0"],
+            ["unique_count_i64", "axis_zero"],
+            ["unique_count_vector_i64"],
         ),
         helper.make_node(
             "Concat",
-            ["Unsqueeze__11410:0", "ReduceMax__11420:0"],
-            ["Concat__11431:0"],
+            ["unique_count_vector_i64", "largest_group_size"],
+            ["scatter_shape"],
             axis=0,
         ),
         helper.make_node(
             "ConstantOfShape",
-            ["Concat__11431:0"],
-            ["ConstantOfShape__11432:0"],
+            ["scatter_shape"],
+            ["scatter_base"],
             value=fill_value,
         ),
         helper.make_node(
             "ScatterND",
-            ["ConstantOfShape__11432:0", "Concat__11439:0", "UnsortedSegmentMax_TopK__11415:1"],
-            ["ScatterND__11442:0"],
+            ["scatter_base", "scatter_indices", "sorted_positions"],
+            ["position_map"],
         ),
         helper.make_node(
             "Gather",
-            ["Concat__11456:0", "ScatterND__11442:0"],
-            ["Gather__11458:0"],
+            ["values_with_sentinel", "position_map"],
+            ["grouped_values"],
         ),
         helper.make_node(
             "ReduceMax",
-            ["Gather__11458:0", "axes_const__9894"],
-            ["UnsortedSegmentMax_ReduceMax__11463:0"],
+            ["grouped_values", "axis_one"],
+            ["per_group_max"],
             keepdims=0,
         ),
         helper.make_node(
             "Gather",
             [
-                "UnsortedSegmentMax_ReduceMax__11463:0",
-                "DetachedIndices" if detached_final_indices else "Unique__10183_cast:0",
+                "per_group_max",
+                "detached_indices" if detached_final_indices else "inverse_indices_i32",
             ],
-            ["GatherV2_11:0"],
+            ["segment_max_output"],
             axis=0,
         ),
     ]
-    graph_output_name = "GatherV2_11:0"
+    graph_output_name = "segment_max_output"
     if downstream_consumer:
         graph_output_name = "model_output"
         nodes.append(
             helper.make_node(
                 "Max",
-                ["GatherV2_11:0", "output_floor"],
+                ["segment_max_output", "output_floor"],
                 [graph_output_name],
             )
         )
     for index, node in enumerate(nodes):
-        node.name = str(index + 1)
+        node.name = f"node_{index}"
+
     graph_inputs = [
-        helper.make_tensor_value_info("Reshape:0", TensorProto.INT64, ["N"]),
-        helper.make_tensor_value_info("Concat__11456:0", TensorProto.FLOAT, ["M"]),
+        helper.make_tensor_value_info("segment_ids", segment_id_type, ["N"]),
+        helper.make_tensor_value_info("values_with_sentinel", TensorProto.FLOAT, ["M"]),
     ]
     if detached_final_indices:
         graph_inputs.append(
-            helper.make_tensor_value_info("DetachedIndices", TensorProto.INT64, ["N"])
+            helper.make_tensor_value_info("detached_indices", TensorProto.INT64, ["N"])
         )
     graph = helper.make_graph(
         nodes,
@@ -210,23 +237,34 @@ def _build_segment_max_broadcast_model(
         graph_inputs,
         [helper.make_tensor_value_info(graph_output_name, TensorProto.FLOAT, ["N"])],
         initializer=[
-            axes_minus_one,
-            axes_zero,
-            axes_one,
+            axis_minus_one,
+            axis_zero,
+            axis_one,
             range_start,
-            range_delta,
+            range_step,
             output_floor,
         ],
     )
+    feed_names = {
+        "segment_ids": "segment_ids",
+        "values": "values_with_sentinel",
+    }
+    if detached_final_indices:
+        feed_names["detached_indices"] = "detached_indices"
+    if rename_values:
+        mapping = _rename_graph_values(graph, "renamed_")
+        feed_names = {role: mapping[name] for role, name in feed_names.items()}
+
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
     model.ir_version = min(model.ir_version, 10)
-    return model.SerializeToString()
+    return model.SerializeToString(), feed_names
 
 
 def _expected(ids: np.ndarray, values: np.ndarray) -> np.ndarray:
     return np.array([values[ids == segment].max() for segment in ids], np.float32)
 
 
+@pytest.mark.parametrize("rename_values", [False, True])
 @pytest.mark.parametrize(
     "ids,values",
     [
@@ -241,14 +279,14 @@ def _expected(ids: np.ndarray, values: np.ndarray) -> np.ndarray:
         (np.array([9], dtype=np.int64), np.array([1.25], dtype=np.float32)),
     ],
 )
-def test_segment_max_broadcast_accuracy(ids, values):
-    model = _build_segment_max_broadcast_model()
+def test_segment_max_broadcast_accuracy(ids, values, rename_values):
+    model, names = _build_segment_max_broadcast_model(rename_values=rename_values)
     values_with_sentinel = np.concatenate(
         [values, np.array([np.finfo(np.float32).min], dtype=np.float32)]
     )
     (actual,) = run_model_and_compare(
         model,
-        {"Reshape:0": ids, "Concat__11456:0": values_with_sentinel},
+        {names["segment_ids"]: ids, names["values"]: values_with_sentinel},
         rtol=0,
         atol=0,
     )
@@ -274,21 +312,24 @@ def _profile_op_names(model, feeds, tmp_path, prefix, *, disable_cpu_fallback=Tr
     return {
         event.get("args", {}).get("op_name")
         for event in events
-        if event.get("cat") == "Node"
-        and event.get("name", "").endswith("_kernel_time")
+        if event.get("cat") == "Node" and event.get("name", "").endswith("_kernel_time")
     }
 
 
+@pytest.mark.parametrize("rename_values", [False, True])
 @pytest.mark.parametrize("downstream_consumer", [False, True])
-def test_segment_max_broadcast_fusion_assignment(tmp_path, downstream_consumer):
-    model = _build_segment_max_broadcast_model(
-        downstream_consumer=downstream_consumer
+def test_segment_max_broadcast_fusion_assignment(
+    tmp_path, downstream_consumer, rename_values
+):
+    model, names = _build_segment_max_broadcast_model(
+        downstream_consumer=downstream_consumer,
+        rename_values=rename_values,
     )
     ids = np.array([3, 1, 3, 2, 1], dtype=np.int64)
     values = np.array([0.5, 4.0, 2.0, -1.0, 3.0], dtype=np.float32)
     feeds = {
-        "Reshape:0": ids,
-        "Concat__11456:0": np.concatenate(
+        names["segment_ids"]: ids,
+        names["values"]: np.concatenate(
             [values, np.array([np.finfo(np.float32).min], dtype=np.float32)]
         ),
     }
@@ -296,28 +337,53 @@ def test_segment_max_broadcast_fusion_assignment(tmp_path, downstream_consumer):
         model,
         feeds,
         tmp_path,
-        f"segment_max_broadcast_{downstream_consumer}",
+        f"segment_max_broadcast_{downstream_consumer}_{rename_values}",
     )
     assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
     assert not ({"Unique", "TopK", "ScatterND"} & op_names)
 
 
-def test_segment_max_broadcast_rejects_broken_final_edge(tmp_path):
-    model = _build_segment_max_broadcast_model(detached_final_indices=True)
+@pytest.mark.parametrize("rename_values", [False, True])
+def test_segment_max_broadcast_rejects_broken_final_edge(tmp_path, rename_values):
+    model, names = _build_segment_max_broadcast_model(
+        detached_final_indices=True,
+        rename_values=rename_values,
+    )
     ids = np.array([0, 1, 0], dtype=np.int64)
     values = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     feeds = {
-        "Reshape:0": ids,
-        "Concat__11456:0": np.concatenate(
+        names["segment_ids"]: ids,
+        names["values"]: np.concatenate(
             [values, np.array([np.finfo(np.float32).min], dtype=np.float32)]
         ),
-        "DetachedIndices": np.array([0, 1, 0], dtype=np.int64),
+        names["detached_indices"]: np.array([0, 1, 0], dtype=np.int64),
     }
     op_names = _profile_op_names(
         model,
         feeds,
         tmp_path,
-        "segment_max_rejected",
+        f"segment_max_rejected_{rename_values}",
+        disable_cpu_fallback=False,
+    )
+    assert "Unique" in op_names
+    assert not any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
+
+
+def test_segment_max_broadcast_rejects_unsupported_id_type(tmp_path):
+    model, names = _build_segment_max_broadcast_model(segment_id_type=TensorProto.INT32)
+    ids = np.array([0, 1, 0], dtype=np.int32)
+    values = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    feeds = {
+        names["segment_ids"]: ids,
+        names["values"]: np.concatenate(
+            [values, np.array([np.finfo(np.float32).min], dtype=np.float32)]
+        ),
+    }
+    op_names = _profile_op_names(
+        model,
+        feeds,
+        tmp_path,
+        "segment_max_unsupported_id_type",
         disable_cpu_fallback=False,
     )
     assert "Unique" in op_names

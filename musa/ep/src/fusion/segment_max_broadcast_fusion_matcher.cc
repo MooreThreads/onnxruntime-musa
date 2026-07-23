@@ -29,6 +29,13 @@ bool IsCastTo(Ort::ConstNode node, ONNXTensorElementDataType element_type) {
                                        static_cast<int64_t>(element_type);
 }
 
+bool IsTensorOfType(Ort::ConstValueInfo value_info,
+                    ONNXTensorElementDataType element_type) {
+  return value_info != nullptr &&
+         value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
+             element_type;
+}
+
 bool IsInputFrom(Ort::ConstNode consumer, size_t input_index,
                  Ort::ConstNode producer, int64_t output_index) {
   std::vector<Ort::ConstValueInfo> inputs = consumer.GetInputs();
@@ -207,7 +214,13 @@ bool MatchSegmentMaxBroadcast(
       !GetInputProducer(index_cast32, 0, "Unique", 2, first_unique) ||
       !HasInputCount(first_unique, 1) ||
       GetIntAttribute(first_unique, "sorted").value_or(1) != 0 ||
-      !IsInputFrom(first_unique_shape, 0, first_unique, 0)) {
+      !IsInputFrom(first_unique_shape, 0, first_unique, 0) ||
+      !IsTensorOfType(first_unique.GetInputs()[0],
+                      ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) ||
+      !IsTensorOfType(value_gather.GetInputs()[0],
+                      ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) ||
+      !IsTensorOfType(final_gather.GetOutputs()[0],
+                      ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)) {
     return false;
   }
 

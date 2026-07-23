@@ -79,16 +79,19 @@ struct SegmentMaxBroadcastCompute : FusionNodeCompute {
 }  // namespace
 
 bool IsSegmentMaxBroadcastFusionGraph(Ort::ConstGraph graph) {
-  bool first_unique = false;
-  bool second_unique = false;
-  bool final_gather = false;
+  const std::unordered_map<std::string, size_t> expected_counts = {
+      {"Cast", 4},   {"Concat", 2},    {"ConstantOfShape", 1}, {"Gather", 3},
+      {"Mod", 1},    {"Range", 1},     {"ReduceMax", 2},       {"ScatterND", 1},
+      {"Shape", 2},  {"Slice", 1},     {"Squeeze", 2},         {"TopK", 1},
+      {"Unique", 2}, {"Unsqueeze", 3},
+  };
+  std::unordered_map<std::string, size_t> actual_counts;
+  size_t node_count = 0;
   for (Ort::ConstNode node : graph.GetNodes()) {
-    const std::string name = node.GetName();
-    first_unique = first_unique || name == "Unique";
-    second_unique = second_unique || name == "UnsortedSegmentMax_Unique__11417";
-    final_gather = final_gather || name == "GatherV2_11";
+    ++actual_counts[node.GetOperatorType()];
+    ++node_count;
   }
-  return first_unique && second_unique && final_gather;
+  return node_count == 26 && actual_counts == expected_counts;
 }
 
 std::unique_ptr<FusionNodeCompute> CreateSegmentMaxBroadcastFusion(

@@ -13,7 +13,9 @@ from onnx import helper, numpy_helper
 from op_test_utils import TensorProto, musa_devices, run_model_and_compare
 
 
-def _build_segment_max_broadcast_model(*, detached_final_indices=False) -> bytes:
+def _build_segment_max_broadcast_model(
+    *, detached_final_indices=False, downstream_consumer=False
+) -> bytes:
     axes_minus_one = numpy_helper.from_array(
         np.array([-1], dtype=np.int64), name="const_fold_opt__11684"
     )
@@ -33,37 +35,36 @@ def _build_segment_max_broadcast_model(*, detached_final_indices=False) -> bytes
     fill_value = numpy_helper.from_array(
         np.array([-1], dtype=np.int64), name="value"
     )
+    output_floor = numpy_helper.from_array(
+        np.array(-1.0e30, dtype=np.float32), name="output_floor"
+    )
 
     nodes = [
         helper.make_node(
             "Unique",
             ["Reshape:0"],
             ["y__10178", "idx_first__10179", "idx__10180", "counts__10181"],
-            name="Unique",
             sorted=0,
         ),
         helper.make_node(
             "Cast",
             ["idx__10180"],
             ["Unique__10183_cast:0"],
-            name="Unique__10183_cast",
             to=TensorProto.INT32,
         ),
         helper.make_node(
             "Cast",
             ["Unique__10183_cast:0"],
             ["Cast__11406:0"],
-            name="Cast__11406",
             to=TensorProto.INT64,
         ),
         helper.make_node(
-            "Shape", ["Cast__11406:0"], ["Shape__11411:0"], name="Shape__11411"
+            "Shape", ["Cast__11406:0"], ["Shape__11411:0"]
         ),
         helper.make_node(
             "TopK",
             ["Cast__11406:0", "Shape__11411:0"],
             ["UnsortedSegmentMax_TopK__11415:0", "UnsortedSegmentMax_TopK__11415:1"],
-            name="UnsortedSegmentMax_TopK__11415",
             axis=0,
             largest=0,
             sorted=1,
@@ -72,13 +73,11 @@ def _build_segment_max_broadcast_model(*, detached_final_indices=False) -> bytes
             "Unsqueeze",
             ["UnsortedSegmentMax_TopK__11415:0", "const_fold_opt__11684"],
             ["Unsqueeze__11434:0"],
-            name="Unsqueeze__11434",
         ),
         helper.make_node(
             "Unique",
             ["UnsortedSegmentMax_TopK__11415:0"],
             ["UnsortedSegmentMax_Unique__11417:0", "", "UnsortedSegmentMax_Unique__11417:2", "UnsortedSegmentMax_Unique__11417:3"],
-            name="UnsortedSegmentMax_Unique__11417",
             axis=0,
             sorted=1,
         ),
@@ -86,110 +85,93 @@ def _build_segment_max_broadcast_model(*, detached_final_indices=False) -> bytes
             "ReduceMax",
             ["UnsortedSegmentMax_Unique__11417:3", "const_axes__11245"],
             ["ReduceMax__11420:0"],
-            name="ReduceMax__11420",
             keepdims=1,
         ),
         helper.make_node(
             "Gather",
             ["UnsortedSegmentMax_Unique__11417:3", "UnsortedSegmentMax_Unique__11417:2"],
             ["Gather__11425:0"],
-            name="Gather__11425",
         ),
         helper.make_node(
             "Squeeze",
             ["Shape__11411:0", "const_axes__11245"],
             ["Squeeze__11414:0"],
-            name="Squeeze__11414",
         ),
         helper.make_node(
             "Range",
             ["VocabFileEmbeddingLookup/brow_300_time_list/GreaterEqual/y:0", "Squeeze__11414:0", "add_9/y:0"],
             ["Range__11424:0"],
-            name="Range__11424",
         ),
         helper.make_node(
             "Mod",
             ["Range__11424:0", "Gather__11425:0"],
             ["Mod__11428:0"],
-            name="Mod__11428",
         ),
         helper.make_node(
             "Unsqueeze",
             ["Mod__11428:0", "const_fold_opt__11684"],
             ["Unsqueeze__11437:0"],
-            name="Unsqueeze__11437",
         ),
         helper.make_node(
             "Concat",
             ["Unsqueeze__11434:0", "Unsqueeze__11437:0"],
             ["Concat__11439:0"],
-            name="Concat__11439",
             axis=1,
         ),
-        helper.make_node("Shape", ["y__10178"], ["Shape_1:0"], name="Shape_1"),
+        helper.make_node("Shape", ["y__10178"], ["Shape_1:0"]),
         helper.make_node(
             "Cast",
             ["Shape_1:0"],
             ["Shape_1__10185:0"],
-            name="Shape_1__10185",
             to=TensorProto.INT32,
         ),
         helper.make_node(
             "Slice",
             ["Shape_1__10185:0", "const_axes__11245", "axes_const__9894", "const_axes__11245"],
             ["strided_slice_1:0"],
-            name="strided_slice_1",
         ),
         helper.make_node(
             "Squeeze",
             ["strided_slice_1:0", "const_axes__11245"],
             ["strided_slice_1__10189:0"],
-            name="strided_slice_1__10189",
         ),
         helper.make_node(
             "Cast",
             ["strided_slice_1__10189:0"],
             ["Cast__11408:0"],
-            name="Cast__11408",
             to=TensorProto.INT64,
         ),
         helper.make_node(
             "Unsqueeze",
             ["Cast__11408:0", "const_axes__11245"],
             ["Unsqueeze__11410:0"],
-            name="Unsqueeze__11410",
         ),
         helper.make_node(
             "Concat",
             ["Unsqueeze__11410:0", "ReduceMax__11420:0"],
             ["Concat__11431:0"],
-            name="Concat__11431",
             axis=0,
         ),
         helper.make_node(
             "ConstantOfShape",
             ["Concat__11431:0"],
             ["ConstantOfShape__11432:0"],
-            name="ConstantOfShape__11432",
             value=fill_value,
         ),
         helper.make_node(
             "ScatterND",
             ["ConstantOfShape__11432:0", "Concat__11439:0", "UnsortedSegmentMax_TopK__11415:1"],
             ["ScatterND__11442:0"],
-            name="ScatterND__11442",
         ),
         helper.make_node(
             "Gather",
             ["Concat__11456:0", "ScatterND__11442:0"],
             ["Gather__11458:0"],
-            name="Gather__11458",
         ),
         helper.make_node(
             "ReduceMax",
             ["Gather__11458:0", "axes_const__9894"],
             ["UnsortedSegmentMax_ReduceMax__11463:0"],
-            name="UnsortedSegmentMax_ReduceMax__11463",
             keepdims=0,
         ),
         helper.make_node(
@@ -199,10 +181,21 @@ def _build_segment_max_broadcast_model(*, detached_final_indices=False) -> bytes
                 "DetachedIndices" if detached_final_indices else "Unique__10183_cast:0",
             ],
             ["GatherV2_11:0"],
-            name="GatherV2_11",
             axis=0,
         ),
     ]
+    graph_output_name = "GatherV2_11:0"
+    if downstream_consumer:
+        graph_output_name = "model_output"
+        nodes.append(
+            helper.make_node(
+                "Max",
+                ["GatherV2_11:0", "output_floor"],
+                [graph_output_name],
+            )
+        )
+    for index, node in enumerate(nodes):
+        node.name = str(index + 1)
     graph_inputs = [
         helper.make_tensor_value_info("Reshape:0", TensorProto.INT64, ["N"]),
         helper.make_tensor_value_info("Concat__11456:0", TensorProto.FLOAT, ["M"]),
@@ -215,8 +208,15 @@ def _build_segment_max_broadcast_model(*, detached_final_indices=False) -> bytes
         nodes,
         "segment_max_broadcast_fusion",
         graph_inputs,
-        [helper.make_tensor_value_info("GatherV2_11:0", TensorProto.FLOAT, ["N"])],
-        initializer=[axes_minus_one, axes_zero, axes_one, range_start, range_delta],
+        [helper.make_tensor_value_info(graph_output_name, TensorProto.FLOAT, ["N"])],
+        initializer=[
+            axes_minus_one,
+            axes_zero,
+            axes_one,
+            range_start,
+            range_delta,
+            output_floor,
+        ],
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
     model.ir_version = min(model.ir_version, 10)
@@ -279,8 +279,11 @@ def _profile_op_names(model, feeds, tmp_path, prefix, *, disable_cpu_fallback=Tr
     }
 
 
-def test_segment_max_broadcast_fusion_assignment(tmp_path):
-    model = _build_segment_max_broadcast_model()
+@pytest.mark.parametrize("downstream_consumer", [False, True])
+def test_segment_max_broadcast_fusion_assignment(tmp_path, downstream_consumer):
+    model = _build_segment_max_broadcast_model(
+        downstream_consumer=downstream_consumer
+    )
     ids = np.array([3, 1, 3, 2, 1], dtype=np.int64)
     values = np.array([0.5, 4.0, 2.0, -1.0, 3.0], dtype=np.float32)
     feeds = {
@@ -289,7 +292,12 @@ def test_segment_max_broadcast_fusion_assignment(tmp_path):
             [values, np.array([np.finfo(np.float32).min], dtype=np.float32)]
         ),
     }
-    op_names = _profile_op_names(model, feeds, tmp_path, "segment_max_broadcast")
+    op_names = _profile_op_names(
+        model,
+        feeds,
+        tmp_path,
+        f"segment_max_broadcast_{downstream_consumer}",
+    )
     assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
     assert not ({"Unique", "TopK", "ScatterND"} & op_names)
 

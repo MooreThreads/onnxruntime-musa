@@ -21,13 +21,104 @@ std::unordered_map<std::string, size_t> ValueIndices(
 }
 
 size_t MappedIndex(const std::unordered_map<std::string, size_t>& indices,
-                   const char* name) {
+                   const std::string& name, const char* role) {
   auto it = indices.find(name);
   if (it == indices.end()) {
-    throw std::runtime_error(std::string("SegmentMaxBroadcast missing value ") +
-                             name);
+    throw std::runtime_error(std::string("SegmentMaxBroadcast missing ") +
+                             role);
   }
   return it->second;
+}
+
+std::unordered_map<std::string, Ort::ConstNode> ProducersInGraph(
+    Ort::ConstGraph graph) {
+  std::unordered_map<std::string, Ort::ConstNode> producers;
+  for (Ort::ConstNode node : graph.GetNodes()) {
+    for (Ort::ConstValueInfo output : node.GetOutputs()) {
+      if (output != nullptr) {
+        producers.emplace(musa_ep::Name(output), node);
+      }
+    }
+  }
+  return producers;
+}
+
+Ort::ConstNode ProducerInGraph(
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    Ort::ConstValueInfo value_info, const char* op_type) {
+  auto it = producers.find(musa_ep::Name(value_info));
+  if (it == producers.end() || !musa_ep::IsOnnxOp(it->second, op_type)) {
+    return Ort::ConstNode{nullptr};
+  }
+  return it->second;
+}
+
+bool IsProducedBy(
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    Ort::ConstValueInfo value_info, Ort::ConstNode producer,
+    int64_t output_index) {
+  auto it = producers.find(musa_ep::Name(value_info));
+  if (it == producers.end() || it->second.GetId() != producer.GetId()) {
+    return false;
+  }
+  std::vector<Ort::ConstValueInfo> outputs = producer.GetOutputs();
+  return output_index >= 0 &&
+         static_cast<size_t>(output_index) < outputs.size() &&
+         musa_ep::Name(outputs[output_index]) == musa_ep::Name(value_info);
+}
+
+struct SegmentMaxBroadcastValues {
+  Ort::ConstValueInfo segment_ids{nullptr};
+  Ort::ConstValueInfo values{nullptr};
+  Ort::ConstValueInfo output{nullptr};
+};
+
+bool ResolveSegmentMaxBroadcastValues(Ort::ConstGraph graph,
+                                      SegmentMaxBroadcastValues& resolved) {
+  auto producers = ProducersInGraph(graph);
+  for (Ort::ConstNode final_gather : graph.GetNodes()) {
+    if (!musa_ep::IsOnnxOp(final_gather, "Gather")) {
+      continue;
+    }
+    std::vector<Ort::ConstValueInfo> final_inputs = final_gather.GetInputs();
+    std::vector<Ort::ConstValueInfo> final_outputs = final_gather.GetOutputs();
+    if (final_inputs.size() != 2 || final_outputs.size() != 1) {
+      continue;
+    }
+
+    Ort::ConstNode final_reduce =
+        ProducerInGraph(producers, final_inputs[0], "ReduceMax");
+    Ort::ConstNode index_cast =
+        ProducerInGraph(producers, final_inputs[1], "Cast");
+    if (!final_reduce || !index_cast) {
+      continue;
+    }
+    std::vector<Ort::ConstValueInfo> reduce_inputs = final_reduce.GetInputs();
+    std::vector<Ort::ConstValueInfo> cast_inputs = index_cast.GetInputs();
+    if (reduce_inputs.size() != 2 || cast_inputs.size() != 1) {
+      continue;
+    }
+
+    Ort::ConstNode value_gather =
+        ProducerInGraph(producers, reduce_inputs[0], "Gather");
+    Ort::ConstNode first_unique =
+        ProducerInGraph(producers, cast_inputs[0], "Unique");
+    if (!value_gather || !first_unique ||
+        !IsProducedBy(producers, cast_inputs[0], first_unique, 2)) {
+      continue;
+    }
+    std::vector<Ort::ConstValueInfo> value_gather_inputs =
+        value_gather.GetInputs();
+    std::vector<Ort::ConstValueInfo> unique_inputs = first_unique.GetInputs();
+    if (value_gather_inputs.size() != 2 || unique_inputs.size() != 1 ||
+        !ProducerInGraph(producers, value_gather_inputs[1], "ScatterND")) {
+      continue;
+    }
+
+    resolved = {unique_inputs[0], value_gather_inputs[0], final_outputs[0]};
+    return true;
+  }
+  return false;
 }
 
 struct SegmentMaxBroadcastCompute : FusionNodeCompute {
@@ -91,15 +182,22 @@ bool IsSegmentMaxBroadcastFusionGraph(Ort::ConstGraph graph) {
     ++actual_counts[node.GetOperatorType()];
     ++node_count;
   }
-  return node_count == 26 && actual_counts == expected_counts;
+  SegmentMaxBroadcastValues resolved;
+  return node_count == 26 && actual_counts == expected_counts &&
+         ResolveSegmentMaxBroadcastValues(graph, resolved);
 }
 
 std::unique_ptr<FusionNodeCompute> CreateSegmentMaxBroadcastFusion(
     Ort::ConstGraph graph, Ort::ConstNode fused_node) {
-  (void)graph;
+  SegmentMaxBroadcastValues resolved;
+  if (!ResolveSegmentMaxBroadcastValues(graph, resolved)) {
+    throw std::runtime_error("unable to resolve SegmentMaxBroadcast values");
+  }
   auto inputs = ValueIndices(fused_node.GetInputs());
   auto outputs = ValueIndices(fused_node.GetOutputs());
   return std::make_unique<SegmentMaxBroadcastCompute>(
-      MappedIndex(inputs, "Reshape:0"), MappedIndex(inputs, "Concat__11456:0"),
-      MappedIndex(outputs, "GatherV2_11:0"));
+      MappedIndex(inputs, musa_ep::Name(resolved.segment_ids),
+                  "segment-id input"),
+      MappedIndex(inputs, musa_ep::Name(resolved.values), "value input"),
+      MappedIndex(outputs, musa_ep::Name(resolved.output), "output"));
 }

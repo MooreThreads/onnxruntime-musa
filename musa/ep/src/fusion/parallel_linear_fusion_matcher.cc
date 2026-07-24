@@ -143,7 +143,8 @@ bool ParseBranch(Ort::ConstNode matmul,
 
   branch = {matmul, add, activation};
   group_key = std::string("Linear|") + Name(matmul_inputs[0]) + "|" +
-              std::to_string((*weight_shape)[0]) + "|" + activation_name;
+              std::to_string((*weight_shape)[0]) + "|" +
+              std::to_string((*weight_shape)[1]) + "|" + activation_name;
   return true;
 }
 

@@ -136,7 +136,7 @@ def test_parallel_linear_fusion_empty_input():
     assert len(fused) == 1
 
 
-def test_parallel_linear_fusion_matches_nine_of_ten_branches():
+def test_parallel_linear_fusion_matches_different_output_widths():
     model, feeds = _build_model(
         branch_count=10,
         with_relu=True,
@@ -147,7 +147,22 @@ def test_parallel_linear_fusion_matches_nine_of_ten_branches():
     node_names = _profile_node_names(model, feeds)
     fused = [name for name in node_names if name.startswith("MUSAExecutionProvider_")]
     assert len(fused) == 1
-    remaining_matmuls = [
-        name for name in node_names if name.startswith("MatMul_")
-    ]
-    assert len(remaining_matmuls) == 1
+    assert not any(
+        name.startswith(("MatMul_", "Add_", "Relu_")) for name in node_names
+    )
+
+
+def test_parallel_linear_fusion_different_output_widths():
+    model, feeds = _build_model(
+        branch_count=4,
+        with_relu=True,
+        bias_mask=[True, False, True, False],
+        output_widths=[3, 5, 7, 2],
+    )
+    run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
+    node_names = _profile_node_names(model, feeds)
+    fused = [name for name in node_names if name.startswith("MUSAExecutionProvider_")]
+    assert len(fused) == 1
+    assert not any(
+        name.startswith(("MatMul_", "Add_", "Relu_")) for name in node_names
+    )

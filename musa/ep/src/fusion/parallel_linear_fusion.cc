@@ -35,7 +35,7 @@ class DeviceBuffer {
  public:
   ~DeviceBuffer() {
     if (ptr_ != nullptr) {
-      (void)musaFree(ptr_);
+      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
     }
   }
 
@@ -75,9 +75,9 @@ class DeviceBuffer {
 
 struct ParallelLinearScratch {
   DeviceBuffer merged_weights;
-  DeviceBuffer merged_output;
-  DeviceBuffer pointer_arrays;
   size_t merged_weight_bytes = 0;
+  std::vector<const void*> weight_data_signature;
+  std::vector<std::vector<int64_t>> weight_shape_signature;
   bool merged_weights_valid = false;
 };
 
@@ -169,8 +169,9 @@ void SetupTensor(::musa::dnn::Tensor& tensor, const float* data,
 }
 
 void MergeWeights(const std::vector<const float*>& weights,
-                  const std::vector<int64_t>& weight_shape,
-                  float* merged_weights, musaStream_t stream) {
+                  const std::vector<std::vector<int64_t>>& weight_shapes,
+                  int64_t total_width, float* merged_weights,
+                  musaStream_t stream) {
   ::musa::dnn::Handle* handle = nullptr;
   OrtStatus* raw_status = EnsureMudnnHandle(&handle, stream);
   if (raw_status != nullptr) {
@@ -179,10 +180,9 @@ void MergeWeights(const std::vector<const float*>& weights,
   }
   std::vector<::musa::dnn::Tensor> inputs(weights.size());
   for (size_t i = 0; i < weights.size(); ++i) {
-    SetupTensor(inputs[i], weights[i], weight_shape);
+    SetupTensor(inputs[i], weights[i], weight_shapes[i]);
   }
-  std::vector<int64_t> merged_shape = {
-      weight_shape[0], weight_shape[1] * static_cast<int64_t>(weights.size())};
+  std::vector<int64_t> merged_shape = {weight_shapes.front()[0], total_width};
   ::musa::dnn::Tensor output;
   SetupTensor(output, merged_weights, merged_shape);
   ::musa::dnn::Concat concat;
@@ -239,22 +239,42 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
       std::vector<std::unique_ptr<DeviceInputBuffer>> bias_buffers;
       std::vector<const float*> weight_pointers;
       std::vector<const float*> bias_pointers;
+      std::vector<const void*> weight_data_signature;
       weight_buffers.reserve(branches.size());
       bias_buffers.reserve(branches.size());
       weight_pointers.reserve(branches.size());
       bias_pointers.reserve(branches.size());
+      weight_data_signature.reserve(branches.size());
 
-      std::vector<int64_t> weight_shape;
+      std::vector<std::vector<int64_t>> weight_shapes;
+      std::vector<int64_t> branch_widths;
+      std::vector<int64_t> branch_offsets;
+      int64_t weight_k = -1;
+      int64_t total_width = 0;
+      weight_shapes.reserve(branches.size());
+      branch_widths.reserve(branches.size());
+      branch_offsets.reserve(branches.size());
       for (const BranchInfo& branch : branches) {
         Ort::ConstValue weight = ctx.GetInput(branch.weight_input_index);
         ValidateFloat(weight, "weight");
-        if (weight_shape.empty()) {
-          weight_shape = TensorShape(weight);
-        } else if (TensorShape(weight) != weight_shape) {
+        std::vector<int64_t> weight_shape = TensorShape(weight);
+        if (weight_shape.size() != 2 || weight_shape[0] <= 0 ||
+            weight_shape[1] <= 0) {
           return Ort::GetApi().CreateStatus(
               ORT_INVALID_ARGUMENT,
-              "ParallelLinear weights must have identical shapes");
+              "ParallelLinear weights must be rank-2 non-empty tensors");
         }
+        if (weight_k < 0) {
+          weight_k = weight_shape[0];
+        } else if (weight_shape[0] != weight_k) {
+          return Ort::GetApi().CreateStatus(
+              ORT_INVALID_ARGUMENT, "ParallelLinear K dimension mismatch");
+        }
+        branch_offsets.push_back(total_width);
+        branch_widths.push_back(weight_shape[1]);
+        total_width += weight_shape[1];
+        weight_shapes.push_back(std::move(weight_shape));
+        weight_data_signature.push_back(weight.GetTensorRawData());
         auto weight_buffer = std::make_unique<DeviceInputBuffer>();
         RETURN_IF_ERROR(weight_buffer->Bind(weight, stream));
         weight_pointers.push_back(
@@ -273,21 +293,20 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
         }
       }
 
-      if (weight_shape.size() != 2 || input_shape.back() != weight_shape[0]) {
+      if (input_shape.back() != weight_k) {
         return Ort::GetApi().CreateStatus(
             ORT_INVALID_ARGUMENT, "ParallelLinear K dimension mismatch");
       }
       const int64_t branch_count = static_cast<int64_t>(branches.size());
-      const int64_t branch_width = weight_shape[1];
       const int64_t rows = NumElementsChecked(input_shape) / input_shape.back();
-      std::vector<int64_t> output_shape = input_shape;
-      output_shape.back() = branch_width;
 
       std::vector<float*> output_pointers;
       output_pointers.reserve(branches.size());
-      for (const BranchInfo& branch : branches) {
+      for (size_t i = 0; i < branches.size(); ++i) {
+        std::vector<int64_t> output_shape = input_shape;
+        output_shape.back() = branch_widths[i];
         Ort::UnownedValue output =
-            ctx.GetOutput(branch.output_index, output_shape);
+            ctx.GetOutput(branches[i].output_index, output_shape);
         if (!IsGpuMemory(output.GetTensorMemoryInfo())) {
           return Ort::GetApi().CreateStatus(
               ORT_NOT_IMPLEMENTED, "ParallelLinear requires MUSA outputs");
@@ -304,38 +323,38 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
 
       ParallelLinearScratch& scratch = ScratchForStream(this, stream);
       const size_t merged_weight_bytes =
-          static_cast<size_t>(weight_shape[0] * branch_count * branch_width) *
-          sizeof(float);
-      if (scratch.merged_weight_bytes != merged_weight_bytes) {
+          static_cast<size_t>(weight_k * total_width) * sizeof(float);
+      if (scratch.merged_weight_bytes != merged_weight_bytes ||
+          scratch.weight_data_signature != weight_data_signature ||
+          scratch.weight_shape_signature != weight_shapes) {
         scratch.merged_weights_valid = false;
         scratch.merged_weight_bytes = merged_weight_bytes;
+        scratch.weight_data_signature = weight_data_signature;
+        scratch.weight_shape_signature = weight_shapes;
       }
       RETURN_IF_ERROR(
           scratch.merged_weights.Resize(merged_weight_bytes, stream));
       if (!scratch.merged_weights_valid) {
-        MergeWeights(weight_pointers, weight_shape,
+        MergeWeights(weight_pointers, weight_shapes, total_width,
                      scratch.merged_weights.data<float>(), stream);
         scratch.merged_weights_valid = true;
       }
 
+      DeviceBuffer merged_output;
       const size_t merged_output_bytes =
-          static_cast<size_t>(rows * branch_count * branch_width) *
-          sizeof(float);
-      RETURN_IF_ERROR(
-          scratch.merged_output.Resize(merged_output_bytes, stream));
+          static_cast<size_t>(rows * total_width) * sizeof(float);
+      RETURN_IF_ERROR(merged_output.Resize(merged_output_bytes, stream));
       std::vector<int64_t> flat_input_shape = {rows, input_shape.back()};
-      std::vector<int64_t> merged_weight_shape = {weight_shape[0],
-                                                  branch_count * branch_width};
-      std::vector<int64_t> merged_output_shape = {rows,
-                                                  branch_count * branch_width};
+      std::vector<int64_t> merged_weight_shape = {weight_k, total_width};
+      std::vector<int64_t> merged_output_shape = {rows, total_width};
       RETURN_IF_ERROR(ComputeMusaMatMulDevice(
           static_cast<const float*>(input_buffer.data()),
-          scratch.merged_weights.data<float>(),
-          scratch.merged_output.data<float>(), flat_input_shape,
-          merged_weight_shape, merged_output_shape, stream));
+          scratch.merged_weights.data<float>(), merged_output.data<float>(),
+          flat_input_shape, merged_weight_shape, merged_output_shape, stream));
 
+      DeviceBuffer pointer_arrays;
       const size_t pointer_bytes = branches.size() * 2 * sizeof(const float*);
-      RETURN_IF_ERROR(scratch.pointer_arrays.Resize(pointer_bytes, stream));
+      RETURN_IF_ERROR(pointer_arrays.Resize(pointer_bytes, stream));
       std::vector<const float*> host_pointers;
       host_pointers.reserve(branches.size() * 2);
       for (float* output : output_pointers) {
@@ -343,16 +362,31 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
       }
       host_pointers.insert(host_pointers.end(), bias_pointers.begin(),
                            bias_pointers.end());
-      RETURN_IF_ERROR(CopyTemporaryHostToDevice(
-          scratch.pointer_arrays.data<void*>(), host_pointers.data(),
-          pointer_bytes, stream));
-      float** device_outputs = scratch.pointer_arrays.data<float*>();
+      RETURN_IF_ERROR(CopyTemporaryHostToDevice(pointer_arrays.data<void*>(),
+                                                host_pointers.data(),
+                                                pointer_bytes, stream));
+      DeviceBuffer branch_metadata;
+      const size_t metadata_bytes = branches.size() * 2 * sizeof(int64_t);
+      RETURN_IF_ERROR(branch_metadata.Resize(metadata_bytes, stream));
+      std::vector<int64_t> host_metadata;
+      host_metadata.reserve(branches.size() * 2);
+      host_metadata.insert(host_metadata.end(), branch_widths.begin(),
+                           branch_widths.end());
+      host_metadata.insert(host_metadata.end(), branch_offsets.begin(),
+                           branch_offsets.end());
+      RETURN_IF_ERROR(CopyTemporaryHostToDevice(branch_metadata.data<int64_t>(),
+                                                host_metadata.data(),
+                                                metadata_bytes, stream));
+      float** device_outputs = pointer_arrays.data<float*>();
       const float* const* device_biases = reinterpret_cast<const float* const*>(
           device_outputs + branches.size());
+      const int64_t* device_branch_widths = branch_metadata.data<int64_t>();
+      const int64_t* device_branch_offsets =
+          device_branch_widths + branches.size();
       musaError_t post_status = LaunchParallelLinearPostFloatKernel(
-          scratch.merged_output.data<float>(), device_outputs, device_biases,
-          rows, branch_count, branch_width, MusaUnaryOp::Relu, has_activation,
-          0.0f, stream);
+          merged_output.data<float>(), device_outputs, device_biases,
+          device_branch_widths, device_branch_offsets, rows, branch_count,
+          total_width, MusaUnaryOp::Relu, has_activation, 0.0f, stream);
       if (post_status != musaSuccess) {
         return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                           MusaErrorString(post_status));

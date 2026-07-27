@@ -54,8 +54,23 @@ target_include_directories(${MUSA_PLUGIN_TARGET}
     ${MUSA_INCLUDE_DIRS}
 )
 
-target_link_directories(${MUSA_PLUGIN_TARGET} PRIVATE ${MUSA_HOME}/lib)
-target_link_libraries(${MUSA_PLUGIN_TARGET} musart mublas mudnncxx mudnn)
+set(MUSA_LIBRARY_DIRS "${MUSA_HOME}/lib" "${MUSA_HOME}/lib64")
+foreach(_musa_lib IN ITEMS musart mublas mudnncxx mudnn)
+  string(TOUPPER "${_musa_lib}" _musa_lib_upper)
+  find_library(MUSA_${_musa_lib_upper}_LIBRARY
+    NAMES ${_musa_lib}
+    PATHS ${MUSA_LIBRARY_DIRS}
+    NO_DEFAULT_PATH
+  )
+  if(NOT MUSA_${_musa_lib_upper}_LIBRARY)
+    message(FATAL_ERROR
+      "Could not find ${_musa_lib} under ${MUSA_LIBRARY_DIRS}. "
+      "Set -DMUSA_HOME to the MUSA toolkit installation directory.")
+  endif()
+  list(APPEND MUSA_PLUGIN_LINK_LIBRARIES ${MUSA_${_musa_lib_upper}_LIBRARY})
+endforeach()
+
+target_link_libraries(${MUSA_PLUGIN_TARGET} ${MUSA_PLUGIN_LINK_LIBRARIES})
 
 target_compile_definitions(${MUSA_PLUGIN_TARGET} PRIVATE
   ONNXRUNTIME_MUSA_VERSION="${ONNXRUNTIME_MUSA_VERSION}"

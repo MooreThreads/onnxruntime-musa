@@ -9,8 +9,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-option(ONNXRUNTIME_MUSA_ENABLE_SAMPLE_KERNELS "Build CPU-backed sample kernels for plugin smoke tests" ON)
-
 set(MUSA_HOME "/usr/local/musa" CACHE PATH "Path to MUSA toolkit")
 
 # ONNX Runtime is pinned as a submodule under third_party/onnxruntime (tag v1.26.0).

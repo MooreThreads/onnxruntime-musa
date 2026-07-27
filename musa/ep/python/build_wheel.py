@@ -40,22 +40,13 @@ BINARY_PATTERNS = [
     "libonnxruntime_providers_musa_plugin.so",
 ]
 AUDITWHEEL_EXCLUDE = [
+    # MUSA toolkit libraries are external system dependencies. Do not vendor
+    # them into the wheel during auditwheel repair.
     "libmusa.so.1",
-    "libcublas.so.12",
-    "libcublas.so.13",
-    "libcublasLt.so.12",
-    "libcublasLt.so.13",
-    "libmusart.so.12",
-    "libmusart.so.13",
-    "libcudnn.so.9",
-    "libcufft.so.11",
-    "libcufft.so.12",
-    "libnvJitLink.so.12",
-    "libnvJitLink.so.13",
-    "libnvrtc.so.12",
-    "libnvrtc.so.13",
-    "libnvrtc-builtins.so.12",
-    "libnvrtc-builtins.so.13",
+    "libmusart.so.5",
+    "libmublas.so.1",
+    "libmudnncxx.so.3",
+    "libmudnn.so.3",
 ]
 
 
@@ -87,6 +78,10 @@ def prepare_staging_dir(
 ) -> None:
     staging_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(SCRIPT_DIR / "setup.py", staging_dir / "setup.py")
+    for metadata_file in ("LICENSE", "NOTICE"):
+        src = REPO_ROOT / metadata_file
+        if src.is_file():
+            shutil.copy2(src, staging_dir / metadata_file)
     shutil.copytree(SCRIPT_DIR / "onnxruntime_musa", staging_dir / "onnxruntime_musa")
 
     package_dir = staging_dir / "onnxruntime_musa"

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/mthreads
+    about: Please do not open public issues for security vulnerabilities. Use private vulnerability reporting if enabled, or contact the official Moore Threads security channel.

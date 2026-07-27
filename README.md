@@ -14,7 +14,6 @@ single shared library, gets packaged into a Python wheel, and is registered into
 ```
 CMakeLists.txt              # top-level CMake, sets C++20 and points at the ORT submodule headers
 build.sh                    # one-shot clean build + wheel
-run.sh / run_matmul.py      # smoke runner: 1-op MatMul on MUSA EP, prints device info
 musa/ep/                    # plugin EP sources, kernels, Python packaging
   src/                      # C++ implementation (ep_factory, ep, kernels/, ...)
   python/                   # build_wheel.py + onnxruntime_musa package
@@ -32,7 +31,7 @@ Build-time (only two):
 
 | Component | Version | Notes |
 |---|---|---|
-| **MUSA toolkit** | **5.1.0** | Defaults to `/usr/local/musa`. Override with `-DMUSA_HOME=...` or `./build.sh -- -DMUSA_HOME=/opt/musa`. Links `musart` + `mublas`. |
+| **MUSA toolkit** | **5.1.0** | Defaults to `/usr/local/musa`. Override with `-DMUSA_HOME=...` or `./build.sh -- -DMUSA_HOME=/opt/musa`. Links the MUSA runtime, muBLAS, and muDNN libraries. |
 | **C++ compiler** | C++20 | GCC 11+ / Clang 14+. Required for `std::span`. |
 
 ONNX Runtime is a Git submodule pinned to tag **v1.26.0** (commit `8c546c37`). The build uses
@@ -124,35 +123,10 @@ pip install -r requirements.txt
 pip install dist/onnxruntime_musa-*.whl
 ```
 
-Smoke test — runs a single-`MatMul` ONNX model on the MUSA EP and prints the device used:
-
-```bash
-./run.sh                              # auto-generates build/matmul_smoke.onnx
-./run.sh --model your_model.onnx      # bring your own model
-MUSA_VISIBLE_DEVICES=0 ./run.sh       # pick a specific MUSA device
-./run.sh --allow-cpu-fallback         # don't disable CPU EP fallback
-```
-
-`run.sh` sets `LD_LIBRARY_PATH=/usr/local/musa/lib:/usr/local/musa/lib64` and execs
-[run_matmul.py](run_matmul.py), which:
-
-1. Imports `onnxruntime_musa` (the installed wheel) to discover the bundled `.so` path and EP name.
-2. `ort.register_execution_provider_library("MUSAExecutionProvider", lib_path)`.
-3. Looks up the EP's `OrtEpDevice`, prints `ep_name / vendor / device_id / type / metadata`.
-4. Creates an `InferenceSession` with `session.disable_cpu_ep_fallback=1` (so MatMul *must* run on
-   MUSA), runs it, and validates the result against NumPy.
-
-Expected output tail:
-
-```
-[info] Registering EP: name=MUSAExecutionProvider  lib=.../onnxruntime_musa/libonnxruntime_providers_musa_plugin.so
-[info] Target device : {'ep_name': 'MUSAExecutionProvider', ...}
-[ok ] providers      : ['MUSAExecutionProvider', 'CPUExecutionProvider']
-[ok ] output shape   : (4096, 4096), dtype=float32
-[ok ] max abs error  : 0.000e+00
-```
-
-`providers` listing `MUSAExecutionProvider` first confirms the plugin EP claimed the node.
+See [test/ops/test_matmul.py](test/ops/test_matmul.py) for the minimal MatMul end-to-end
+example. It uses the shared helpers in [test/ops/op_test_utils.py](test/ops/op_test_utils.py)
+to register the MUSA plugin EP, disable CPU fallback for the MUSA run, and compare the
+MUSA output against the CPU reference.
 
 ---
 
@@ -168,8 +142,7 @@ instead of silently falling back to CPU (which would degrade into a meaningless
 CPU-vs-CPU comparison). On a machine with no MUSA device the suite is skipped via
 [test/ops/conftest.py](test/ops/conftest.py).
 
-Run the whole suite with the one-shot script (auto-discovers every test sub-directory
-under `test/`):
+Run the standard suites with the one-shot script (`ops`, `fusion`, and `multi_stream`):
 
 ```bash
 cd test
@@ -198,8 +171,9 @@ python -m pytest test/ops/
 │    ort.register_execution_provider_library(name, lib_path)           │
 │       └─▶ dlopen(.so) → CreateEpFactories  (ep_lib_entry.cc)         │
 │              └─▶ MUSAEpFactory → MUSAEp (kernel registry)            │
-│                     └─▶ kernels/{basic_ops, matmul, relu}            │
-│                            └─▶ mublas / musart on MUSA 5.1.0         │
+│                     └─▶ kernels/{math, activation, tensor, logical,  │
+│                                  reduction, nn}                       │
+│                            └─▶ MUSA runtime libraries on MUSA 5.1.0   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -209,13 +183,11 @@ Key entry points:
   `ReleaseEpFactory`; the export list is pinned by [musa/ep/src/ep_lib.lds](musa/ep/src/ep_lib.lds).
 - [musa/ep/src/ep_factory.cc](musa/ep/src/ep_factory.cc) advertises the EP's `OrtEpDevice`(s).
 - [musa/ep/src/ep.cc](musa/ep/src/ep.cc) — graph partitioning + kernel registration.
-- [musa/ep/src/kernels/](musa/ep/src/kernels/) — currently `basic_ops`, `matmul`, `relu`.
+- [musa/ep/src/kernels/](musa/ep/src/kernels/) — current operator coverage is listed in [musa/docs/supported_ops.md](musa/docs/supported_ops.md).
 - [musa/ep/python/onnxruntime_musa/__init__.py](musa/ep/python/onnxruntime_musa/__init__.py)
   exposes `get_library_path()` and `get_ep_name()` for registration from Python.
 
-For the longer migration story from the in-tree `onnx_musa` provider, see
-[musa/docs/migration-from-onnx-musa.md](musa/docs/migration-from-onnx-musa.md) and
-[musa/docs/supported_ops.md](musa/docs/supported_ops.md).
+For the current operator coverage, see [musa/docs/supported_ops.md](musa/docs/supported_ops.md).
 Fusion documentation is generated the same way: [musa/docs/fusion_priority.md](musa/docs/fusion_priority.md)
 lists the GetCapability/Compile priority order, and [musa/docs/fusion/](musa/docs/fusion/)
 contains the per-fusion graph notes generated from the current C++ fusion sources. For the

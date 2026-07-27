@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a reproducible onnxruntime-musa bug
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please include enough detail to reproduce the problem. Do not use public issues for security vulnerabilities.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Commands, model shape, inputs, or a minimal script.
+      render: bash
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: Include error messages, stack traces, profiler notes, or diff output.
+    validations:
+      required: true
+  - type: input
+    id: ort_version
+    attributes:
+      label: ONNX Runtime Version
+      placeholder: "1.26.0"
+  - type: input
+    id: musa_toolkit
+    attributes:
+      label: MUSA Toolkit Version
+      placeholder: "5.1.0"
+  - type: input
+    id: commit
+    attributes:
+      label: onnxruntime-musa Commit or Wheel Version
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, MUSA_VISIBLE_DEVICES, device model, and relevant environment variables.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Additional Logs
+      render: text

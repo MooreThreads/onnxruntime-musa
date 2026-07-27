@@ -30,6 +30,6 @@ lives in the repository as [`run_matmul.py`](../../../../run_matmul.py) / `./run
 
 - Python >= 3.11
 - `onnxruntime` matching the wheel's `Requires-Dist` constraint (auto-derived from the
-  vendored ORT headers; currently `~=1.26.0`)
+  pinned ORT submodule; currently `~=1.26.0`)
 - MUSA toolkit runtime libraries reachable by the dynamic linker. See the repository
   developer guide for environment setup.

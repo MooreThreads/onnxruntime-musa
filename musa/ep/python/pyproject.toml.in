@@ -7,10 +7,10 @@ name = "@package_name@"
 version = "@version@"
 description = "ONNX Runtime MUSA Plugin Execution Provider"
 readme = "onnxruntime_musa/README.md"
-license = {text = "MIT"}
+license = {text = "Apache-2.0"}
 requires-python = ">=3.11"
 dependencies = [
-  # ABI is pinned to the vendored ORT public headers (third_party/onnxruntime/VERSION).
+  # ABI is pinned to the ORT submodule version (third_party/onnxruntime/VERSION_NUMBER).
   "onnxruntime~=@onnxruntime_version@",
 ]
 

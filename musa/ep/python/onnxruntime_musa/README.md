@@ -23,6 +23,20 @@ so.add_provider_for_devices([musa_device], {})
 session = ort.InferenceSession("model.onnx", sess_options=so)
 ```
 
+External MUSA compute streams are supported through provider options. The stream is
+borrowed: the caller owns its lifetime and must not destroy it while the session can
+run on it.
+
+```python
+import ctypes
+
+stream = ctypes.c_void_p(...)  # musaStream_t created by the caller
+so.add_provider_for_devices(
+    [musa_device],
+    musa_ep.make_provider_options(user_compute_stream=stream),
+)
+```
+
 A runnable end-to-end smoke test (1-op MatMul model, prints the device that ran the node)
 lives in the repository as [`run_matmul.py`](../../../../run_matmul.py) / `./run.sh`.
 

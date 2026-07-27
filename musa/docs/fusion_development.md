@@ -243,11 +243,11 @@ MUSA_VISIBLE_DEVICES=1 ./.venv/bin/python -m pytest test/fusion -q
 MUSA_VISIBLE_DEVICES=1 ./.venv/bin/python -m pytest test/ops test/fusion test/multi_stream -q
 ```
 
-真实模型回归使用 sibling repo 中的命令：
+真实模型回归可在本地模型仓库中执行相应命令：
 
 ```bash
-cd ../onnx-model-zoo
-MUSA_VISIBLE_DEVICES=1 bash run_all_onnx_cpu_ep_diff.sh --ep musa -s 4 -q 128 JD/real_models/
+cd <your-model-zoo-repo>
+MUSA_VISIBLE_DEVICES=1 bash run_all_onnx_cpu_ep_diff.sh --ep musa -s 4 -q 128 <your_model_root>
 ```
 
 完成后检查：

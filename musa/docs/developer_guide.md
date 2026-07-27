@@ -56,6 +56,17 @@ cmake -S . -B build/Release -DMUSA_HOME=/opt/musa
 MUSA_VISIBLE_DEVICES=0 ./.venv/bin/python -m pytest test/ops/test_matmul.py -q
 ```
 
+### Host Metadata Inputs
+
+Some kernels read small CPU-visible inputs such as axes, split sizes, `TopK`'s
+scalar `K`, or shape tensors from host memory. The code typically marks these
+inputs with `OrtMemTypeCPUInput` or copies them with `CopyToHost(...)` before
+building a device launch or a shape output.
+
+That is expected behavior for ORT metadata inputs, not a general CPU fallback.
+If an operator's main tensor compute is unsupported, the kernel should reject it
+explicitly instead of silently routing the whole op through the host.
+
 ## MUSA EP 调试开关
 
 ### `user_compute_stream`

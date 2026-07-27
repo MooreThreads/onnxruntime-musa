@@ -1,6 +1,6 @@
 # MUSA Fusion Development Guide
 
-本文档说明当前 MUSA EP fusion 的开发范式。它是手写开发指南；自动生成的优先级和单个 fusion 拓扑说明仍然在 [`fusion_priority.md`](fusion_priority.md) 和 [`fusion/`](fusion/) 下。关于 overlap 机制迁移的背景和修复细节，见 [`fusion_overlap_fix.md`](fusion_overlap_fix.md)。
+本文档说明当前 MUSA EP fusion 的开发范式。它是手写开发指南；自动生成的优先级和单个 fusion 拓扑说明在 [`fusion_priority.md`](fusion_priority.md) 和 [`fusion/`](fusion/) 下。
 
 ## 当前模型
 

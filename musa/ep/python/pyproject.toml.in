@@ -8,11 +8,46 @@ version = "@version@"
 description = "ONNX Runtime MUSA Plugin Execution Provider"
 readme = "onnxruntime_musa/README.md"
 license = {text = "Apache-2.0"}
+authors = [
+  {name = "Moore Threads Technology Co., Ltd."},
+]
+maintainers = [
+  {name = "Moore Threads Technology Co., Ltd."},
+]
 requires-python = ">=3.11"
 dependencies = [
   # ABI is pinned to the ORT submodule version (third_party/onnxruntime/VERSION_NUMBER).
   "onnxruntime~=@onnxruntime_version@",
 ]
+keywords = [
+  "onnxruntime",
+  "onnx",
+  "musa",
+  "moore-threads",
+  "execution-provider",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Homepage = "https://github.com/mthreads/onnxruntime-musa"
+Repository = "https://github.com/mthreads/onnxruntime-musa"
+Issues = "https://github.com/mthreads/onnxruntime-musa/issues"
+Documentation = "https://github.com/mthreads/onnxruntime-musa/tree/main/musa/docs"
+
+[tool.setuptools]
+license-files = ["LICENSE", "NOTICE"]
 
 [tool.setuptools.packages.find]
 include = ["onnxruntime_musa*"]

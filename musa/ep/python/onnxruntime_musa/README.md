@@ -37,8 +37,10 @@ so.add_provider_for_devices(
 )
 ```
 
-A runnable end-to-end smoke test (1-op MatMul model, prints the device that ran the node)
-lives in the repository as [`run_matmul.py`](../../../../run_matmul.py) / `./run.sh`.
+A runnable end-to-end MatMul example lives in the repository as
+[`test/ops/test_matmul.py`](../../../../test/ops/test_matmul.py). It uses
+`test/ops/op_test_utils.py` to register the plugin EP, disable CPU fallback for the
+MUSA run, and compare the MUSA output against the CPU reference.
 
 ## Requirements
 

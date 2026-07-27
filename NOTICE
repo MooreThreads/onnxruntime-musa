@@ -1,0 +1,23 @@
+onnxruntime-musa
+Copyright (c) 2026 Moore Threads Technology Co., Ltd. All rights reserved.
+
+onnxruntime-musa is licensed under the Apache License, Version 2.0.
+See LICENSE for the full license text.
+
+This project builds an ONNX Runtime Plugin Execution Provider for Moore
+Threads MUSA GPUs. It depends on ONNX Runtime public headers at build time and
+on the ONNX Runtime runtime package at execution time.
+
+ONNX Runtime
+Copyright (c) Microsoft Corporation. All rights reserved.
+Licensed under the MIT License.
+
+The ONNX Runtime source checkout under third_party/onnxruntime is a pinned Git
+submodule used for public headers and version metadata. See third_party/README.md
+and third_party/onnxruntime/LICENSE for details.
+
+MUSA toolkit libraries
+The MUSA runtime, muBLAS, and muDNN libraries are external system dependencies
+provided by the MUSA toolkit. They are not source code from this repository.
+Users must install the compatible MUSA toolkit separately and ensure the
+runtime libraries are visible to the dynamic linker.

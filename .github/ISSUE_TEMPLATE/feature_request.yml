@@ -1,0 +1,43 @@
+name: Feature request
+description: Request an operator, fusion, runtime feature, or documentation improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What should be added or improved?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Operator
+        - Fusion
+        - Runtime or stream behavior
+        - Build or packaging
+        - Documentation
+        - Tests
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Which model, workload, or user flow needs this?
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Include ONNX op names, dtypes, shapes, attributes, or expected behavior when relevant.
+  - type: textarea
+    id: validation
+    attributes:
+      label: Suggested Validation
+      description: How should this be tested?

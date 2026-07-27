@@ -58,6 +58,15 @@ MUSA_VISIBLE_DEVICES=0 ./.venv/bin/python -m pytest test/ops/test_matmul.py -q
 
 ## MUSA EP 调试开关
 
+### `user_compute_stream`
+
+- 读取位置：`musa/ep/src/ep_factory.cc`
+- 用途：把调用方创建的 `musaStream_t` 作为 MUSA EP compute stream。
+- 入口：通过 ORT Plugin EP V2 provider options 传入，Python 可使用 `onnxruntime_musa.make_provider_options(user_compute_stream=stream)` 生成配置。
+- 表示方式：Plugin EP V2 的 provider options 是 key/value 字符串，因此 `user_compute_stream` 使用 `uintptr_t` 十进制或 `0x` 十六进制字符串；helper 会自动转换 `ctypes.c_void_p` 或整数地址。
+- 行为：设置非空 `user_compute_stream` 时，EP 自动设置 `has_user_compute_stream=1` 和 `use_ep_level_unified_stream=1`。MUSA EP 包装该 stream 但不销毁，stream 生命周期由调用方管理。
+- 约束：调用方必须保证 stream 属于 `device_id` 对应的 MUSA device，并且 session 仍在使用时不能销毁该 stream。
+
 ### `ORT_MUSA_DISABLE_ALL_FUSIONS`
 
 - 读取位置：`musa/ep/src/ep.cc`

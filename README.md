@@ -12,13 +12,13 @@ single shared library, gets packaged into a Python wheel, and is registered into
 ## Repository layout
 
 ```
-CMakeLists.txt              # top-level CMake, sets C++20 and points at vendored ORT headers
+CMakeLists.txt              # top-level CMake, sets C++20 and points at the ORT submodule headers
 build.sh                    # one-shot clean build + wheel
 run.sh / run_matmul.py      # smoke runner: 1-op MatMul on MUSA EP, prints device info
 musa/ep/                    # plugin EP sources, kernels, Python packaging
   src/                      # C++ implementation (ep_factory, ep, kernels/, ...)
   python/                   # build_wheel.py + onnxruntime_musa package
-third_party/onnxruntime/    # vendored ORT public headers (tag v1.26.0)
+third_party/onnxruntime/    # ORT submodule pinned to tag v1.26.0
 ```
 
 See [musa/docs/architecture.md](musa/docs/architecture.md) for design notes. See
@@ -35,10 +35,17 @@ Build-time (only two):
 | **MUSA toolkit** | **5.1.0** | Defaults to `/usr/local/musa`. Override with `-DMUSA_HOME=...` or `./build.sh -- -DMUSA_HOME=/opt/musa`. Links `musart` + `mublas`. |
 | **C++ compiler** | C++20 | GCC 11+ / Clang 14+. Required for `std::span`. |
 
-ONNX Runtime public headers are **vendored** into [third_party/onnxruntime/include/](third_party/onnxruntime/)
-at tag **v1.26.0** (commit `8c546c37`). No `FetchContent`, no network, no ORT source checkout, and
-no ORT build tree are needed to compile the plugin. See [third_party/README.md](third_party/README.md)
-for the refresh procedure when bumping ORT.
+ONNX Runtime is a Git submodule pinned to tag **v1.26.0** (commit `8c546c37`). The build uses
+only [third_party/onnxruntime/include/onnxruntime/](third_party/onnxruntime/include/onnxruntime/);
+the initialization helper configures a cone-mode sparse checkout for that directory. Initialize it
+after cloning the repository:
+
+```bash
+./scripts/init_onnxruntime_submodule.sh
+```
+
+No `FetchContent` or ORT build tree is needed to compile the plugin. See
+[third_party/README.md](third_party/README.md) for submodule details and the ORT upgrade procedure.
 
 GSL is **not** used; `std::span` (C++20) replaced `gsl::span` everywhere.
 
@@ -48,8 +55,8 @@ Runtime:
 - `pip install -r requirements.txt` — pins `onnxruntime==1.26.0`, `onnx==1.21.0`, `numpy`,
   plus `pytest>=7.0` for the op tests under `test/`.
   The wheel itself declares `onnxruntime~=1.26.0` (auto-derived from
-  `third_party/onnxruntime/VERSION`), because the plugin's C ABI is locked to the
-  vendored ORT headers. Bumping to ORT 1.27 requires re-vendoring the headers
+  `third_party/onnxruntime/VERSION_NUMBER`), because the plugin's C ABI is locked to the
+  pinned ORT headers. Bumping to a newer ORT release requires updating the submodule gitlink
   (see [third_party/README.md](third_party/README.md)).
 
 ---

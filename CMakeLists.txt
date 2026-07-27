@@ -13,15 +13,16 @@ option(ONNXRUNTIME_MUSA_ENABLE_SAMPLE_KERNELS "Build CPU-backed sample kernels f
 
 set(MUSA_HOME "/usr/local/musa" CACHE PATH "Path to MUSA toolkit")
 
-# ONNX Runtime public headers are vendored under third_party/onnxruntime (tag v1.26.0).
-# See third_party/onnxruntime/VERSION and third_party/onnxruntime/LICENSE.
+# ONNX Runtime is pinned as a submodule under third_party/onnxruntime (tag v1.26.0).
+# Only include/onnxruntime is materialized by the repository's sparse-checkout helper.
 set(ONNXRUNTIME_INCLUDE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime/include/onnxruntime"
     CACHE PATH "ONNX Runtime public include directory")
 
 if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/core/session/onnxruntime_c_api.h")
   message(FATAL_ERROR
-    "Vendored ONNX Runtime headers not found at ${ONNXRUNTIME_INCLUDE_DIR}.")
+    "ONNX Runtime submodule headers not found at ${ONNXRUNTIME_INCLUDE_DIR}. "
+    "Run ./scripts/init_onnxruntime_submodule.sh first.")
 endif()
 
 add_subdirectory(musa/ep)

@@ -12,21 +12,26 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
-VENDORED_ORT_VERSION_FILE = REPO_ROOT / "third_party" / "onnxruntime" / "VERSION"
+ORT_VERSION_FILE = REPO_ROOT / "third_party" / "onnxruntime" / "VERSION_NUMBER"
 
 
-def _read_vendored_ort_version() -> str:
-    """Parse `tag: vX.Y.Z` from third_party/onnxruntime/VERSION.
+def _read_ort_version() -> str:
+    """Read `X.Y.Z` from the pinned ONNX Runtime submodule.
 
     Returns `X.Y.Z`. The wheel uses this as the ABI pin for the `onnxruntime` dep.
     """
-    text = VENDORED_ORT_VERSION_FILE.read_text(encoding="utf-8")
-    m = re.search(r"tag:\s*v?(\d+\.\d+\.\d+)", text)
-    if not m:
-        raise ValueError(
-            f"Could not parse ORT tag from {VENDORED_ORT_VERSION_FILE} (got: {text!r})"
+    if not ORT_VERSION_FILE.is_file():
+        raise FileNotFoundError(
+            f"ONNX Runtime version file not found at {ORT_VERSION_FILE}. "
+            "Run ./scripts/init_onnxruntime_submodule.sh first."
         )
-    return m.group(1)
+
+    version = ORT_VERSION_FILE.read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError(
+            f"Could not parse ORT version from {ORT_VERSION_FILE} (got: {version!r})"
+        )
+    return version
 
 
 _TEMPLATE_VARIABLE_PATTERN = re.compile(r"@(\w+)@")
@@ -97,7 +102,7 @@ def prepare_staging_dir(
             f"No plugin binaries found in {binary_dir}. Looked for: {BINARY_PATTERNS}"
         )
 
-    min_ort_version = _read_vendored_ort_version()
+    min_ort_version = _read_ort_version()
 
     gen_file_from_template(
         SCRIPT_DIR / "pyproject.toml.in",

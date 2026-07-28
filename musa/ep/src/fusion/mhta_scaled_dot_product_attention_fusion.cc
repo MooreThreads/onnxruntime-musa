@@ -353,7 +353,6 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     scratch.logsumexp.Resize(
         static_cast<size_t>(batch * heads * seqlen_q) * sizeof(float), stream);
     scratch.dropout_mask.Resize(sizeof(float), stream);
-
     ::musa::dnn::Handle* handle = nullptr;
     RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
     CheckStatus(handle->SetAllowTF32(false),
@@ -479,9 +478,10 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
                            softmax_count == 1 && unsqueeze_count == 0 &&
                            reshape_count == 0;
   const bool sim_rank3 = matmul_count == 1 && einsum_count == 1 &&
-                         mul_count == 2 && add_count == 1 && div_count == 0 &&
-                         softmax_count == 1 && unsqueeze_count == 1 &&
-                         reshape_count == 1;
+                         add_count == 1 && softmax_count == 1 &&
+                         unsqueeze_count == 1 && reshape_count == 1 &&
+                         ((mul_count == 2 && div_count == 0) ||
+                          (mul_count == 1 && div_count == 1));
   return simple_bhsd || sim_rank3;
 }
 
@@ -526,21 +526,27 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
   auto fused_indices = FusedInputIndices(fused_node);
 
   if (einsum_node) {
-    if (!unsqueeze_node || !reshape_node || mul_nodes.size() != 2) {
+    if (!unsqueeze_node || !reshape_node ||
+        !((mul_nodes.size() == 2 && !div_node) ||
+          (mul_nodes.size() == 1 && div_node))) {
       throw std::runtime_error("invalid MHTA SDPA sim fused graph");
     }
 
     std::vector<Ort::ConstValueInfo> softmax_inputs = softmax_node.GetInputs();
-    std::vector<Ort::ConstValueInfo> temp_mul_inputs =
-        producers.at(Name(softmax_inputs[0])).GetInputs();
-    Ort::ConstNode temp_mul_node = producers.at(Name(softmax_inputs[0]));
-    if (!IsOnnxOp(temp_mul_node, "Mul")) {
+    Ort::ConstNode temperature_node = producers.at(Name(softmax_inputs[0]));
+    if (!IsOnnxOp(temperature_node, "Mul") &&
+        !IsOnnxOp(temperature_node, "Div")) {
       throw std::runtime_error("invalid MHTA SDPA temperature topology");
     }
+    std::vector<Ort::ConstValueInfo> temperature_inputs =
+        temperature_node.GetInputs();
 
     int64_t temp_data_index = -1;
-    for (int64_t i = 0; i < 2; ++i) {
-      auto it = producers.find(Name(temp_mul_inputs[static_cast<size_t>(i)]));
+    const int64_t temperature_data_end =
+        IsOnnxOp(temperature_node, "Div") ? 1 : 2;
+    for (int64_t i = 0; i < temperature_data_end; ++i) {
+      auto it =
+          producers.find(Name(temperature_inputs[static_cast<size_t>(i)]));
       if (it != producers.end() && IsOnnxOp(it->second, "Add")) {
         temp_data_index = i;
         add_node = it->second;
@@ -550,8 +556,14 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
     if (temp_data_index < 0) {
       throw std::runtime_error("invalid MHTA SDPA temperature topology");
     }
-    const float temp_recip = ReadScalarFloatAttributeInput(
-        temp_mul_inputs[static_cast<size_t>(1 - temp_data_index)]);
+    const float temperature_value = ReadScalarFloatAttributeInput(
+        temperature_inputs[static_cast<size_t>(1 - temp_data_index)]);
+    if (temperature_value == 0.0f) {
+      throw std::runtime_error("MHTA SDPA temperature must not be zero");
+    }
+    const float temp_recip = IsOnnxOp(temperature_node, "Div")
+                                 ? 1.0f / temperature_value
+                                 : temperature_value;
 
     std::vector<Ort::ConstValueInfo> add_inputs = add_node.GetInputs();
     Ort::ConstNode scale_mul_node{nullptr};

@@ -13,7 +13,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 - Runtime compute: `MhtaScaledDotProductAttentionFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/mhta_scaled_dot_product_attention_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `test/fusion/test_mhta_scaled_dot_product_attention_fusion.py::test_mhta_scaled_dot_product_attention_sim_rank3_fusion`
+- Before-graph topology source: `test/fusion/test_mhta_scaled_dot_product_attention_fusion.py::test_mhta_scaled_dot_product_attention_sim_rank3_div_temperature_fusion`
 
 ## Extracted ONNX Ops
 
@@ -27,7 +27,7 @@ flowchart LR
     B0["Einsum"]
     B1["Mul"]
     B2["Add"]
-    B3["Mul"]
+    B3["Div"]
     B4["Softmax"]
     B5["Unsqueeze"]
     B6["MatMul"]

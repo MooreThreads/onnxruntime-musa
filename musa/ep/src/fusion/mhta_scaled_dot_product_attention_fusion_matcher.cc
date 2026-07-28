@@ -374,25 +374,28 @@ bool CanFuseSimRank3MhtaScaledDotProductAttention(
     return false;
   }
 
-  Ort::ConstNode temp_mul_node{nullptr};
-  if (!GetProducer(softmax_inputs[0], temp_mul_node) ||
-      !IsOnnxOp(temp_mul_node, "Mul") ||
-      accepted_node_ids.count(temp_mul_node.GetId()) != 0) {
+  Ort::ConstNode temperature_node{nullptr};
+  if (!GetProducer(softmax_inputs[0], temperature_node) ||
+      (!IsOnnxOp(temperature_node, "Mul") &&
+       !IsOnnxOp(temperature_node, "Div")) ||
+      accepted_node_ids.count(temperature_node.GetId()) != 0) {
     return false;
   }
-  auto temp_mul_inputs = temp_mul_node.GetInputs();
-  auto temp_mul_outputs = temp_mul_node.GetOutputs();
-  if (temp_mul_inputs.size() != 2 || temp_mul_outputs.size() != 1 ||
-      Name(temp_mul_outputs[0]) != Name(softmax_inputs[0]) ||
-      !HasSingleConsumer(temp_mul_outputs[0], graph_output_names)) {
+  auto temperature_inputs = temperature_node.GetInputs();
+  auto temperature_outputs = temperature_node.GetOutputs();
+  if (temperature_inputs.size() != 2 || temperature_outputs.size() != 1 ||
+      Name(temperature_outputs[0]) != Name(softmax_inputs[0]) ||
+      !HasSingleConsumer(temperature_outputs[0], graph_output_names)) {
     return false;
   }
 
   Ort::ConstNode add_node{nullptr};
   int64_t temp_data_index = -1;
-  for (int64_t i = 0; i < 2; ++i) {
+  const int64_t temperature_data_end =
+      IsOnnxOp(temperature_node, "Div") ? 1 : 2;
+  for (int64_t i = 0; i < temperature_data_end; ++i) {
     Ort::ConstNode producer{nullptr};
-    if (GetProducer(temp_mul_inputs[static_cast<size_t>(i)], producer) &&
+    if (GetProducer(temperature_inputs[static_cast<size_t>(i)], producer) &&
         IsOnnxOp(producer, "Add")) {
       add_node = producer;
       temp_data_index = i;
@@ -403,7 +406,7 @@ bool CanFuseSimRank3MhtaScaledDotProductAttention(
     return false;
   }
   size_t temp_scalar_index = 0;
-  if (!HasConstantInitializerOtherInput(temp_mul_node,
+  if (!HasConstantInitializerOtherInput(temperature_node,
                                         static_cast<size_t>(temp_data_index),
                                         &temp_scalar_index)) {
     return false;
@@ -412,7 +415,7 @@ bool CanFuseSimRank3MhtaScaledDotProductAttention(
   auto add_outputs = add_node.GetOutputs();
   if (add_inputs.size() != 2 || add_outputs.size() != 1 ||
       Name(add_outputs[0]) !=
-          Name(temp_mul_inputs[static_cast<size_t>(temp_data_index)]) ||
+          Name(temperature_inputs[static_cast<size_t>(temp_data_index)]) ||
       !HasSingleConsumer(add_outputs[0], graph_output_names)) {
     return false;
   }
@@ -488,7 +491,7 @@ bool CanFuseSimRank3MhtaScaledDotProductAttention(
     return false;
   }
 
-  fusion_nodes = {score_einsum, scale_mul_node, add_node,     temp_mul_node,
+  fusion_nodes = {score_einsum, scale_mul_node, add_node,     temperature_node,
                   softmax_node, unsqueeze_node, value_matmul, output_reshape};
   return true;
 }

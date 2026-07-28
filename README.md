@@ -111,6 +111,10 @@ onnxruntime==1.26.0
 onnx==1.21.0
 numpy
 pytest>=7.0
+setuptools<70
+wheel
+pip
+cmake
 ```
 
 Install everything into a fresh venv:

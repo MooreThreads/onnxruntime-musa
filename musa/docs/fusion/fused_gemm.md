@@ -13,7 +13,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 - Runtime compute: `LinearFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/linear_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `musa/ep/src/fusion/linear_fusion_matcher.cc` finder source
+- Before-graph topology source: `test/fusion/test_linear_fusion.py::test_matmul_add_tanh_fusion`
 
 ## Extracted ONNX Ops
 
@@ -26,8 +26,8 @@ flowchart LR
   subgraph Before[Before fusion]
     B0["MatMul"]
     B1["Add"]
+    B2["Tanh"]
     B0 --> B1
-    B2["Relu / LeakyRelu / Tanh / Sigmoid"]
     B1 --> B2
   end
   subgraph After[After fusion]

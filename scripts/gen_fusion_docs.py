@@ -194,20 +194,48 @@ def _relative(path: Path) -> str:
     return str(path.relative_to(REPO))
 
 
-def _literal_string_list(node: ast.AST) -> list[str] | None:
+def _string_bindings(function: ast.FunctionDef) -> dict[str, str]:
+    bindings: dict[str, str] = {}
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        value = node.value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            bindings[target.id] = value.value
+        elif (
+            isinstance(value, ast.IfExp)
+            and isinstance(value.orelse, ast.Constant)
+            and isinstance(value.orelse.value, str)
+        ):
+            bindings[target.id] = value.orelse.value
+    return bindings
+
+
+def _literal_string_list(
+    node: ast.AST, bindings: dict[str, str] | None = None
+) -> list[str] | None:
     if isinstance(node, ast.List | ast.Tuple):
         values: list[str] = []
         for elt in node.elts:
-            if not isinstance(elt, ast.Constant) or not isinstance(elt.value, str):
-                return None
-            values.append(elt.value)
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                values.append(elt.value)
+                continue
+            if isinstance(elt, ast.Name) and bindings and elt.id in bindings:
+                values.append(bindings[elt.id])
+                continue
+            return None
         return values
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return [node.value]
     return None
 
 
-def _make_node_call(call: ast.Call) -> tuple[str, list[str], list[str]] | None:
+def _make_node_call(
+    call: ast.Call, bindings: dict[str, str] | None = None
+) -> tuple[str, list[str], list[str]] | None:
     func = call.func
     if not (
         isinstance(func, ast.Attribute)
@@ -221,11 +249,46 @@ def _make_node_call(call: ast.Call) -> tuple[str, list[str], list[str]] | None:
     op_arg = call.args[0]
     if not isinstance(op_arg, ast.Constant) or not isinstance(op_arg.value, str):
         return None
-    inputs = _literal_string_list(call.args[1])
-    outputs = _literal_string_list(call.args[2])
+    inputs = _literal_string_list(call.args[1], bindings)
+    outputs = _literal_string_list(call.args[2], bindings)
     if inputs is None or outputs is None:
         return None
     return op_arg.value, inputs, outputs
+
+
+def _make_node_calls_in_default_flow(function: ast.FunctionDef) -> list[ast.Call]:
+    calls: list[ast.Call] = []
+    negative_branch_words = (
+        "detach",
+        "fallback",
+        "reject",
+        "unsupported",
+        "invalid",
+        "not_fused",
+    )
+
+    class Visitor(ast.NodeVisitor):
+        def visit_If(self, node: ast.If) -> None:
+            test = ast.unparse(node.test).lower()
+            if any(word in test for word in negative_branch_words):
+                for child in node.orelse:
+                    self.visit(child)
+                return
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "make_node"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "helper"
+            ):
+                calls.append(node)
+            self.generic_visit(node)
+
+    Visitor().visit(function)
+    return calls
 
 
 def _test_graph_from_function(source: Path, function: ast.FunctionDef) -> TestGraph | None:
@@ -234,11 +297,10 @@ def _test_graph_from_function(source: Path, function: ast.FunctionDef) -> TestGr
     producer_by_value: dict[str, str] = {}
     edge_seen: set[tuple[str, str]] = set()
     ops: list[str] = []
+    bindings = _string_bindings(function)
 
-    for node in ast.walk(function):
-        if not isinstance(node, ast.Call):
-            continue
-        parsed = _make_node_call(node)
+    for node in _make_node_calls_in_default_flow(function):
+        parsed = _make_node_call(node, bindings)
         if parsed is None:
             continue
         op, inputs, outputs = parsed
@@ -292,26 +354,47 @@ def _best_test_graph_for_fusion(
 ) -> TestGraph | None:
     fusion_tokens = set(fusion_key.split("_")) | _tokens_from_name(finder)
     finder_op_set = set(finder_ops)
+    activation_ops = {"Relu", "LeakyRelu", "Tanh", "Sigmoid"}
     best_graph: TestGraph | None = None
     best_score = 0
     negative_words = ("fallback", "not_fused", "non_", "unsupported", "disable")
+    shared_test_aliases = {
+        "fused_gemm": {"linear"},
+        "gemm_activation": {"linear"},
+    }
 
     for graph in graphs:
         graph_id = f"{graph.source.stem}_{graph.function}".lower()
         if any(word in graph_id for word in negative_words):
             continue
         graph_tokens = set(re.split(r"[^a-z0-9]+", graph_id))
-        if not set(fusion_key.split("_")).issubset(graph_tokens):
+        has_name_match = set(fusion_key.split("_")).issubset(
+            graph_tokens
+        ) or bool(shared_test_aliases.get(fusion_key, set()) & graph_tokens)
+        if not has_name_match:
             continue
+
         op_overlap = len(finder_op_set & set(graph.ops))
         if finder_op_set and op_overlap == 0:
             continue
-        min_required_overlap = max(1, (len(finder_op_set) * 3 + 4) // 5)
-        if finder_op_set and op_overlap < min_required_overlap:
+        required_ops = max(1, (len(finder_op_set) * 3 + 4) // 5)
+        if finder_op_set & activation_ops:
+            required_ops = max(
+                1,
+                len(finder_op_set - activation_ops)
+                + (1 if set(graph.ops) & activation_ops else 0),
+            )
+        if op_overlap < required_ops:
             continue
-        score = op_overlap * 10 + len(fusion_tokens & graph_tokens) * 5
+
+        name_overlap = len(fusion_tokens & graph_tokens)
+        score = op_overlap * 10 + name_overlap * 5
         if fusion_key.replace("_", "") in graph_id.replace("_", ""):
             score += 40
+        if shared_test_aliases.get(fusion_key, set()) & graph_tokens:
+            score += 20
+        if all(op.lower() in graph_tokens for op in graph.ops if op in finder_op_set):
+            score += 15
         if graph.edges:
             score += 3
         if score > best_score:
@@ -371,19 +454,67 @@ def _fusion_sources() -> list[tuple[Path, str]]:
     return [(path, _strip_comments(path.read_text())) for path in paths]
 
 
-def _ops_and_labels_from_function_and_helpers(text: str, function: str) -> tuple[list[str], list[str]]:
+def _ops_and_labels_from_function_and_helpers(
+    text: str, function: str
+) -> tuple[list[str], list[str]]:
+    token_re = re.compile(
+        r'IsOnnxOp\s*\([^,]+,\s*"(?P<op>[^"]+)"\s*\)|'
+        r"\b(?P<helper>Is\w+|CanFuse\w+|Match\w+|Resolve\w+|Find\w+)\s*\("
+    )
+    ops: list[str] = []
+    labels: list[str] = []
+    seen_labels: set[str] = set()
+
+    def collect(current: str, visited: set[str]) -> list[str]:
+        if current in visited:
+            return []
+        visited.add(current)
+        try:
+            body = _extract_function_body(text, current)
+        except ValueError:
+            return []
+
+        collected: list[str] = []
+        for match in token_re.finditer(body):
+            op = match.group("op")
+            if op is not None:
+                collected.append(op)
+                if op not in seen_labels:
+                    labels.append(op)
+                    seen_labels.add(op)
+                continue
+            helper = match.group("helper")
+            if helper is None or helper == current or helper == "IsOnnxOp":
+                continue
+            helper_ops = collect(helper, visited)
+            collected.extend(helper_ops)
+            if helper_ops:
+                label = " / ".join(helper_ops)
+                if label not in seen_labels:
+                    labels.append(label)
+                    seen_labels.add(label)
+        return collected
+
+    ops.extend(collect(function, set()))
+    return _ordered_unique(ops), labels
+
+
+def _ops_from_function_and_helpers(text: str, function: str) -> list[str]:
+    ops, _labels = _ops_and_labels_from_function_and_helpers(text, function)
+    return ops
+
+
+def _labels_from_function_and_helpers(text: str, function: str) -> list[str]:
     body = _extract_function_body(text, function)
     token_re = re.compile(
         r'IsOnnxOp\s*\([^,]+,\s*"(?P<op>[^"]+)"\s*\)|'
         r"\b(?P<helper>Is\w+|CanFuse\w+)\s*\("
     )
-    ops: list[str] = []
     labels: list[str] = []
     seen_labels: set[str] = set()
     for match in token_re.finditer(body):
         op = match.group("op")
         if op is not None:
-            ops.append(op)
             if op not in seen_labels:
                 labels.append(op)
                 seen_labels.add(op)
@@ -396,32 +527,12 @@ def _ops_and_labels_from_function_and_helpers(text: str, function: str) -> tuple
         except ValueError:
             continue
         helper_ops = _ops_from_text(helper_body)
-        ops.extend(helper_ops)
         if helper_ops:
             label = " / ".join(helper_ops)
             if label not in seen_labels:
                 labels.append(label)
                 seen_labels.add(label)
-    return _ordered_unique(ops), labels
-
-
-def _ops_from_function_and_helpers(text: str, function: str) -> list[str]:
-    ops, _labels = _ops_and_labels_from_function_and_helpers(text, function)
-    return ops
-
-
-def _labels_from_function_and_helpers(text: str, function: str) -> list[str]:
-    _ops, labels = _ops_and_labels_from_function_and_helpers(text, function)
     return labels
-    for helper in helper_names:
-        if helper == function or helper == "IsOnnxOp":
-            continue
-        try:
-            helper_body = _extract_function_body(text, helper)
-        except ValueError:
-            continue
-        ops.extend(_ops_from_text(helper_body))
-    return _ordered_unique(ops)
 
 
 def _source_with_function(name: str, sources: list[tuple[Path, str]]) -> tuple[Path, str, str]:
@@ -458,7 +569,7 @@ def _factory_infos(sources: list[tuple[Path, str]]) -> dict[str, FactoryInfo]:
     )
     for factory in factories:
         source, source_text, body = _source_with_function(factory, sources)
-        compute_match = re.search(r"make_unique<(\w+FusionCompute)>", body)
+        compute_match = re.search(r"make_unique<(\w+Compute)>", body)
         if compute_match:
             compute_type = compute_match.group(1)
         else:
@@ -548,7 +659,7 @@ def _helper_body_for_finder(finder: str, ep_text: str) -> str | None:
     helpers = _ordered_unique(
         [
             match.group(1)
-            for match in re.finditer(r"\b(CanFuse\w+)\s*\(", finder_body)
+            for match in re.finditer(r"\b(CanFuse\w+|Match\w+)\s*\(", finder_body)
             if match.group(1) != finder
         ]
     )
@@ -717,6 +828,18 @@ def _mermaid_label(label: str) -> str:
     return label.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _collapse_alternative_labels(labels: list[str]) -> list[str]:
+    alternatives = [
+        {part.strip() for part in label.split("/")}
+        for label in labels
+        if "/" in label
+    ]
+    if not alternatives:
+        return labels
+    covered = set().union(*alternatives)
+    return [label for label in labels if label not in covered]
+
+
 def _mermaid(
     test_graph: TestGraph | None,
     pattern_graph: PatternGraph | None,
@@ -745,7 +868,9 @@ def _mermaid(
                     lines.append(f"    {previous} --> {current}")
                 previous = current
     else:
-        before = pattern_labels or ["unresolved source pattern"]
+        before = _collapse_alternative_labels(pattern_labels) or [
+            "unresolved source pattern"
+        ]
         previous = None
         for index, label in enumerate(before):
             node = f"B{index}"

@@ -28,9 +28,10 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 19 | Sparse Id To Mask Fusion | `FindSparseIdToMaskFusions` | `false` | [sparse_id_to_mask.md](fusion/sparse_id_to_mask.md) |
 | 20 | Bucketize Gather Fusion | `FindBucketizeGatherFusions` | `false` | [bucketize_gather.md](fusion/bucketize_gather.md) |
 | 21 | Masked Embedding Lookup Fusion | `FindMaskedEmbeddingLookupFusions` | `false` | [masked_embedding_lookup.md](fusion/masked_embedding_lookup.md) |
-| 22 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
-| 23 | Replace Invalid Id Fusion | `FindReplaceInvalidIdFusions` | `true` | [replace_invalid_id.md](fusion/replace_invalid_id.md) |
-| 24 | Segment Max Broadcast Fusion | `FindSegmentMaxBroadcastFusions` | `true` | [segment_max_broadcast.md](fusion/segment_max_broadcast.md) |
+| 22 | Target Id Count Embedding Fusion | `FindTargetIdCountEmbeddingFusions` | `false` | [target_id_count_embedding.md](fusion/target_id_count_embedding.md) |
+| 23 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
+| 24 | Replace Invalid Id Fusion | `FindReplaceInvalidIdFusions` | `true` | [replace_invalid_id.md](fusion/replace_invalid_id.md) |
+| 25 | Segment Max Broadcast Fusion | `FindSegmentMaxBroadcastFusions` | `true` | [segment_max_broadcast.md](fusion/segment_max_broadcast.md) |
 
 ## Compile Dispatch Order
 
@@ -48,14 +49,15 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 10 | `IsSplitConcatReorderFusionGraph` | `CreateSplitConcatReorderFusion` | [split_concat_reorder](fusion/split_concat_reorder.md) |
 | 11 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
 | 12 | `IsRmsNormFusionGraph` | `CreateRmsNormFusion` | [rms_norm](fusion/rms_norm.md) |
-| 13 | `IsModuloGatherFusionGraph` | `CreateModuloGatherFusion` | [modulo_gather](fusion/modulo_gather.md) |
-| 14 | `IsParallelEinsumActivationFusionGraph` | `CreateParallelEinsumActivationFusion` | [parallel_einsum_activation](fusion/parallel_einsum_activation.md) |
-| 15 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
-| 16 | `IsMathConcatLogFusionGraph` | `CreateMathConcatLogFusion` | [math_concat_log](fusion/math_concat_log.md) |
-| 17 | `IsSparseIdToMaskFusionGraph` | `CreateSparseIdToMaskFusion` | [sparse_id_to_mask](fusion/sparse_id_to_mask.md) |
-| 18 | `IsBucketizeGatherFusionGraph` | `CreateBucketizeGatherFusion` | [bucketize_gather](fusion/bucketize_gather.md) |
-| 19 | `IsMaskedEmbeddingLookupFusionGraph` | `CreateMaskedEmbeddingLookupFusion` | [masked_embedding_lookup](fusion/masked_embedding_lookup.md) |
-| 20 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
-| 21 | `IsReplaceInvalidIdFusionGraph` | `CreateReplaceInvalidIdFusion` | [replace_invalid_id](fusion/replace_invalid_id.md) |
-| 22 | `IsSegmentMaxBroadcastFusionGraph` | `CreateSegmentMaxBroadcastFusion` | [segment_max_broadcast](fusion/segment_max_broadcast.md) |
-| 23 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
+| 13 | `IsTargetIdCountEmbeddingFusionGraph` | `CreateTargetIdCountEmbeddingFusion` | [target_id_count_embedding](fusion/target_id_count_embedding.md) |
+| 14 | `IsModuloGatherFusionGraph` | `CreateModuloGatherFusion` | [modulo_gather](fusion/modulo_gather.md) |
+| 15 | `IsParallelEinsumActivationFusionGraph` | `CreateParallelEinsumActivationFusion` | [parallel_einsum_activation](fusion/parallel_einsum_activation.md) |
+| 16 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
+| 17 | `IsMathConcatLogFusionGraph` | `CreateMathConcatLogFusion` | [math_concat_log](fusion/math_concat_log.md) |
+| 18 | `IsSparseIdToMaskFusionGraph` | `CreateSparseIdToMaskFusion` | [sparse_id_to_mask](fusion/sparse_id_to_mask.md) |
+| 19 | `IsBucketizeGatherFusionGraph` | `CreateBucketizeGatherFusion` | [bucketize_gather](fusion/bucketize_gather.md) |
+| 20 | `IsMaskedEmbeddingLookupFusionGraph` | `CreateMaskedEmbeddingLookupFusion` | [masked_embedding_lookup](fusion/masked_embedding_lookup.md) |
+| 21 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
+| 22 | `IsReplaceInvalidIdFusionGraph` | `CreateReplaceInvalidIdFusion` | [replace_invalid_id](fusion/replace_invalid_id.md) |
+| 23 | `IsSegmentMaxBroadcastFusionGraph` | `CreateSegmentMaxBroadcastFusion` | [segment_max_broadcast](fusion/segment_max_broadcast.md) |
+| 24 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |

@@ -5,34 +5,85 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **24**
+- GetCapability priority: **25**
 - Finder: `FindSegmentMaxBroadcastFusions`
 - Finder implementation: `musa/ep/src/fusion/segment_max_broadcast_fusion_matcher.cc`
 - Compile detector: `IsSegmentMaxBroadcastFusionGraph`
 - Runtime factory: `CreateSegmentMaxBroadcastFusion`
-- Runtime compute: `CreateSegmentMaxBroadcastFusion`
+- Runtime compute: `SegmentMaxBroadcastCompute`
 - Runtime implementation: `musa/ep/src/fusion/segment_max_broadcast_fusion.cc`
 - `drop_constant_initializers`: `true`
-- Before-graph topology source: `musa/ep/src/fusion/segment_max_broadcast_fusion_matcher.cc` finder source
+- Before-graph topology source: `test/fusion/test_segment_max_broadcast_fusion.py::_build_segment_max_broadcast_model`
 
 ## Extracted ONNX Ops
 
-`Segment`, `Max`, `Broadcast`
+`Gather`, `Cast`
 
 ## Mermaid
 
 ```mermaid
 flowchart LR
   subgraph Before[Before fusion]
-    B0["Segment"]
-    B1["Max"]
+    B0["Unique"]
+    B1["Cast"]
+    B2["Cast"]
+    B3["Shape"]
+    B4["TopK"]
+    B5["Unsqueeze"]
+    B6["Unique"]
+    B7["ReduceMax"]
+    B8["Gather"]
+    B9["Squeeze"]
+    B10["Range"]
+    B11["Mod"]
+    B12["Unsqueeze"]
+    B13["Concat"]
+    B14["Shape"]
+    B15["Cast"]
+    B16["Slice"]
+    B17["Squeeze"]
+    B18["Cast"]
+    B19["Unsqueeze"]
+    B20["Concat"]
+    B21["ConstantOfShape"]
+    B22["ScatterND"]
+    B23["Gather"]
+    B24["ReduceMax"]
+    B25["Max"]
     B0 --> B1
-    B2["Broadcast"]
     B1 --> B2
+    B2 --> B3
+    B2 --> B4
+    B3 --> B4
+    B4 --> B5
+    B4 --> B6
+    B6 --> B7
+    B6 --> B8
+    B3 --> B9
+    B9 --> B10
+    B10 --> B11
+    B8 --> B11
+    B11 --> B12
+    B5 --> B13
+    B12 --> B13
+    B0 --> B14
+    B14 --> B15
+    B15 --> B16
+    B16 --> B17
+    B17 --> B18
+    B18 --> B19
+    B19 --> B20
+    B7 --> B20
+    B20 --> B21
+    B21 --> B22
+    B13 --> B22
+    B4 --> B22
+    B22 --> B23
+    B23 --> B24
   end
   subgraph After[After fusion]
     A0["MUSA fused node"]
-    A1["CreateSegmentMaxBroadcastFusion"]
+    A1["SegmentMaxBroadcastCompute"]
     A0 --> A1
   end
   Before ==> After

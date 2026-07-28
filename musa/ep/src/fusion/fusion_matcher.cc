@@ -218,6 +218,12 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindMaskedEmbeddingLookupFusions", false,
                  std::move(masked_embedding_lookup_fusions), accepted_node_ids);
 
+  auto target_id_count_embedding_fusions = FindTargetIdCountEmbeddingFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindTargetIdCountEmbeddingFusions", false,
+                 std::move(target_id_count_embedding_fusions),
+                 accepted_node_ids);
+
   auto concat_reshape_fusions = FindConcatReshapeFusions(
       all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindConcatReshapeFusions", true,

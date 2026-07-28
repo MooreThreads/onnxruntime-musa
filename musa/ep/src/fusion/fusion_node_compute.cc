@@ -48,6 +48,7 @@
 #include "fusion/split_concat_reorder_fusion.h"
 #include "fusion/split_reduce_fusion.h"
 #include "fusion/split_unsqueeze_concat_fusion.h"
+#include "fusion/target_id_count_embedding_fusion.h"
 #include "fusion/tile_concat_fusion.h"
 #include "plugin_ep_utils.h"
 #include "runtime_graph_dump.h"
@@ -241,6 +242,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateTileConcatFusion(graph, fused_node);
       } else if (IsRmsNormFusionGraph(graph)) {
         fusion_compute = CreateRmsNormFusion(graph, fused_node);
+      } else if (IsTargetIdCountEmbeddingFusionGraph(graph)) {
+        fusion_compute = CreateTargetIdCountEmbeddingFusion(graph, fused_node);
       } else if (IsModuloGatherFusionGraph(graph)) {
         fusion_compute = CreateModuloGatherFusion(graph, fused_node);
       } else if (IsParallelEinsumActivationFusionGraph(graph)) {

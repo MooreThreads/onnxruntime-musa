@@ -13,7 +13,7 @@ single shared library, gets packaged into a Python wheel, and is registered into
 
 ```
 CMakeLists.txt              # top-level CMake, sets C++20 and points at the ORT submodule headers
-build.sh                    # one-shot clean build + wheel
+build.sh                    # incremental plugin build + wheel; --clean for a fresh rebuild
 musa/ep/                    # plugin EP sources, kernels, Python packaging
   src/                      # C++ implementation (ep_factory, ep, kernels/, ...)
   python/                   # build_wheel.py + onnxruntime_musa package
@@ -62,18 +62,19 @@ Runtime:
 
 ## Build
 
-### One-shot: plugin `.so` + wheel
+### Build plugin `.so` + wheel
 
 ```bash
-./build.sh                            # clean rebuild + wheel (Release)
+./build.sh                            # incremental build + wheel (Release)
+./build.sh --clean                    # delete build output, then rebuild + wheel
 ./build.sh --config Debug             # Debug build
-./build.sh --no-wheel                 # only build the .so, skip wheel
+./build.sh --no-wheel                 # incrementally build only the .so, skip wheel
 ./build.sh -- -DMUSA_HOME=/opt/musa   # forward extra args to CMake after `--`
 ```
 
 What it does:
 
-1. Cleans `build/<Config>/` and `dist/`.
+1. Reuses `build/<Config>/` and `dist/` by default; `--clean` removes both before configuring.
 2. Picks a Python that satisfies `requires-python>=3.11` — prefers `./.venv/bin/python`, then
    `python3.12` / `python3.11`, then `$PYTHON` / `python3`.
 3. `cmake -S . -B build/<Config> -DCMAKE_BUILD_TYPE=<Config>` → `cmake --build`.

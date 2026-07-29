@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Clean rebuild of the onnxruntime-musa plugin and Python wheel.
+# Incremental build of the onnxruntime-musa plugin and Python wheel.
 #
 # Usage:
-#   ./build.sh                                  # clean + build .so + build wheel (Release)
-#   ./build.sh --no-wheel                       # only build the plugin .so
+#   ./build.sh                                  # incremental build .so + build wheel (Release)
+#   ./build.sh --clean                          # remove build output, then rebuild .so + wheel
+#   ./build.sh --no-wheel                       # incrementally build only the plugin .so
 #   ./build.sh --config Debug                   # use Debug config
 #   ./build.sh --package-name onnxruntime-musa  # override wheel distribution name
 #   ./build.sh -- -DMUSA_HOME=/opt/musa         # extra args after `--` go to CMake
@@ -14,16 +15,18 @@ cd "$(dirname "$0")"
 CONFIG="Release"
 PACKAGE_NAME="onnxruntime-musa"
 BUILD_WHEEL=1
+CLEAN_BUILD=0
 CMAKE_EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; shift 2 ;;
     --package-name) PACKAGE_NAME="$2"; shift 2 ;;
+    --clean) CLEAN_BUILD=1; shift ;;
     --no-wheel) BUILD_WHEEL=0; shift ;;
     --) shift; CMAKE_EXTRA_ARGS+=("$@"); break ;;
     -h|--help)
-      sed -n '2,10p' "$0"; exit 0 ;;
+      sed -n '2,9p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -46,8 +49,12 @@ pick_python() {
 }
 PYTHON_BIN="$(pick_python)"
 
-echo "==> Cleaning ${BUILD_DIR} and ${DIST_DIR}"
-rm -rf "${BUILD_DIR}" "${DIST_DIR}"
+if [[ "${CLEAN_BUILD}" -eq 1 ]]; then
+  echo "==> Cleaning ${BUILD_DIR} and ${DIST_DIR}"
+  rm -rf "${BUILD_DIR}" "${DIST_DIR}"
+else
+  echo "==> Reusing ${BUILD_DIR} for an incremental build"
+fi
 
 echo "==> Configuring (${CONFIG})"
 cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE="${CONFIG}" "${CMAKE_EXTRA_ARGS[@]}"

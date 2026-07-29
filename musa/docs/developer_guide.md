@@ -4,6 +4,20 @@
 
 ## 构建和安装相关
 
+### `build.sh` 构建模式
+
+- 默认行为：重新运行 CMake 配置后复用 `build/<Config>/`，只编译变更的源码及其依赖；默认仍构建 wheel。
+- `--clean`：删除 `build/<Config>/` 和 `dist/`，然后从零构建。适用于首次构建、工具链/MUSA/ABI 变化、切换生成器或发布前的干净验证。
+- `--no-wheel`：跳过 wheel 打包；与默认增量模式组合时适合日常只验证插件 `.so`。
+- 示例：
+
+```bash
+./build.sh
+./build.sh --no-wheel
+./build.sh --clean
+./build.sh --clean --no-wheel
+```
+
 ### `PYTHON`
 
 - 读取位置：`build.sh`

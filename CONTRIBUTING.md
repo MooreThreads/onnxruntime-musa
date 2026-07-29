@@ -20,10 +20,12 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
-Build the plugin and wheel:
+Build the plugin and wheel incrementally. Use `--clean` only when a fresh build
+is required (for example after a toolchain or ABI change):
 
 ```bash
 ./build.sh
+./build.sh --clean
 ```
 
 ## Tests

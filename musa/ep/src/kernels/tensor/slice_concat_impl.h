@@ -1,8 +1,8 @@
 #pragma once
 
-#include <cstdint>
-
 #include <musa_runtime.h>
+
+#include <cstdint>
 
 struct MusaSliceConcatSegment {
   const float* input;

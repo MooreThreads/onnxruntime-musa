@@ -145,7 +145,8 @@ class PinnedHostPool {
 
     (void)musaSetDevice(device_id_);
     if (event == nullptr &&
-        musaEventCreateWithFlags(&event, musaEventDisableTiming) != musaSuccess) {
+        musaEventCreateWithFlags(&event, musaEventDisableTiming) !=
+            musaSuccess) {
       (void)musaStreamSynchronize(stream);
       FreeCompleted(ptr);
       return;

@@ -10,9 +10,6 @@ musaError_t LaunchMusaNonZeroCountKernel(const void* input,
                                          MusaElementType elem_type,
                                          musaStream_t stream);
 
-musaError_t LaunchMusaNonZeroOutputKernel(const void* input,
-                                          const int* prefix_counts,
-                                          int64_t* output,
-                                          MusaNonZeroParams params,
-                                          MusaElementType elem_type,
-                                          musaStream_t stream);
+musaError_t LaunchMusaNonZeroOutputKernel(
+    const void* input, const int* prefix_counts, int64_t* output,
+    MusaNonZeroParams params, MusaElementType elem_type, musaStream_t stream);

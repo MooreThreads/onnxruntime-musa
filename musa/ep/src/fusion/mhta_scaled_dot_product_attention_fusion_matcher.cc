@@ -35,7 +35,7 @@ bool HasSingleConsumer(Ort::ConstValueInfo value,
 
 bool IsZeroFloatInitializer(Ort::ConstValueInfo value_info) {
   if (!value_info.IsConstantInitializer() ||
-      !IsFloatTensorValueInfo(value_info)) {
+      value_info.TypeInfo().GetONNXType() != ONNX_TYPE_TENSOR) {
     return false;
   }
   Ort::ConstValue value{nullptr};
@@ -44,17 +44,57 @@ bool IsZeroFloatInitializer(Ort::ConstValueInfo value_info) {
     return false;
   }
   auto info = value.GetTensorTypeAndShapeInfo();
-  if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+  const ONNXTensorElementDataType elem_type = info.GetElementType();
+  if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) {
     return false;
   }
-  const float* data = value.GetTensorData<float>();
   const size_t count = info.GetElementCount();
-  for (size_t i = 0; i < count; ++i) {
-    if (std::fabs(data[i]) > 0.0f) {
-      return false;
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    const float* data = value.GetTensorData<float>();
+    for (size_t i = 0; i < count; ++i) {
+      if (std::fabs(data[i]) > 0.0f) return false;
+    }
+  } else if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) {
+    const double* data = value.GetTensorData<double>();
+    for (size_t i = 0; i < count; ++i) {
+      if (data[i] != 0.0) return false;
+    }
+  } else {
+    const uint16_t* data = value.GetTensorData<uint16_t>();
+    for (size_t i = 0; i < count; ++i) {
+      if (data[i] != 0) return false;
     }
   }
   return true;
+}
+
+bool IsMhtaSdpaDataType(Ort::ConstValueInfo value_info) {
+  if (value_info.TypeInfo().GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+  const ONNXTensorElementDataType elem_type =
+      value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE;
+}
+
+bool HasSameMhtaSdpaDataType(Ort::ConstValueInfo lhs, Ort::ConstValueInfo rhs) {
+  return IsMhtaSdpaDataType(lhs) && IsMhtaSdpaDataType(rhs) &&
+         lhs.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
+             rhs.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
+}
+
+bool MhtaSdpaShapesHaveSameDataType(Ort::ConstValueInfo q,
+                                    Ort::ConstValueInfo k,
+                                    Ort::ConstValueInfo v,
+                                    Ort::ConstValueInfo output) {
+  return HasSameMhtaSdpaDataType(q, k) && HasSameMhtaSdpaDataType(q, v) &&
+         HasSameMhtaSdpaDataType(q, output);
 }
 
 bool IsLastAxisSoftmax(Ort::ConstNode softmax_node,
@@ -103,8 +143,9 @@ bool HasConstantInitializerOtherInput(Ort::ConstNode node, size_t data_index,
 
 bool ShapesAreSupported(Ort::ConstValueInfo q, Ort::ConstValueInfo k,
                         Ort::ConstValueInfo v, Ort::ConstValueInfo output) {
-  if (!IsFloatTensorValueInfo(q) || !IsFloatTensorValueInfo(k) ||
-      !IsFloatTensorValueInfo(v) || !IsFloatTensorValueInfo(output)) {
+  // Keep the type gate local to this fusion: other matchers intentionally use
+  // IsFloatTensorValueInfo() to mean FP32 only.
+  if (!MhtaSdpaShapesHaveSameDataType(q, k, v, output)) {
     return false;
   }
 
@@ -146,6 +187,9 @@ bool IsUnsqueezeAxis2(Ort::ConstNode unsqueeze_node) {
 bool ShapesAreSupportedForSimRank3(Ort::ConstValueInfo q, Ort::ConstValueInfo k,
                                    Ort::ConstValueInfo v,
                                    Ort::ConstValueInfo output) {
+  if (!MhtaSdpaShapesHaveSameDataType(q, k, v, output)) {
+    return false;
+  }
   auto q_shape = GetTensorShape(q);
   auto k_shape = GetTensorShape(k);
   auto v_shape = GetTensorShape(v);

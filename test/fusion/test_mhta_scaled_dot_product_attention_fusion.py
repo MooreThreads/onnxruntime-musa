@@ -19,7 +19,15 @@ import numpy as np
 import onnxruntime as ort
 from onnx import helper, numpy_helper
 
-from op_test_utils import TensorProto, build_graph_model, musa_devices, run_model_and_compare
+from op_test_utils import (
+    TensorProto,
+    bfloat16_bits_to_float32,
+    build_graph_model,
+    float32_to_bfloat16_bits,
+    musa_devices,
+    run_model_and_compare,
+    run_with_iobinding,
+)
 
 
 def _profile_musa_session(model: bytes, feeds: dict[str, np.ndarray], tmp_path, prefix: str):
@@ -48,6 +56,55 @@ def _ops_by_provider(events):
         args = event.get("args", {})
         ops.setdefault(args.get("provider"), set()).add(args.get("op_name"))
     return ops
+
+
+def _mhta_bhsd_nodes():
+    return [
+        helper.make_node("MatMul", ["Q", "K"], ["Score"]),
+        helper.make_node("Mul", ["Score", "scale"], ["Scaled"]),
+        helper.make_node("Add", ["Scaled", "zero_mask"], ["Masked"]),
+        helper.make_node("Div", ["Masked", "temperature"], ["TempScaled"]),
+        helper.make_node("Softmax", ["TempScaled"], ["Prob"], axis=-1),
+        helper.make_node("MatMul", ["Prob", "V"], ["Y"]),
+    ]
+
+
+def _build_bfloat16_mhta_model(feeds, scale, temperature, zero_mask):
+    def bf16_initializer(name, values):
+        return helper.make_tensor(
+            name,
+            TensorProto.BFLOAT16,
+            values.shape,
+            values.astype(np.uint16).tobytes(),
+            raw=True,
+        )
+
+    input_vis = [
+        helper.make_tensor_value_info(name, TensorProto.BFLOAT16, value.shape)
+        for name, value in feeds.items()
+    ]
+    graph = helper.make_graph(
+        _mhta_bhsd_nodes(),
+        "mhta_scaled_dot_product_attention_bfloat16_graph",
+        input_vis,
+        [helper.make_tensor_value_info("Y", TensorProto.BFLOAT16, None)],
+        initializer=[
+            bf16_initializer("scale", scale),
+            bf16_initializer("temperature", temperature),
+            bf16_initializer("zero_mask", zero_mask),
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
+
+
+def _reference_sdpa(q, k, v, scale, temperature):
+    score = np.matmul(q, k) * scale / temperature
+    score = score - np.max(score, axis=-1, keepdims=True)
+    prob = np.exp(score)
+    prob /= np.sum(prob, axis=-1, keepdims=True)
+    return np.matmul(prob, v)
 
 
 def test_mhta_scaled_dot_product_attention_fusion(tmp_path):
@@ -90,6 +147,75 @@ def test_mhta_scaled_dot_product_attention_fusion(tmp_path):
     assert "Softmax" not in musa_ops
     assert "Div" not in musa_ops
     assert "Mul" not in musa_ops
+
+
+def test_mhta_scaled_dot_product_attention_fp16_runflash(tmp_path):
+    """FP16 must take the muDNN RunFlash branch and remain fused."""
+    rng = np.random.default_rng(45)
+    batch, heads, seqlen, head_dim = 1, 2, 4, 8
+    feeds = {
+        "Q": rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float16),
+        "K": rng.standard_normal((batch, heads, head_dim, seqlen)).astype(np.float16),
+        "V": rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float16),
+    }
+    scale = np.array(0.25, dtype=np.float16)
+    temperature = np.array(2.0, dtype=np.float16)
+    zero_mask = np.zeros((batch, heads, seqlen, seqlen), dtype=np.float16)
+    model = build_graph_model(
+        _mhta_bhsd_nodes(),
+        inputs=feeds,
+        outputs=[("Y", TensorProto.FLOAT16)],
+        initializers=[
+            numpy_helper.from_array(scale, name="scale"),
+            numpy_helper.from_array(temperature, name="temperature"),
+            numpy_helper.from_array(zero_mask, name="zero_mask"),
+        ],
+        name="mhta_scaled_dot_product_attention_fp16_graph",
+    )
+
+    run_model_and_compare(model, feeds, rtol=2e-2, atol=2e-2)
+    _, events = _profile_musa_session(model, feeds, tmp_path, "mhta_sdpa_fp16")
+    musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+    assert "Softmax" not in musa_ops
+
+
+def test_mhta_scaled_dot_product_attention_bfloat16_runflash():
+    """BF16 raw buffers exercise the same RunFlash dtype dispatch."""
+    rng = np.random.default_rng(46)
+    batch, heads, seqlen, head_dim = 1, 2, 4, 8
+    q_f32 = rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float32)
+    k_f32 = rng.standard_normal((batch, heads, head_dim, seqlen)).astype(np.float32)
+    v_f32 = rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float32)
+    feeds = {
+        "Q": float32_to_bfloat16_bits(q_f32),
+        "K": float32_to_bfloat16_bits(k_f32),
+        "V": float32_to_bfloat16_bits(v_f32),
+    }
+    scale = float32_to_bfloat16_bits(np.array(0.25, dtype=np.float32))
+    temperature = float32_to_bfloat16_bits(np.array(2.0, dtype=np.float32))
+    zero_mask = float32_to_bfloat16_bits(
+        np.zeros((batch, heads, seqlen, seqlen), dtype=np.float32)
+    )
+    model = _build_bfloat16_mhta_model(feeds, scale, temperature, zero_mask)
+
+    outputs = run_with_iobinding(
+        model,
+        feeds,
+        {name: TensorProto.BFLOAT16 for name in feeds},
+        [("Y", TensorProto.BFLOAT16, (batch, heads, seqlen, head_dim))],
+        use_musa=True,
+    )
+    expected = _reference_sdpa(
+        bfloat16_bits_to_float32(feeds["Q"]),
+        bfloat16_bits_to_float32(feeds["K"]),
+        bfloat16_bits_to_float32(feeds["V"]),
+        float(bfloat16_bits_to_float32(scale)),
+        float(bfloat16_bits_to_float32(temperature)),
+    )
+    np.testing.assert_allclose(
+        bfloat16_bits_to_float32(outputs[0]), expected, rtol=6e-2, atol=6e-2
+    )
 
 
 def test_mhta_scaled_dot_product_attention_sim_rank3_fusion(tmp_path):

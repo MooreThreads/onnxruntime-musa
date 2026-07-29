@@ -13,6 +13,8 @@
 
 #include "graph/graph_utils.h"
 
+#include <cstring>
+
 #include "plugin_ep_utils.h"
 
 namespace musa_ep {
@@ -239,12 +241,51 @@ std::optional<float> ReadScalarFloatInitializer(
   }
 
   auto info = value.GetTensorTypeAndShapeInfo();
-  if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-      info.GetElementCount() != 1) {
+  if (info.GetElementCount() != 1) {
     return std::nullopt;
   }
-
-  return value.GetTensorData<float>()[0];
+  switch (info.GetElementType()) {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+      return value.GetTensorData<float>()[0];
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE:
+      return static_cast<float>(value.GetTensorData<double>()[0]);
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16: {
+      const uint32_t bits =
+          static_cast<uint32_t>(value.GetTensorData<uint16_t>()[0]) << 16;
+      float result;
+      std::memcpy(&result, &bits, sizeof(result));
+      return result;
+    }
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16: {
+      const uint16_t bits = value.GetTensorData<uint16_t>()[0];
+      const uint32_t sign = static_cast<uint32_t>(bits & 0x8000) << 16;
+      uint32_t exponent = (bits >> 10) & 0x1f;
+      uint32_t mantissa = bits & 0x03ff;
+      uint32_t out_bits;
+      if (exponent == 0) {
+        if (mantissa == 0) {
+          out_bits = sign;
+        } else {
+          exponent = 127 - 15 + 1;
+          while ((mantissa & 0x0400) == 0) {
+            mantissa <<= 1;
+            --exponent;
+          }
+          mantissa &= 0x03ff;
+          out_bits = sign | (exponent << 23) | (mantissa << 13);
+        }
+      } else if (exponent == 0x1f) {
+        out_bits = sign | 0x7f800000 | (mantissa << 13);
+      } else {
+        out_bits = sign | ((exponent + 127 - 15) << 23) | (mantissa << 13);
+      }
+      float result;
+      std::memcpy(&result, &out_bits, sizeof(result));
+      return result;
+    }
+    default:
+      return std::nullopt;
+  }
 }
 
 std::optional<std::vector<int64_t>> ReadUnsqueezeAxes(

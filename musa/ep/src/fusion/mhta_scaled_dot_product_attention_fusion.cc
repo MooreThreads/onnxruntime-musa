@@ -17,6 +17,7 @@
 #include <musa_runtime.h>
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -27,12 +28,11 @@
 
 #include "fusion/mhta_scaled_dot_product_attention_utils.h"
 #include "graph/graph_utils.h"
+#include "kernels/llm/mhta_sdpa_fp32_impl.h"
 #include "kernels/shared_inc/blas_utils.h"
 #include "kernels/shared_inc/op_kernel_common.h"
 
 namespace {
-
-void NoOpDelete(void*) {}
 
 std::string Name(Ort::ConstValueInfo value_info) {
   return value_info.GetName();
@@ -50,28 +50,13 @@ std::vector<int64_t> Shape(Ort::ConstValue value) {
   return value.GetTensorTypeAndShapeInfo().GetShape();
 }
 
-void CheckStatus(::musa::dnn::Status status, const char* message) {
-  if (status != ::musa::dnn::Status::SUCCESS) {
-    throw std::runtime_error(std::string(message) + ", status: " +
-                             std::to_string(static_cast<int>(status)));
-  }
-}
-
 float ReadScalarFloatAttributeInput(Ort::ConstValueInfo input) {
-  if (!input.IsConstantInitializer()) {
-    throw std::runtime_error("MHTA SDPA scalar input is not an initializer");
+  auto value = musa_ep::ReadScalarFloatInitializer(input);
+  if (!value.has_value()) {
+    throw std::runtime_error(
+        "MHTA SDPA scalar initializer must be a floating-point scalar");
   }
-  Ort::ConstValue value{nullptr};
-  Ort::Status status = input.GetInitializer(value);
-  if (!status.IsOK()) {
-    throw std::runtime_error("failed to read MHTA SDPA scalar initializer");
-  }
-  auto info = value.GetTensorTypeAndShapeInfo();
-  if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-      info.GetElementCount() != 1) {
-    throw std::runtime_error("MHTA SDPA scalar initializer must be float");
-  }
-  return value.GetTensorData<float>()[0];
+  return *value;
 }
 
 std::unordered_map<std::string, size_t> FusedInputIndices(
@@ -92,78 +77,6 @@ size_t InputIndex(const std::unordered_map<std::string, size_t>& indices,
   }
   return it->second;
 }
-
-class DeviceBuffer {
- public:
-  DeviceBuffer() = default;
-  DeviceBuffer(const DeviceBuffer&) = delete;
-  DeviceBuffer& operator=(const DeviceBuffer&) = delete;
-
-  ~DeviceBuffer() {
-    if (ptr_ != nullptr) {
-      (void)musaFree(ptr_);
-    }
-  }
-
-  void Resize(size_t bytes, musaStream_t stream) {
-    if (bytes <= bytes_) {
-      stream_ = stream;
-      return;
-    }
-    if (ptr_ != nullptr) {
-      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
-      ptr_ = nullptr;
-      bytes_ = 0;
-    }
-    if (bytes == 0) {
-      return;
-    }
-    ptr_ = AllocateDeviceMemoryOnStream(bytes, stream);
-    if (ptr_ == nullptr) {
-      throw std::runtime_error(MusaErrorString(musaErrorMemoryAllocation));
-    }
-    stream_ = stream;
-    bytes_ = bytes;
-  }
-
-  void* get() const { return ptr_; }
-
-  template <typename T>
-  T* data() const {
-    return reinterpret_cast<T*>(ptr_);
-  }
-
- private:
-  void* ptr_ = nullptr;
-  size_t bytes_ = 0;
-  musaStream_t stream_ = nullptr;
-};
-
-struct MhtaSdpaScratch {
-  DeviceBuffer logsumexp;
-  DeviceBuffer dropout_mask;
-  DeviceBuffer attn_probs;
-  DeviceBuffer q_transposed;
-  DeviceBuffer k_transposed;
-  DeviceBuffer mask_scaled;
-  DeviceBuffer mask_scale_scalar;
-  std::vector<std::unique_ptr<DeviceBuffer>> workspaces;
-  size_t workspace_index = 0;
-
-  void ResetWorkspace() { workspace_index = 0; }
-
-  void* Workspace(size_t bytes, musaStream_t stream) {
-    if (bytes == 0) {
-      return nullptr;
-    }
-    if (workspace_index == workspaces.size()) {
-      workspaces.push_back(std::make_unique<DeviceBuffer>());
-    }
-    DeviceBuffer& buffer = *workspaces[workspace_index++];
-    buffer.Resize(bytes, stream);
-    return buffer.get();
-  }
-};
 
 enum class MhtaSdpaLayout {
   kBhsd,
@@ -197,76 +110,122 @@ class MhtaScaledDotProductAttentionFusionCompute final
   MhtaSdpaLayout layout_;
 };
 
-void ValidateFloatTensor(Ort::ConstValue value, const char* name) {
+bool IsMhtaSdpaTensorType(ONNXTensorElementDataType elem_type) {
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE;
+}
+
+void ValidateMhtaSdpaTensor(Ort::ConstValue value, const char* name) {
   auto info = value.GetTensorTypeAndShapeInfo();
-  if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    throw std::runtime_error(std::string("MHTA SDPA only supports float ") +
+  if (!IsMhtaSdpaTensorType(info.GetElementType())) {
+    throw std::runtime_error(std::string("MHTA SDPA only supports floating ") +
                              name);
   }
 }
 
-void SetupFloatTensor(::musa::dnn::Tensor& tensor, const void* data,
-                      const std::vector<int64_t>& shape, const char* name) {
-  if (!SetMudnnFloatTensor(tensor, data, shape)) {
+class DeviceBuffer {
+ public:
+  ~DeviceBuffer() {
+    if (ptr_ != nullptr) (void)musaFree(ptr_);
+  }
+  void Resize(size_t bytes) {
+    if (bytes <= bytes_) return;
+    if (ptr_ != nullptr) (void)musaFree(ptr_);
+    ptr_ = nullptr;
+    bytes_ = 0;
+    if (bytes != 0 && musaMalloc(&ptr_, bytes) != musaSuccess) {
+      throw std::runtime_error(MusaErrorString(musaErrorMemoryAllocation));
+    }
+    bytes_ = bytes;
+  }
+  void* data() const { return ptr_; }
+
+ private:
+  void* ptr_ = nullptr;
+  size_t bytes_ = 0;
+};
+
+size_t MhtaSdpaElementSize(ONNXTensorElementDataType elem_type) {
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return sizeof(float);
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) return sizeof(double);
+  return sizeof(uint16_t);
+}
+
+void CheckStatus(::musa::dnn::Status status, const char* message) {
+  if (status != ::musa::dnn::Status::SUCCESS) {
+    throw std::runtime_error(std::string(message) + ", status: " +
+                             std::to_string(static_cast<int>(status)));
+  }
+}
+
+void SetupTensor(::musa::dnn::Tensor& tensor, const void* data,
+                 const std::vector<int64_t>& shape,
+                 ONNXTensorElementDataType elem_type, const char* name) {
+  if (!SetMudnnTensor(tensor, data, shape, elem_type)) {
     throw std::runtime_error(std::string("failed to set MHTA SDPA tensor ") +
                              name);
   }
 }
 
-void RunMudnnPermute(::musa::dnn::Handle& handle, const void* input_data,
-                     DeviceBuffer& output,
-                     const std::vector<int64_t>& input_shape,
-                     const std::vector<int64_t>& output_shape,
-                     const std::vector<int64_t>& perm, musaStream_t stream,
-                     const char* name) {
-  output.Resize(static_cast<size_t>(NumElements(output_shape)) * sizeof(float),
-                stream);
-  ::musa::dnn::Tensor input_tensor;
-  ::musa::dnn::Tensor output_tensor;
-  SetupFloatTensor(input_tensor, input_data, input_shape, name);
-  SetupFloatTensor(output_tensor, output.data<float>(), output_shape, name);
-  ::musa::dnn::Permute op;
-  CheckStatus(op.ConfigDimStride(output_tensor, input_tensor,
-                                 static_cast<int>(perm.size()), perm.data()),
-              "failed to configure MHTA SDPA permute");
-  CheckStatus(op.Run(handle, output_tensor, input_tensor),
-              "MHTA SDPA permute failed");
+uint16_t FloatToHalfBits(float value) {
+  uint32_t bits;
+  std::memcpy(&bits, &value, sizeof(bits));
+  const uint32_t sign = (bits >> 16) & 0x8000;
+  const uint32_t exponent = (bits >> 23) & 0xff;
+  const uint32_t mantissa = bits & 0x7fffff;
+  if (exponent >= 143) return static_cast<uint16_t>(sign | 0x7c00);
+  if (exponent <= 112) return static_cast<uint16_t>(sign);
+  const uint32_t rounded = mantissa + 0x1000;
+  return static_cast<uint16_t>(sign | ((exponent - 112) << 10) |
+                               (rounded >> 13));
 }
 
-const void* ScaleMaskIfNeeded(::musa::dnn::Handle& handle,
-                              const void* mask_data,
-                              const std::vector<int64_t>& mask_shape,
-                              float mask_scale, MhtaSdpaScratch& scratch,
-                              musaStream_t stream) {
-  if (mask_scale == 1.0f) {
-    return mask_data;
+void WriteMhtaSdpaScalar(void* dst, float value,
+                         ONNXTensorElementDataType elem_type) {
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    std::memcpy(dst, &value, sizeof(value));
+  } else if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) {
+    const double double_value = value;
+    std::memcpy(dst, &double_value, sizeof(double_value));
+  } else if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
+    const uint16_t bits = FloatToHalfBits(value);
+    std::memcpy(dst, &bits, sizeof(bits));
+  } else {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    const uint16_t bf16 =
+        static_cast<uint16_t>((bits + 0x7fff + ((bits >> 16) & 1)) >> 16);
+    std::memcpy(dst, &bf16, sizeof(bf16));
   }
+}
 
-  scratch.mask_scaled.Resize(
-      static_cast<size_t>(NumElements(mask_shape)) * sizeof(float), stream);
-  scratch.mask_scale_scalar.Resize(sizeof(float), stream);
-  musaError_t copy_status =
-      musaMemcpyAsync(scratch.mask_scale_scalar.data<float>(), &mask_scale,
-                      sizeof(float), musaMemcpyHostToDevice, stream);
-  if (copy_status != musaSuccess) {
-    throw std::runtime_error(MusaErrorString(copy_status));
+bool SetupMhtaSdpaMaskParams(const std::vector<int64_t>& mask_shape,
+                             int64_t batch, int64_t heads, int64_t seqlen_q,
+                             int64_t seqlen_k, MusaMhtaSdpaFp32Params* params) {
+  if (mask_shape.empty() || mask_shape.size() > 4) {
+    return false;
   }
-
-  ::musa::dnn::Tensor mask_tensor;
-  ::musa::dnn::Tensor scalar_tensor;
-  ::musa::dnn::Tensor output_tensor;
-  SetupFloatTensor(mask_tensor, mask_data, mask_shape, "mask");
-  SetupFloatTensor(scalar_tensor, scratch.mask_scale_scalar.data<float>(), {1},
-                   "mask scale");
-  SetupFloatTensor(output_tensor, scratch.mask_scaled.data<float>(), mask_shape,
-                   "scaled mask");
-
-  ::musa::dnn::Binary mul;
-  CheckStatus(mul.SetMode(::musa::dnn::Binary::Mode::MUL),
-              "failed to set MHTA SDPA mask scale mode");
-  CheckStatus(mul.Run(handle, output_tensor, mask_tensor, scalar_tensor),
-              "MHTA SDPA mask scale failed");
-  return scratch.mask_scaled.data<float>();
+  int64_t dims[4] = {1, 1, 1, 1};
+  const size_t padding = 4 - mask_shape.size();
+  for (size_t i = 0; i < mask_shape.size(); ++i) {
+    if (mask_shape[i] <= 0) {
+      return false;
+    }
+    dims[padding + i] = mask_shape[i];
+  }
+  const int64_t target[4] = {batch, heads, seqlen_q, seqlen_k};
+  for (size_t i = 0; i < 4; ++i) {
+    if (dims[i] != 1 && dims[i] != target[i]) {
+      return false;
+    }
+  }
+  params->mask_b = dims[0];
+  params->mask_h = dims[1];
+  params->mask_q = dims[2];
+  params->mask_k = dims[3];
+  return true;
 }
 
 OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
@@ -274,16 +233,24 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
   try {
     Ort::KernelContext ctx(kernel_context);
     musaStream_t stream = GetComputeStream(ctx);
-    thread_local MhtaSdpaScratch scratch;
 
     Ort::ConstValue q = ctx.GetInput(q_index_);
     Ort::ConstValue k = ctx.GetInput(k_index_);
     Ort::ConstValue v = ctx.GetInput(v_index_);
     Ort::ConstValue mask = ctx.GetInput(mask_index_);
-    ValidateFloatTensor(q, "Q");
-    ValidateFloatTensor(k, "K");
-    ValidateFloatTensor(v, "V");
-    ValidateFloatTensor(mask, "mask");
+    ValidateMhtaSdpaTensor(q, "Q");
+    ValidateMhtaSdpaTensor(k, "K");
+    ValidateMhtaSdpaTensor(v, "V");
+    ValidateMhtaSdpaTensor(mask, "mask");
+    const ONNXTensorElementDataType elem_type =
+        q.GetTensorTypeAndShapeInfo().GetElementType();
+    if (k.GetTensorTypeAndShapeInfo().GetElementType() != elem_type ||
+        v.GetTensorTypeAndShapeInfo().GetElementType() != elem_type ||
+        mask.GetTensorTypeAndShapeInfo().GetElementType() != elem_type) {
+      return Ort::GetApi().CreateStatus(
+          ORT_NOT_IMPLEMENTED,
+          "MHTA SDPA requires Q/K/V/mask to have the same element type");
+    }
 
     std::vector<int64_t> q_shape = Shape(q);
     std::vector<int64_t> k_shape = Shape(k);
@@ -294,9 +261,6 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     }
 
     const bool sim_rank3 = layout_ == MhtaSdpaLayout::kSimRank3;
-    std::vector<int64_t> sdpa_q_shape;
-    std::vector<int64_t> sdpa_k_shape;
-    std::vector<int64_t> sdpa_v_shape;
     std::vector<int64_t> output_shape;
     if (sim_rank3) {
       if (q_shape[1] != 1 || k_shape[0] != q_shape[0] ||
@@ -307,9 +271,6 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
             ORT_NOT_IMPLEMENTED,
             "MHTA SDPA sim layout expects Q[B,1,H,D], K[B,S,H,D], V[B,H,S,D]");
       }
-      sdpa_q_shape = {q_shape[0], q_shape[2], q_shape[1], q_shape[3]};
-      sdpa_k_shape = {k_shape[0], k_shape[2], k_shape[1], k_shape[3]};
-      sdpa_v_shape = v_shape;
       output_shape = {q_shape[0], q_shape[1], q_shape[2] * q_shape[3]};
     } else {
       if (q_shape[0] != k_shape[0] || q_shape[0] != v_shape[0] ||
@@ -320,9 +281,6 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
             ORT_INVALID_ARGUMENT,
             "MHTA SDPA expects Q[B,H,S,D], K[B,H,D,S], V[B,H,S,D]");
       }
-      sdpa_q_shape = q_shape;
-      sdpa_k_shape = k_shape;
-      sdpa_v_shape = v_shape;
       output_shape = {q_shape[0], q_shape[1], q_shape[2], v_shape[3]};
     }
     Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
@@ -331,11 +289,11 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                                         "MHTA SDPA requires MUSA output");
     }
 
-    const int64_t batch = sdpa_q_shape[0];
-    const int64_t heads = sim_rank3 ? q_shape[2] : sdpa_q_shape[1];
-    const int64_t seqlen_q = sim_rank3 ? q_shape[1] : sdpa_q_shape[2];
-    const int64_t seqlen_k = sim_rank3 ? sdpa_k_shape[2] : sdpa_k_shape[3];
-    const int64_t head_dim = sdpa_q_shape[3];
+    const int64_t batch = q_shape[0];
+    const int64_t heads = sim_rank3 ? q_shape[2] : q_shape[1];
+    const int64_t seqlen_q = sim_rank3 ? q_shape[1] : q_shape[2];
+    const int64_t seqlen_k = sim_rank3 ? k_shape[1] : k_shape[3];
+    const int64_t head_dim = q_shape[3];
     if (batch <= 0 || heads <= 0 || seqlen_q <= 0 || seqlen_k <= 0 ||
         head_dim <= 0) {
       return nullptr;
@@ -351,45 +309,132 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     RETURN_IF_ERROR(mask_buffer.Bind(mask, stream));
     const std::vector<int64_t> mask_shape = Shape(mask);
 
-    scratch.logsumexp.Resize(
-        static_cast<size_t>(batch * heads * seqlen_q) * sizeof(float), stream);
-    scratch.dropout_mask.Resize(sizeof(float), stream);
-    ::musa::dnn::Handle* handle = nullptr;
-    RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
-    CheckStatus(handle->SetAllowTF32(false),
-                "failed to disable TF32 for MHTA SDPA");
+    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+      MusaMhtaSdpaFp32Params params{
+          batch, heads, seqlen_q, seqlen_k, head_dim,   scale_,   mask_scale_,
+          0,     0,     0,        0,        !sim_rank3, sim_rank3};
+      if (!SetupMhtaSdpaMaskParams(mask_shape, batch, heads, seqlen_q, seqlen_k,
+                                   &params)) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "MHTA SDPA FP32 kernel requires a broadcastable rank-1 to rank-4 "
+            "mask");
+      }
+      musaError_t launch_status = LaunchMusaMhtaSdpaFp32Kernel(
+          static_cast<const float*>(q_buffer.data()),
+          static_cast<const float*>(k_buffer.data()),
+          static_cast<const float*>(v_buffer.data()),
+          static_cast<const float*>(mask_buffer.data()),
+          output.GetTensorMutableData<float>(), params, stream);
+      if (launch_status != musaSuccess) {
+        throw std::runtime_error(std::string("MHTA SDPA FP32 kernel failed: ") +
+                                 MusaErrorString(launch_status));
+      }
+      return nullptr;
+    }
 
+    DeviceBuffer q_transposed;
+    DeviceBuffer k_transposed;
+    DeviceBuffer mask_scaled;
+    DeviceBuffer scalar;
     const void* q_data = q_buffer.data();
     const void* k_data = k_buffer.data();
+    std::vector<int64_t> sdpa_q_shape = q_shape;
+    std::vector<int64_t> sdpa_k_shape = k_shape;
     if (sim_rank3) {
-      RunMudnnPermute(*handle, q_buffer.data(), scratch.q_transposed, q_shape,
-                      sdpa_q_shape, {0, 2, 1, 3}, stream, "Q");
-      RunMudnnPermute(*handle, k_buffer.data(), scratch.k_transposed, k_shape,
-                      sdpa_k_shape, {0, 2, 1, 3}, stream, "K");
-      q_data = scratch.q_transposed.data<float>();
-      k_data = scratch.k_transposed.data<float>();
+      sdpa_q_shape = {batch, heads, seqlen_q, head_dim};
+      sdpa_k_shape = {batch, heads, seqlen_k, head_dim};
+      q_transposed.Resize(
+          static_cast<size_t>(batch * heads * seqlen_q * head_dim) *
+          MhtaSdpaElementSize(elem_type));
+      k_transposed.Resize(
+          static_cast<size_t>(batch * heads * seqlen_k * head_dim) *
+          MhtaSdpaElementSize(elem_type));
+      ::musa::dnn::Handle* handle = nullptr;
+      RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
+      ::musa::dnn::Tensor input_tensor, output_tensor;
+      SetupTensor(input_tensor, q_data, q_shape, elem_type, "Q");
+      SetupTensor(output_tensor, q_transposed.data(), sdpa_q_shape, elem_type,
+                  "Q transpose");
+      const int64_t perm[] = {0, 2, 1, 3};
+      ::musa::dnn::Permute permute;
+      CheckStatus(permute.ConfigDimStride(output_tensor, input_tensor, 4, perm),
+                  "failed to configure MHTA SDPA Q permute");
+      CheckStatus(permute.Run(*handle, output_tensor, input_tensor),
+                  "MHTA SDPA Q permute failed");
+      SetupTensor(input_tensor, k_data, k_shape, elem_type, "K");
+      SetupTensor(output_tensor, k_transposed.data(), sdpa_k_shape, elem_type,
+                  "K transpose");
+      CheckStatus(permute.ConfigDimStride(output_tensor, input_tensor, 4, perm),
+                  "failed to configure MHTA SDPA K permute");
+      CheckStatus(permute.Run(*handle, output_tensor, input_tensor),
+                  "MHTA SDPA K permute failed");
+      q_data = q_transposed.data();
+      k_data = k_transposed.data();
+    } else {
+      // FlashAttention consumes K in BHSD.  The MatMul graph provides BHDS.
+      sdpa_k_shape = {batch, heads, seqlen_k, head_dim};
+      k_transposed.Resize(
+          static_cast<size_t>(batch * heads * seqlen_k * head_dim) *
+          MhtaSdpaElementSize(elem_type));
+      ::musa::dnn::Handle* handle = nullptr;
+      RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
+      ::musa::dnn::Tensor input_tensor, output_tensor;
+      SetupTensor(input_tensor, k_data, k_shape, elem_type, "K");
+      SetupTensor(output_tensor, k_transposed.data(), sdpa_k_shape, elem_type,
+                  "K transpose");
+      const int64_t perm[] = {0, 1, 3, 2};
+      ::musa::dnn::Permute permute;
+      CheckStatus(permute.ConfigDimStride(output_tensor, input_tensor, 4, perm),
+                  "failed to configure MHTA SDPA K permute");
+      CheckStatus(permute.Run(*handle, output_tensor, input_tensor),
+                  "MHTA SDPA K permute failed");
+      k_data = k_transposed.data();
     }
-    const void* mask_data = ScaleMaskIfNeeded(
-        *handle, mask_buffer.data(), mask_shape, mask_scale_, scratch, stream);
 
-    ::musa::dnn::Tensor q_tensor;
-    ::musa::dnn::Tensor k_tensor;
-    ::musa::dnn::Tensor v_tensor;
-    ::musa::dnn::Tensor mask_tensor;
-    ::musa::dnn::Tensor output_tensor;
-    ::musa::dnn::Tensor lse_tensor;
-    ::musa::dnn::Tensor dropout_tensor;
-    SetupFloatTensor(q_tensor, q_data, sdpa_q_shape, "Q");
-    SetupFloatTensor(k_tensor, k_data, sdpa_k_shape, "K");
-    SetupFloatTensor(v_tensor, v_buffer.data(), sdpa_v_shape, "V");
-    SetupFloatTensor(mask_tensor, mask_data, mask_shape, "mask");
-    SetupFloatTensor(output_tensor, output.GetTensorMutableData<float>(),
-                     sim_rank3 ? sdpa_q_shape : output_shape, "output");
-    SetupFloatTensor(lse_tensor, scratch.logsumexp.data<float>(),
-                     {batch, heads, seqlen_q}, "logsumexp");
-    SetupFloatTensor(dropout_tensor, scratch.dropout_mask.data<float>(), {1},
-                     "dropout mask");
+    ::musa::dnn::Handle* handle = nullptr;
+    RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
+    const void* mask_data = mask_buffer.data();
+    if (mask_scale_ != 1.0f) {
+      const size_t mask_bytes = static_cast<size_t>(NumElements(mask_shape)) *
+                                MhtaSdpaElementSize(elem_type);
+      mask_scaled.Resize(mask_bytes);
+      scalar.Resize(MhtaSdpaElementSize(elem_type));
+      uint8_t scalar_host[sizeof(double)] = {};
+      WriteMhtaSdpaScalar(scalar_host, mask_scale_, elem_type);
+      musaError_t copy_status = musaMemcpyAsync(scalar.data(), scalar_host,
+                                                MhtaSdpaElementSize(elem_type),
+                                                musaMemcpyHostToDevice, stream);
+      if (copy_status != musaSuccess)
+        throw std::runtime_error(MusaErrorString(copy_status));
+      ::musa::dnn::Tensor mask_tensor, scalar_tensor, scaled_tensor;
+      SetupTensor(mask_tensor, mask_data, mask_shape, elem_type, "mask");
+      SetupTensor(scalar_tensor, scalar.data(), {1}, elem_type, "mask scale");
+      SetupTensor(scaled_tensor, mask_scaled.data(), mask_shape, elem_type,
+                  "scaled mask");
+      ::musa::dnn::Binary mul;
+      CheckStatus(mul.SetMode(::musa::dnn::Binary::Mode::MUL),
+                  "failed to set MHTA SDPA mask scale mode");
+      CheckStatus(mul.Run(*handle, scaled_tensor, mask_tensor, scalar_tensor),
+                  "MHTA SDPA mask scale failed");
+      mask_data = mask_scaled.data();
+    }
 
+    ::musa::dnn::Tensor q_tensor, k_tensor, v_tensor, mask_tensor, out_tensor,
+        lse_tensor, dropout_tensor;
+    SetupTensor(q_tensor, q_data, sdpa_q_shape, elem_type, "Q");
+    SetupTensor(k_tensor, k_data, sdpa_k_shape, elem_type, "K");
+    SetupTensor(v_tensor, v_buffer.data(), v_shape, elem_type, "V");
+    SetupTensor(mask_tensor, mask_data, mask_shape, elem_type, "mask");
+    SetupTensor(out_tensor, output.GetTensorMutableData<void>(),
+                sim_rank3 ? sdpa_q_shape : output_shape, elem_type, "output");
+    DeviceBuffer lse;
+    lse.Resize(static_cast<size_t>(batch * heads * seqlen_q) * sizeof(float));
+    SetupTensor(lse_tensor, lse.data(), {batch, heads, seqlen_q},
+                ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, "logsumexp");
+    // Inference has dropout disabled.  Passing a null tensor avoids Flash's
+    // output-mask shape contract [B,H,Sq,Sk] and its needless allocation.
+    SetupTensor(dropout_tensor, nullptr, {1}, elem_type, "dropout mask");
     ::musa::dnn::ScaledDotProductAttention sdpa;
     CheckStatus(
         sdpa.SetComputeMode(
@@ -406,8 +451,7 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                 "failed to set MHTA SDPA scale");
     CheckStatus(sdpa.SetTraining(false), "failed to set MHTA SDPA training");
     CheckStatus(sdpa.SetMaskMode(false), "failed to set MHTA SDPA mask mode");
-    CheckStatus(sdpa.SetKeyFormat(!sim_rank3),
-                "failed to set MHTA SDPA key format");
+    CheckStatus(sdpa.SetKeyFormat(false), "failed to set MHTA SDPA key format");
     CheckStatus(sdpa.SetCausal(false), "failed to set MHTA SDPA causal");
     CheckStatus(sdpa.SetIsDeterministic(true),
                 "failed to set MHTA SDPA deterministic");
@@ -415,26 +459,34 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                 "failed to set MHTA SDPA max seqlen q");
     CheckStatus(sdpa.SetMaxSeqlenK(static_cast<int>(seqlen_k)),
                 "failed to set MHTA SDPA max seqlen k");
-
-    scratch.attn_probs.Resize(
-        static_cast<size_t>(batch * heads * seqlen_q * seqlen_k) *
-            sizeof(float),
-        stream);
-    ::musa::dnn::Tensor attn_probs_tensor;
-    SetupFloatTensor(attn_probs_tensor, scratch.attn_probs.data<float>(),
-                     {batch, heads, seqlen_q, seqlen_k}, "attention probs");
-    scratch.ResetWorkspace();
-    auto allocator = [stream](size_t size) -> ::musa::dnn::MemoryHandler {
-      if (size == 0) {
-        return ::musa::dnn::MemoryHandler(nullptr, NoOpDelete);
-      }
-      return ::musa::dnn::MemoryHandler(scratch.Workspace(size, stream),
-                                        NoOpDelete);
-    };
-    CheckStatus(sdpa.RunMath(*handle, output_tensor, attn_probs_tensor,
-                             q_tensor, k_tensor, v_tensor, mask_tensor,
-                             dropout_tensor, allocator),
-                "MHTA SDPA RunMath failed");
+    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+        elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
+      CheckStatus(
+          sdpa.RunFlash(*handle, out_tensor, lse_tensor, q_tensor, k_tensor,
+                        v_tensor, mask_tensor, dropout_tensor),
+          "MHTA SDPA RunFlash failed");
+    } else {
+      DeviceBuffer attn_probs;
+      attn_probs.Resize(
+          static_cast<size_t>(batch * heads * seqlen_q * seqlen_k) *
+          MhtaSdpaElementSize(elem_type));
+      ::musa::dnn::Tensor probs_tensor;
+      SetupTensor(probs_tensor, attn_probs.data(),
+                  {batch, heads, seqlen_q, seqlen_k}, elem_type,
+                  "attention probabilities");
+      auto allocator = [](size_t bytes) -> ::musa::dnn::MemoryHandler {
+        void* workspace = nullptr;
+        if (bytes != 0 && musaMalloc(&workspace, bytes) != musaSuccess) {
+          throw std::runtime_error(MusaErrorString(musaErrorMemoryAllocation));
+        }
+        return ::musa::dnn::MemoryHandler(
+            workspace, [](void* ptr) { (void)musaFree(ptr); });
+      };
+      CheckStatus(
+          sdpa.RunMath(*handle, out_tensor, probs_tensor, q_tensor, k_tensor,
+                       v_tensor, mask_tensor, dropout_tensor, allocator),
+          "MHTA SDPA RunMath failed");
+    }
     return nullptr;
   } catch (const std::exception& ex) {
     Ort::Status status(ex.what(), ORT_EP_FAIL);

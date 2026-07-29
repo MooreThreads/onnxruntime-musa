@@ -1,11 +1,11 @@
 #pragma once
 
-#include "shared_inc/device_kernel_types.h"
-
 #include <math.h>
 #include <musa_bf16.h>
 #include <musa_fp16.h>
 #include <stdint.h>
+
+#include "shared_inc/device_kernel_types.h"
 
 namespace {
 
@@ -21,9 +21,7 @@ int BlocksForCount(int64_t count) {
 }
 
 __device__ __forceinline__ void ResolveBroadcastIndices(
-    int64_t index,
-    const MusaBroadcastParams& params,
-    int64_t& lhs_index,
+    int64_t index, const MusaBroadcastParams& params, int64_t& lhs_index,
     int64_t& rhs_index) {
   lhs_index = 0;
   rhs_index = 0;

@@ -101,6 +101,24 @@ cmake --build build/Release -j
 
 ---
 
+## Code formatting
+
+Format all C/C++ sources under `musa/ep/src/` with the repository's
+[`.clang-format`](.clang-format) configuration:
+
+```bash
+scripts/format.sh
+```
+
+The script requires `clang-format` to be available on `PATH` and edits files in place.
+To have staged C/C++ changes formatted automatically at commit time, install the repository hooks:
+
+```bash
+scripts/install-hooks.sh
+```
+
+---
+
 ## Install & run
 
 Python **3.11+** is required (enforced by the wheel's `requires-python`). Pinned

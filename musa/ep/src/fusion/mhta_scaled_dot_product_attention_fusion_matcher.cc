@@ -20,6 +20,7 @@
 
 #include "fusion/fusion_matcher.h"
 #include "fusion/fusion_matcher_utils.h"
+#include "fusion/mhta_scaled_dot_product_attention_utils.h"
 #include "graph/graph_utils.h"
 #include "plugin_ep_utils.h"
 
@@ -478,7 +479,8 @@ bool CanFuseSimRank3MhtaScaledDotProductAttention(
   auto equation = GetStringAttribute(score_einsum, "equation");
   auto score_inputs = score_einsum.GetInputs();
   auto score_outputs = score_einsum.GetOutputs();
-  if (!equation.has_value() || *equation != "ilhw,bjhw->bhl" ||
+  if (!equation.has_value() ||
+      !musa_ep::IsSupportedMhtaSimRank3Equation(*equation) ||
       score_inputs.size() != 2 || score_outputs.size() != 1 ||
       Name(score_outputs[0]) !=
           Name(scale_mul_inputs[static_cast<size_t>(scale_data_index)]) ||

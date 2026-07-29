@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "fusion/mhta_scaled_dot_product_attention_utils.h"
 #include "graph/graph_utils.h"
 #include "kernels/shared_inc/blas_utils.h"
 #include "kernels/shared_inc/op_kernel_common.h"
@@ -601,8 +602,9 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
     std::vector<Ort::ConstValueInfo> scale_mul_inputs =
         scale_mul_node.GetInputs();
     if (scale_data_index < 0 ||
-        musa_ep::GetStringAttribute(einsum_node, "equation").value_or("") !=
-            "ilhw,bjhw->bhl") {
+        !musa_ep::IsSupportedMhtaSimRank3Equation(
+            musa_ep::GetStringAttribute(einsum_node, "equation")
+                .value_or(""))) {
       throw std::runtime_error("invalid MHTA SDPA Einsum topology");
     }
     const float scale =

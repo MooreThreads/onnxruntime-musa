@@ -2,11 +2,14 @@
 
 #include <musa_runtime.h>
 
+#include <charconv>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -18,7 +21,67 @@ struct BaseAllocator : OrtAllocator {
   virtual ~BaseAllocator() = default;
 };
 
-using AllocatorUniquePtr = std::unique_ptr<BaseAllocator>;
+using BaseAllocatorUniquePtr = std::unique_ptr<BaseAllocator>;
+
+enum class ArenaCacheLimitParseResult {
+  kDisabled,
+  kEnabled,
+  kInvalid,
+};
+
+inline ArenaCacheLimitParseResult ParseArenaCacheLimitBytes(
+    size_t& limit_bytes) noexcept {
+  limit_bytes = 0;
+  const char* env = std::getenv("ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB");
+  if (env == nullptr || *env == '\0') {
+    return ArenaCacheLimitParseResult::kDisabled;
+  }
+
+  const std::string_view value{env};
+  uint64_t limit_mb = 0;
+  const auto [ptr, error] =
+      std::from_chars(value.data(), value.data() + value.size(), limit_mb);
+  if (error != std::errc{} || ptr != value.data() + value.size()) {
+    return ArenaCacheLimitParseResult::kInvalid;
+  }
+  if (limit_mb == 0) {
+    return ArenaCacheLimitParseResult::kDisabled;
+  }
+
+  constexpr size_t kBytesPerMb = 1024 * 1024;
+  if (limit_mb > std::numeric_limits<size_t>::max() / kBytesPerMb) {
+    return ArenaCacheLimitParseResult::kInvalid;
+  }
+
+  limit_bytes = static_cast<size_t>(limit_mb) * kBytesPerMb;
+  return ArenaCacheLimitParseResult::kEnabled;
+}
+
+enum class MusaAllocatorKind { kDevice, kPinned };
+
+struct AllocatorStats {
+  int64_t num_allocs = 0, num_reserves = 0, num_arena_extensions = 0,
+          num_arena_shrinkages = 0;
+  int64_t bytes_in_use = 0, total_allocated_bytes = 0, max_bytes_in_use = 0,
+          max_alloc_size = 0, bytes_limit = 0;
+  void ToKeyValuePairs(const OrtApi& api, OrtKeyValuePairs* kvps) const {
+    api.AddKeyValuePair(kvps, "Limit", std::to_string(bytes_limit).c_str());
+    api.AddKeyValuePair(kvps, "InUse", std::to_string(bytes_in_use).c_str());
+    api.AddKeyValuePair(kvps, "TotalAllocated",
+                        std::to_string(total_allocated_bytes).c_str());
+    api.AddKeyValuePair(kvps, "MaxInUse",
+                        std::to_string(max_bytes_in_use).c_str());
+    api.AddKeyValuePair(kvps, "NumAllocs", std::to_string(num_allocs).c_str());
+    api.AddKeyValuePair(kvps, "NumReserves",
+                        std::to_string(num_reserves).c_str());
+    api.AddKeyValuePair(kvps, "NumArenaExtensions",
+                        std::to_string(num_arena_extensions).c_str());
+    api.AddKeyValuePair(kvps, "NumArenaShrinkages",
+                        std::to_string(num_arena_shrinkages).c_str());
+    api.AddKeyValuePair(kvps, "MaxAllocSize",
+                        std::to_string(max_alloc_size).c_str());
+  }
+};
 
 struct CustomAllocator : BaseAllocator {
   explicit CustomAllocator(const OrtMemoryInfo* mem_info)

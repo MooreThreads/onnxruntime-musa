@@ -16,6 +16,7 @@
 #include <memory>
 
 #include "ep_allocator.h"
+#include "musa_arena.h"
 
 namespace {
 
@@ -131,7 +132,18 @@ MusaSyncStream::MusaSyncStream(const OrtApi& ort_api,
 }
 
 MusaSyncStream::~MusaSyncStream() {
-  CustomAllocator::ResetBlocksUsingStream(this);
+  // Release is not a device-completion fence. Complete this stream before
+  // detaching arena ownership; this is stream-local and also covers external
+  // user streams.
+  if (stream_ != nullptr) {
+    (void)musaStreamSynchronize(stream_);
+  }
+  OrtStatus* status =
+      onnxruntime::musa_plugin::MusaArenaAllocator::ResetAllChunksUsingStream(
+          this);
+  if (status != nullptr) {
+    Ort::GetApi().ReleaseStatus(status);
+  }
   if (owns_stream_ && stream_ != nullptr) {
     (void)musaStreamDestroy(stream_);
   }
@@ -165,8 +177,9 @@ MusaSyncStream::FlushImpl(OrtSyncStreamImpl* this_ptr) noexcept {
 
 OrtStatus* ORT_API_CALL
 MusaSyncStream::OnSessionRunEndImpl(OrtSyncStreamImpl* this_ptr) noexcept {
+  // RunEnd does not prove device completion for arena chunks. Ownership is
+  // retained until stream release, where the stream lifetime contract makes
+  // clearing it safe.
   (void)this_ptr;
-  // ORT calls Flush separately when a synchronized Run requires host-visible
-  // completion. Keep same-stream allocator caches intact across runs.
   return nullptr;
 }

@@ -185,14 +185,31 @@ ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID_PATH=/tmp/musa_runtime_execution_graph.mmd \
 
 ### `ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB`
 
-- 读取位置：`musa/ep/src/ep_allocator.h`
-- 用途：控制 MUSA device allocator 的缓存上限。
-- 默认值：未设置时为 `0`，即不启用该 allocator cache。
-- 解析规则：按十进制 MB 解析；小于等于 0 时视为 0。
+- 读取位置：`musa/ep/src/ep_factory.cc`；严格解析 helper 位于
+  `musa/ep/src/ep_allocator.h`，arena 配置位于
+  `musa/ep/src/musa_arena.cc`。
+- 用途：正值启用 stream-ordered MUSA device arena，并作为 arena
+  reservation 的 hard limit。arena 在该预算内保留底层 region，通过 ORT
+  stream ownership 隔离 free chunk：有 owner 的 chunk 仅由同一 stream
+  复用；释放 sync-stream 实现时会先执行该 stream 的局部完成同步，再解除
+  ownership 并允许其他 stream 复用。不会执行 device-wide 同步；该 release
+  路径会等待该 stream 上已提交的工作完成。没有 `OrtSyncStream` 的分配不进入
+  可复用 arena，而是 direct allocation/free，避免在共享 Session 多流 Run 中把
+  unowned block 交给另一条 stream。
+- 默认值：未设置或设置为 `0` 时不启用 arena，继续使用原始
+  `CustomAllocator` 分配/释放路径。
+- 解析规则：必须是完整的非负十进制 MB 整数；尾部字符、负数和换算溢出均会
+  返回配置错误。
+- 适用场景：共享 Session、同卡多流并发 Run。启用后通常减少
+  `musaMalloc`/`musaFree`，但可能提高 session 生命周期内的常驻和峰值显存，
+  并增加 region 分配成本。该值不会直接成为首次 region 大小；arena 仍按默认
+  初始/增长策略在 hard limit 内按需扩展。预算不足时 Session 创建或 Run 会明确
+  失败，需按模型峰值提高配置。吞吐收益依赖模型和显存预算，不作普遍保证。
+- 回滚：设置 `ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB=0` 并重新创建 Session。
 - 示例：
 
 ```bash
-ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB=512 ./.venv/bin/python your_script.py
+ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB=128 ./.venv/bin/python your_script.py
 ```
 
 ### `ORT_MUSA_PINNED_POOL_CACHE_LIMIT_MB`
@@ -262,7 +279,7 @@ MUSA_ENABLE_TF32=1 ./.venv/bin/python your_script.py
 | `ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID_PATH` | EP 调试 | `musa_ep_runtime_execution_graph.mmd` | 指定 runtime execution graph Mermaid 输出文件 |
 | `MUSA_EP_TRACE_KERNELS` | EP 调试 | 关闭 | 打印 kernel 创建/执行 trace |
 | `MUSA_EP_TRACE_SYNC` | EP 调试 | 关闭 | trace 模式下强制 stream 同步 |
-| `ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB` | 内存调优 | `0` MB | Device allocator cache 上限 |
+| `ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB` | 内存调优 | `0` MB | Stream-ordered device arena reservation hard limit |
 | `ORT_MUSA_PINNED_POOL_CACHE_LIMIT_MB` | 内存调优 | `1024` MB | Pinned host pool cache 上限 |
 | `ORT_MUSA_ENABLE_PAGEABLE_H2D_BOUNCE` | 数据搬运 | 开启 | 控制 pageable H2D pinned staging bounce |
 | `ORT_MUSA_PAGEABLE_H2D_BOUNCE_THRESHOLD_BYTES` | 数据搬运 | `1024` bytes | 单次 H2D bounce 最小字节数 |
@@ -299,6 +316,6 @@ MUSA_EP_TRACE_SYNC=1 \
 
 ```bash
 MUSA_VISIBLE_DEVICES=0 \
-ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB=512 \
+ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB=128 \
 ./.venv/bin/python your_script.py
 ```

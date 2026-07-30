@@ -113,6 +113,11 @@ std::vector<FusionMatch> FindFusionMatches(
                  std::move(mhta_scaled_dot_product_attention_fusions),
                  accepted_node_ids);
 
+  auto reduced_mha_flash_fusions = FindReducedMhaFlashFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindReducedMhaFlashFusions", false,
+                 std::move(reduced_mha_flash_fusions), accepted_node_ids);
+
   auto split_unsqueeze_concat_fusions = FindSplitUnsqueezeConcatFusions(
       all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindSplitUnsqueezeConcatFusions", false,

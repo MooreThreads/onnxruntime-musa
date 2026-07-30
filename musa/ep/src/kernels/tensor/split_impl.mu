@@ -89,6 +89,47 @@ __global__ void SplitManySmallRowsKernel(
   }
 }
 
+__global__ void SplitEqualRowsKernel(
+    const uint8_t* input, MusaSplitOutputPointers outputs, int64_t output_count,
+    int64_t total_elements, int64_t input_row_elements,
+    int64_t output_row_elements, int32_t element_size) {
+  for (int64_t input_element =
+           static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       input_element < total_elements;
+       input_element += static_cast<int64_t>(blockDim.x) * gridDim.x) {
+    const int64_t outer_idx = input_element / input_row_elements;
+    const int64_t row_element = input_element - outer_idx * input_row_elements;
+    const int64_t output_idx = row_element / output_row_elements;
+    if (output_idx >= output_count) {
+      continue;
+    }
+    const int64_t local_element =
+        row_element - output_idx * output_row_elements;
+    const int64_t output_element =
+        outer_idx * output_row_elements + local_element;
+    auto* output = static_cast<uint8_t*>(outputs.values[output_idx]);
+
+    if (element_size == 4) {
+      reinterpret_cast<uint32_t*>(output)[output_element] =
+          reinterpret_cast<const uint32_t*>(input)[input_element];
+    } else if (element_size == 8) {
+      reinterpret_cast<uint64_t*>(output)[output_element] =
+          reinterpret_cast<const uint64_t*>(input)[input_element];
+    } else if (element_size == 2) {
+      reinterpret_cast<uint16_t*>(output)[output_element] =
+          reinterpret_cast<const uint16_t*>(input)[input_element];
+    } else if (element_size == 1) {
+      output[output_element] = input[input_element];
+    } else {
+      const auto* src = input + input_element * element_size;
+      auto* dst = output + output_element * element_size;
+      for (int32_t byte = 0; byte < element_size; ++byte) {
+        dst[byte] = src[byte];
+      }
+    }
+  }
+}
+
 }  // namespace
 
 musaError_t LaunchMusaSplitCopies(const void* input, void* const* outputs,
@@ -156,4 +197,32 @@ musaError_t LaunchMusaSplitManySmallRows(
     return status;
   }
   return musaSuccess;
+}
+
+musaError_t LaunchMusaSplitEqualRows(const void* input, void* const* outputs,
+                                     int64_t output_count, int64_t outer,
+                                     int64_t input_row_elements,
+                                     int64_t output_row_elements,
+                                     int32_t element_size,
+                                     musaStream_t stream) {
+  if (outer == 0 || input_row_elements == 0) {
+    return musaSuccess;
+  }
+  if (output_count <= 0 || output_count > kMusaSplitEqualMaxOutputs ||
+      output_row_elements <= 0) {
+    return musaErrorInvalidValue;
+  }
+
+  MusaSplitOutputPointers output_pointers{};
+  for (int64_t output_idx = 0; output_idx < output_count; ++output_idx) {
+    output_pointers.values[output_idx] = outputs[output_idx];
+  }
+
+  const int64_t total_elements = outer * input_row_elements;
+  const auto blocks = static_cast<unsigned int>(
+      (total_elements + kSplitCopyThreads - 1) / kSplitCopyThreads);
+  SplitEqualRowsKernel<<<blocks, kSplitCopyThreads, 0, stream>>>(
+      static_cast<const uint8_t*>(input), output_pointers, output_count,
+      total_elements, input_row_elements, output_row_elements, element_size);
+  return musaGetLastError();
 }

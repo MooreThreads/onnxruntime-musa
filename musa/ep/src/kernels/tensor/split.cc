@@ -91,6 +91,19 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
       max_width_bytes <= kSplitManySmallMaxWidthBytes) {
     const int64_t input_row_elements =
         shape0[static_cast<size_t>(axis)] * inner;
+    const bool equal_splits =
+        !splits.empty() && splits.front() > 0 &&
+        output_data.size() <= static_cast<size_t>(kMusaSplitEqualMaxOutputs) &&
+        std::all_of(splits.begin(), splits.end(), [&splits](int64_t split) {
+          return split == splits.front();
+        });
+    if (equal_splits) {
+      return LaunchStatus(LaunchMusaSplitEqualRows(
+          input0.GetTensorRawData(), output_data.data(),
+          static_cast<int64_t>(output_data.size()), outer, input_row_elements,
+          splits.front() * inner, static_cast<int32_t>(elem_size), stream));
+    }
+
     const size_t element_descriptor_bytes =
         static_cast<size_t>(input_row_elements) * sizeof(MusaSplitElementDesc);
     if (input_row_elements > 0 &&

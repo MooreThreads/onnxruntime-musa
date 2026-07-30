@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "graph/graph_utils.h"
 #include "kernels/shared_inc/blas_utils.h"
 
 /*
@@ -224,7 +225,8 @@ struct LinearFusionCompute : FusionNodeCompute {
   LinearFusionCompute(size_t a_input_index, size_t b_input_index,
                       size_t bias_input_index, bool trans_a, bool trans_b,
                       float alpha, float beta, bool flatten_a,
-                      std::string activation, float activation_alpha)
+                      std::string activation, float activation_alpha,
+                      std::vector<int64_t> final_output_shape = {})
       : a_input_index(a_input_index),
         b_input_index(b_input_index),
         bias_input_index(bias_input_index),
@@ -234,7 +236,8 @@ struct LinearFusionCompute : FusionNodeCompute {
         beta(beta),
         flatten_a(flatten_a),
         activation(std::move(activation)),
-        activation_alpha(activation_alpha) {}
+        activation_alpha(activation_alpha),
+        final_output_shape(std::move(final_output_shape)) {}
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override {
     try {
@@ -271,6 +274,7 @@ struct LinearFusionCompute : FusionNodeCompute {
 
       std::vector<int64_t> compute_a_shape = a_shape;
       std::vector<int64_t> y_shape;
+      std::vector<int64_t> compute_y_shape;
       if (flatten_a) {
         if (trans_a || a_shape.size() < 2) {
           return Ort::GetApi().CreateStatus(
@@ -286,24 +290,27 @@ struct LinearFusionCompute : FusionNodeCompute {
         compute_a_shape = {m, k};
         y_shape = a_shape;
         y_shape.back() = trans_b ? b_shape[0] : b_shape[1];
+        compute_y_shape = {m, y_shape.back()};
       } else {
         GemmShapeInfo gemm_shape;
         RETURN_IF_ERROR(
             ResolveGemmShape(a_shape, b_shape, trans_a, trans_b, gemm_shape));
         y_shape = gemm_shape.out_shape;
+        compute_y_shape = y_shape;
       }
 
       if (has_bias) {
-        c_shape = BiasShapeForOutput(c_shape, y_shape, y_shape);
+        c_shape = BiasShapeForOutput(c_shape, compute_y_shape, compute_y_shape);
       }
 
-      Ort::UnownedValue y = ctx.GetOutput(0, y_shape);
+      Ort::UnownedValue y = ctx.GetOutput(
+          0, final_output_shape.empty() ? y_shape : final_output_shape);
       if (IsGpuMemory(y.GetTensorMemoryInfo())) {
         return RunDeviceFusedGemm(
             y.GetTensorMutableData<float>(),
             static_cast<const float*>(a_buffer.data()),
             static_cast<const float*>(b_buffer.data()), c_data, compute_a_shape,
-            b_shape, c_shape, y_shape, trans_a, trans_b, alpha, beta,
+            b_shape, c_shape, compute_y_shape, trans_a, trans_b, alpha, beta,
             activation, activation_alpha, has_bias, stream);
       }
 
@@ -327,6 +334,7 @@ struct LinearFusionCompute : FusionNodeCompute {
   bool flatten_a;
   std::string activation;
   float activation_alpha;
+  std::vector<int64_t> final_output_shape;
 };
 
 std::string ActivationNameAndAlpha(Ort::ConstNode activation_node,
@@ -388,6 +396,61 @@ std::unique_ptr<FusionNodeCompute> CreateGemmActivationFusion(
       ReadFloatAttribute(gemm_node, "alpha", 1.0f),
       ReadFloatAttribute(gemm_node, "beta", 1.0f), false, std::move(activation),
       activation_alpha);
+}
+
+std::unique_ptr<FusionNodeCompute> CreateReshapeGemmActivationFusion(
+    Ort::ConstNode gemm_node, Ort::ConstNode activation_node,
+    Ort::ConstNode input_reshape_node, Ort::ConstNode tail_node,
+    Ort::ConstNode fused_node) {
+  std::vector<Ort::ConstValueInfo> gemm_inputs = gemm_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> activation_outputs =
+      activation_node.GetOutputs();
+  if ((gemm_inputs.size() != 2 && gemm_inputs.size() != 3) ||
+      activation_outputs.size() != 1) {
+    throw std::runtime_error("invalid ReshapeGemmActivation fused graph");
+  }
+
+  Ort::ConstValueInfo a_input = gemm_inputs[0];
+  bool flatten_a = false;
+  if (input_reshape_node) {
+    std::vector<Ort::ConstValueInfo> reshape_inputs =
+        input_reshape_node.GetInputs();
+    if (reshape_inputs.size() != 2) {
+      throw std::runtime_error("invalid input Reshape in linear fusion");
+    }
+    a_input = reshape_inputs[0];
+    flatten_a = true;
+  }
+
+  Ort::ConstValueInfo final_output = activation_outputs[0];
+  if (tail_node) {
+    std::vector<Ort::ConstValueInfo> tail_outputs = tail_node.GetOutputs();
+    if (tail_outputs.size() != 1) {
+      throw std::runtime_error("invalid tail view in linear fusion");
+    }
+    final_output = tail_outputs[0];
+  }
+  auto final_shape = musa_ep::GetStaticShape(final_output);
+  if (!final_shape.has_value()) {
+    throw std::runtime_error("linear fusion requires static final view shape");
+  }
+
+  auto fused_input_indices = FusedInputIndices(fused_node);
+  float activation_alpha = 0.01f;
+  std::string activation =
+      ActivationNameAndAlpha(activation_node, activation_alpha);
+  size_t bias_index = kNoBiasInput;
+  if (gemm_inputs.size() == 3) {
+    bias_index = GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[2]));
+  }
+  return std::make_unique<LinearFusionCompute>(
+      GetFusedInputIndex(fused_input_indices, Name(a_input)),
+      GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[1])), bias_index,
+      ReadIntAttribute(gemm_node, "transA", 0) != 0,
+      ReadIntAttribute(gemm_node, "transB", 0) != 0,
+      ReadFloatAttribute(gemm_node, "alpha", 1.0f),
+      ReadFloatAttribute(gemm_node, "beta", 1.0f), flatten_a,
+      std::move(activation), activation_alpha, *final_shape);
 }
 
 std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
@@ -455,6 +518,11 @@ std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
   Ort::ConstNode matmul_node{nullptr};
   Ort::ConstNode add_node{nullptr};
   Ort::ConstNode activation_node{nullptr};
+  Ort::ConstNode input_reshape_node{nullptr};
+  Ort::ConstNode output_reshape_node{nullptr};
+  Ort::ConstNode tail_node{nullptr};
+  std::vector<Ort::ConstNode> reshape_nodes;
+  std::vector<Ort::ConstNode> unsqueeze_nodes;
   for (Ort::ConstNode node : graph.GetNodes()) {
     if (IsOnnxOp(node, "Gemm")) {
       gemm_node = node;
@@ -464,10 +532,52 @@ std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
       add_node = node;
     } else if (IsActivationOp(node)) {
       activation_node = node;
+    } else if (IsOnnxOp(node, "Reshape")) {
+      reshape_nodes.push_back(node);
+    } else if (IsOnnxOp(node, "Unsqueeze")) {
+      unsqueeze_nodes.push_back(node);
     }
   }
 
   if (gemm_node && activation_node) {
+    std::vector<Ort::ConstValueInfo> gemm_inputs = gemm_node.GetInputs();
+    std::vector<Ort::ConstValueInfo> gemm_outputs = gemm_node.GetOutputs();
+    std::vector<Ort::ConstValueInfo> activation_outputs =
+        activation_node.GetOutputs();
+    for (Ort::ConstNode reshape_node : reshape_nodes) {
+      std::vector<Ort::ConstValueInfo> reshape_inputs =
+          reshape_node.GetInputs();
+      std::vector<Ort::ConstValueInfo> reshape_outputs =
+          reshape_node.GetOutputs();
+      if (reshape_inputs.empty() || reshape_outputs.empty()) {
+        continue;
+      }
+      if (!gemm_inputs.empty() &&
+          Name(reshape_outputs[0]) == Name(gemm_inputs[0])) {
+        input_reshape_node = reshape_node;
+      }
+      if (!gemm_outputs.empty() &&
+          Name(reshape_inputs[0]) == Name(gemm_outputs[0])) {
+        output_reshape_node = reshape_node;
+      }
+      if (!activation_outputs.empty() &&
+          Name(reshape_inputs[0]) == Name(activation_outputs[0])) {
+        tail_node = reshape_node;
+      }
+    }
+    for (Ort::ConstNode unsqueeze_node : unsqueeze_nodes) {
+      std::vector<Ort::ConstValueInfo> unsqueeze_inputs =
+          unsqueeze_node.GetInputs();
+      if (!activation_outputs.empty() && !unsqueeze_inputs.empty() &&
+          Name(unsqueeze_inputs[0]) == Name(activation_outputs[0])) {
+        tail_node = unsqueeze_node;
+      }
+    }
+    if (output_reshape_node) {
+      return CreateReshapeGemmActivationFusion(gemm_node, activation_node,
+                                               input_reshape_node, tail_node,
+                                               fused_node);
+    }
     return CreateGemmActivationFusion(gemm_node, activation_node, fused_node);
   }
   if (matmul_node && add_node) {

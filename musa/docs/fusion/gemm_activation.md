@@ -13,20 +13,26 @@ This file is generated from the current C++ fusion source and matching fusion te
 - Runtime compute: `LinearFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/linear_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `test/fusion/test_linear_fusion.py::test_gemm_relu_fusion`
+- Before-graph topology source: `test/fusion/test_linear_fusion.py::test_reshape_gemm_reshape_relu_unsqueeze_fusion`
 
 ## Extracted ONNX Ops
 
-`Gemm`, `Relu`, `LeakyRelu`, `Tanh`, `Sigmoid`
+`Gemm`, `Reshape`, `Relu`, `LeakyRelu`, `Tanh`, `Sigmoid`, `Unsqueeze`
 
 ## Mermaid
 
 ```mermaid
 flowchart LR
   subgraph Before[Before fusion]
-    B0["Gemm"]
-    B1["Relu"]
+    B0["Reshape"]
+    B1["Gemm"]
+    B2["Reshape"]
+    B3["Relu"]
+    B4["Unsqueeze"]
     B0 --> B1
+    B1 --> B2
+    B2 --> B3
+    B3 --> B4
   end
   subgraph After[After fusion]
     A0["MUSA fused node"]

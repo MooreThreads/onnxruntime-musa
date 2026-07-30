@@ -187,7 +187,194 @@ bool CanFuseGemmActivation(Ort::ConstNode gemm_node,
   return true;
 }
 
+bool HasSameStaticElementCount(Ort::ConstValueInfo input,
+                               Ort::ConstValueInfo output) {
+  auto input_shape = GetStaticShape(input);
+  auto output_shape = GetStaticShape(output);
+  if (!input_shape.has_value() || !output_shape.has_value()) {
+    return false;
+  }
+  int64_t input_elements = 1;
+  int64_t output_elements = 1;
+  for (int64_t dim : *input_shape) input_elements *= dim;
+  for (int64_t dim : *output_shape) output_elements *= dim;
+  return input_elements == output_elements;
+}
+
+bool IsAliasOnlyReshape(Ort::ConstNode reshape_node,
+                        Ort::ConstValueInfo& data_input,
+                        Ort::ConstValueInfo& data_output) {
+  if (!IsOnnxOp(reshape_node, "Reshape")) {
+    return false;
+  }
+  std::vector<Ort::ConstValueInfo> inputs = reshape_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> outputs = reshape_node.GetOutputs();
+  if (inputs.size() != 2 || outputs.size() != 1 ||
+      !IsSmallIntegerInitializer(inputs[1]) ||
+      !IsFloatTensorValueInfo(inputs[0]) ||
+      !IsFloatTensorValueInfo(outputs[0]) ||
+      !HasSameStaticElementCount(inputs[0], outputs[0])) {
+    return false;
+  }
+  data_input = inputs[0];
+  data_output = outputs[0];
+  return true;
+}
+
+bool IsAliasOnlyUnsqueeze(Ort::ConstNode unsqueeze_node,
+                          Ort::ConstValueInfo& data_input,
+                          Ort::ConstValueInfo& data_output) {
+  if (!IsOnnxOp(unsqueeze_node, "Unsqueeze")) {
+    return false;
+  }
+  std::vector<Ort::ConstValueInfo> inputs = unsqueeze_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> outputs = unsqueeze_node.GetOutputs();
+  if (inputs.size() != 2 || outputs.size() != 1 ||
+      !ReadUnsqueezeAxes(unsqueeze_node).has_value() ||
+      !IsFloatTensorValueInfo(inputs[0]) ||
+      !IsFloatTensorValueInfo(outputs[0]) ||
+      !HasSameStaticElementCount(inputs[0], outputs[0])) {
+    return false;
+  }
+  data_input = inputs[0];
+  data_output = outputs[0];
+  return true;
+}
+
+// Match the ORT MatMulAddFusion lowering for a high-rank linear layer:
+// [optional alias Reshape] -> Gemm -> alias Reshape -> activation
+//                              -> [optional alias Reshape / Unsqueeze].
+// The two Reshapes around Gemm only change tensor metadata; keeping them in
+// the fused node lets GEMM run on its 2-D view and write the final logical
+// output shape directly.
+std::vector<std::vector<Ort::ConstNode>> FindDirectGemmActivationFusions(
+    const std::vector<Ort::ConstNode>& all_nodes,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& accepted_node_ids);
+
 std::vector<std::vector<Ort::ConstNode>> FindGemmActivationFusions(
+    const std::vector<Ort::ConstNode>& all_nodes,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& accepted_node_ids) {
+  std::vector<std::vector<Ort::ConstNode>> fusions;
+  std::unordered_set<size_t> locally_selected = accepted_node_ids;
+
+  for (Ort::ConstNode gemm_node : all_nodes) {
+    if (!IsOnnxOp(gemm_node, "Gemm") ||
+        locally_selected.count(gemm_node.GetId()) != 0) {
+      continue;
+    }
+    std::vector<Ort::ConstValueInfo> gemm_inputs = gemm_node.GetInputs();
+    std::vector<Ort::ConstValueInfo> gemm_outputs = gemm_node.GetOutputs();
+    if ((gemm_inputs.size() != 2 && gemm_inputs.size() != 3) ||
+        gemm_outputs.size() != 1 ||
+        graph_output_names.count(Name(gemm_outputs[0])) != 0) {
+      continue;
+    }
+
+    Ort::ConstValueInfo gemm_input = gemm_inputs[0];
+    Ort::ConstNode input_reshape{nullptr};
+    Ort::ConstNode candidate_input_reshape{nullptr};
+    if (GetProducer(gemm_input, candidate_input_reshape)) {
+      Ort::ConstValueInfo reshape_input{nullptr};
+      Ort::ConstValueInfo reshape_output{nullptr};
+      if (IsAliasOnlyReshape(candidate_input_reshape, reshape_input,
+                             reshape_output) &&
+          Name(reshape_output) == Name(gemm_input) &&
+          locally_selected.count(candidate_input_reshape.GetId()) == 0 &&
+          HasOnlyConsumer(reshape_output, gemm_node, 0)) {
+        auto source_shape = GetStaticShape(reshape_input);
+        auto gemm_shape = GetStaticShape(gemm_input);
+        if (source_shape.has_value() && source_shape->size() >= 2 &&
+            gemm_shape.has_value() && gemm_shape->size() == 2) {
+          input_reshape = candidate_input_reshape;
+        }
+      }
+    }
+
+    Ort::ConstValueInfo gemm_output = gemm_outputs[0];
+    std::vector<Ort::ValueInfoConsumerProducerInfo> gemm_consumers =
+        gemm_output.GetConsumers();
+    if (gemm_consumers.size() != 1 || gemm_consumers[0].index != 0) {
+      continue;
+    }
+    Ort::ConstNode output_reshape = gemm_consumers[0].node;
+    Ort::ConstValueInfo reshape_input{nullptr};
+    Ort::ConstValueInfo reshape_output{nullptr};
+    if (!IsAliasOnlyReshape(output_reshape, reshape_input, reshape_output) ||
+        Name(reshape_input) != Name(gemm_output) ||
+        locally_selected.count(output_reshape.GetId()) != 0) {
+      continue;
+    }
+
+    std::vector<Ort::ValueInfoConsumerProducerInfo> reshape_consumers =
+        reshape_output.GetConsumers();
+    if (reshape_consumers.size() != 1 || reshape_consumers[0].index != 0) {
+      continue;
+    }
+    Ort::ConstNode activation_node = reshape_consumers[0].node;
+    if (!IsLinearActivationNode(activation_node) ||
+        locally_selected.count(activation_node.GetId()) != 0) {
+      continue;
+    }
+
+    std::vector<Ort::ConstValueInfo> activation_outputs =
+        activation_node.GetOutputs();
+    if (activation_outputs.size() != 1) {
+      continue;
+    }
+    Ort::ConstNode tail_node{nullptr};
+    Ort::ConstValueInfo final_output = activation_outputs[0];
+    if (graph_output_names.count(Name(final_output)) == 0) {
+      std::vector<Ort::ValueInfoConsumerProducerInfo> consumers =
+          final_output.GetConsumers();
+      if (consumers.size() == 1 && consumers[0].index == 0) {
+        Ort::ConstNode candidate_tail = consumers[0].node;
+        Ort::ConstValueInfo tail_input{nullptr};
+        Ort::ConstValueInfo tail_output{nullptr};
+        if (locally_selected.count(candidate_tail.GetId()) == 0 &&
+            ((IsAliasOnlyReshape(candidate_tail, tail_input, tail_output) ||
+              IsAliasOnlyUnsqueeze(candidate_tail, tail_input, tail_output)) &&
+             Name(tail_input) == Name(final_output))) {
+          tail_node = candidate_tail;
+          final_output = tail_output;
+        }
+      }
+    }
+
+    // The activation is intentionally separated from Gemm by Reshape, so
+    // validate the GEMM inputs without the direct-adjacency requirement used
+    // by CanFuseGemmActivation.
+    auto a_shape = GetStaticShape(gemm_inputs[0]);
+    auto b_shape = GetStaticShape(gemm_inputs[1]);
+    if (!IsFloatTensorValueInfo(gemm_inputs[0]) ||
+        !IsFloatTensorValueInfo(gemm_inputs[1]) ||
+        (gemm_inputs.size() == 3 && !IsFloatTensorValueInfo(gemm_inputs[2])) ||
+        !IsFloatTensorValueInfo(final_output) || !a_shape.has_value() ||
+        a_shape->size() != 2 || !b_shape.has_value() || b_shape->size() != 2) {
+      continue;
+    }
+
+    std::vector<Ort::ConstNode> fusion_nodes;
+    if (input_reshape) fusion_nodes.push_back(input_reshape);
+    fusion_nodes.push_back(gemm_node);
+    fusion_nodes.push_back(output_reshape);
+    fusion_nodes.push_back(activation_node);
+    if (tail_node) fusion_nodes.push_back(tail_node);
+    for (Ort::ConstNode node : fusion_nodes) {
+      locally_selected.insert(node.GetId());
+    }
+    fusions.push_back(std::move(fusion_nodes));
+  }
+  auto direct_fusions = FindDirectGemmActivationFusions(
+      all_nodes, graph_output_names, locally_selected);
+  for (auto& fusion : direct_fusions) {
+    fusions.push_back(std::move(fusion));
+  }
+  return fusions;
+}
+
+std::vector<std::vector<Ort::ConstNode>> FindDirectGemmActivationFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
     const std::unordered_set<size_t>& accepted_node_ids) {

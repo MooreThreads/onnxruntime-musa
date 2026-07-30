@@ -2,6 +2,12 @@
 
 #include "shared_inc/device_kernel_types.h"
 
+constexpr int32_t kMusaSplitEqualMaxOutputs = 32;
+
+struct MusaSplitOutputPointers {
+  void* values[kMusaSplitEqualMaxOutputs];
+};
+
 struct MusaSplitCopyDesc {
   void* output;
   int64_t axis_start;
@@ -30,3 +36,9 @@ musaError_t LaunchMusaSplitManySmallCopies(const void* input,
 musaError_t LaunchMusaSplitManySmallRows(
     const void* input, const MusaSplitElementDesc* descriptors, int64_t outer,
     int64_t input_row_elements, int32_t element_size, musaStream_t stream);
+
+musaError_t LaunchMusaSplitEqualRows(const void* input, void* const* outputs,
+                                     int64_t output_count, int64_t outer,
+                                     int64_t input_row_elements,
+                                     int64_t output_row_elements,
+                                     int32_t element_size, musaStream_t stream);

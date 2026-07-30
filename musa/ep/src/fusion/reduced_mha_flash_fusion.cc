@@ -148,9 +148,18 @@ class ReducedMhaFlashFusion final : public FusionNodeCompute {
           RunGemmWithBias(static_cast<float*>(packed.data()), xb.data(),
                           qwb.data(), static_cast<const float*>(qbb.data()),
                           {s, in}, qws, {s, 3 * a_}, false, stream));
-      MusaReducedMhaFlashParams p{
-          1,      s,  a_, heads_, a_ / heads_, has ? ms[0] : 1, has ? ms[1] : 1,
-          scale_, has};
+      MusaReducedMhaFlashParams p{1,
+                                  s,
+                                  a_,
+                                  heads_,
+                                  a_ / heads_,
+                                  has ? ms[0] : 1,
+                                  has ? ms[1] : 1,
+                                  scale_,
+                                  0.0f,
+                                  has,
+                                  false,
+                                  false};
       RETURN_IF_ERROR(LaunchStatus(LaunchMusaReducedMhaFlashKernel(
           static_cast<const float*>(packed.data()),
           has ? static_cast<const int32_t*>(mb.data()) : nullptr,

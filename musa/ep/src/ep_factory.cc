@@ -27,6 +27,7 @@
 #include "ep_allocator.h"
 #include "ep_kernel_registration.h"
 #include "ep_stream.h"
+#include "musa_arena.h"
 #include "plugin_ep_utils.h"
 
 namespace {
@@ -246,10 +247,11 @@ OrtStatus* ParseMusaProviderOptionsFromKeyValuePairs(
 }  // namespace
 
 MusaEpFactory::MusaEpFactory(const OrtApi& ort_api, const OrtEpApi& ep_api,
-                             const OrtLogger& /*default_logger*/)
+                             const OrtLogger& default_logger)
     : OrtEpFactory{},
       ort_api_(ort_api),
       ep_api_(ep_api),
+      default_logger_(default_logger),
       default_memory_info_{nullptr},
       host_accessible_memory_info_{nullptr},
       readonly_memory_info_{nullptr} {
@@ -503,7 +505,7 @@ void ORT_API_CALL MusaEpFactory::ReleaseEpImpl(OrtEpFactory* /*this_ptr*/,
 /*static*/
 OrtStatus* ORT_API_CALL MusaEpFactory::CreateAllocatorImpl(
     OrtEpFactory* this_ptr, const OrtMemoryInfo* memory_info,
-    const OrtKeyValuePairs* /*allocator_options*/,
+    const OrtKeyValuePairs* allocator_options,
     OrtAllocator** allocator) noexcept {
   auto& factory = *static_cast<MusaEpFactory*>(this_ptr);
   *allocator = nullptr;
@@ -529,8 +531,32 @@ OrtStatus* ORT_API_CALL MusaEpFactory::CreateAllocatorImpl(
   } else {
     // Note: the same allocator handles both default and readonly allocations. A
     // readonly only allocator would typically be different.
-    auto custom_allocator = std::make_unique<CustomAllocator>(memory_info);
-    *allocator = custom_allocator.release();
+    size_t cache_limit_bytes = 0;
+    const ArenaCacheLimitParseResult cache_result =
+        ParseArenaCacheLimitBytes(cache_limit_bytes);
+    if (cache_result == ArenaCacheLimitParseResult::kInvalid) {
+      return factory.ort_api_.CreateStatus(
+          ORT_INVALID_ARGUMENT,
+          "ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB must be a non-negative integer "
+          "that does not overflow the platform size type.");
+    }
+
+    if (cache_result == ArenaCacheLimitParseResult::kEnabled) {
+      auto raw = std::make_unique<CustomAllocator>(memory_info);
+      onnxruntime::musa_plugin::AllocatorUniquePtr raw_allocator(
+          raw.release(),
+          [](OrtAllocator* p) { delete static_cast<CustomAllocator*>(p); });
+      std::unique_ptr<onnxruntime::musa_plugin::MusaArenaAllocator> arena;
+      OrtStatus* status = onnxruntime::musa_plugin::MusaArenaAllocator::Create(
+          MusaAllocatorKind::kDevice, memory_info, std::move(raw_allocator),
+          allocator_options, cache_limit_bytes, factory.ort_api_,
+          factory.default_logger_, arena);
+      if (status != nullptr) return status;
+      *allocator = arena.release();
+    } else {
+      auto custom_allocator = std::make_unique<CustomAllocator>(memory_info);
+      *allocator = custom_allocator.release();
+    }
   }
   return nullptr;
 }

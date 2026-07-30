@@ -12,6 +12,7 @@ set(MUSA_PLUGIN_SOURCES
   src/ep_data_transfer.cc
   src/ep_profiling.cc
   src/ep_stream.cc
+  src/musa_arena.cc
   src/graph/cpu_preferred_nodes.cc
   src/graph/graph_utils.cc
   src/graph_mermaid_dump.cc
@@ -88,6 +89,31 @@ if(UNIX AND NOT APPLE)
   target_link_options(${MUSA_PLUGIN_TARGET} PRIVATE
     "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/ep_lib.lds"
   )
+endif()
+
+if(BUILD_TESTING)
+  add_executable(musa_arena_ownership_test
+    ${CMAKE_SOURCE_DIR}/test/multi_stream/musa_arena_ownership_test.cc
+  )
+  target_include_directories(musa_arena_ownership_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  foreach(_ownership_case IN ITEMS
+      assign_and_clear
+      transfer_removes_old_owner
+      transfer_preserves_other_chunks
+      idempotent_assignment
+      wrong_owner_rejected
+      shared_implementation_rejected
+      null_implementation_rejected
+      clear_one_preserves_lookup
+      producer_release_after_transfer
+      split_remainder_tracks_owner)
+    add_test(
+      NAME musa_arena_ownership.${_ownership_case}
+      COMMAND musa_arena_ownership_test ${_ownership_case}
+    )
+  endforeach()
 endif()
 
 # Regenerate musa/docs/supported_ops.md after every build by scanning the

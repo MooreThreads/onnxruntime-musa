@@ -90,6 +90,7 @@ class MusaEpFactory : public OrtEpFactory {
 
   const OrtApi& ort_api_;
   const OrtEpApi& ep_api_;
+  const OrtLogger& default_logger_;
   const std::string ep_name_{"MUSAExecutionProvider"};
   const std::string vendor_{"MThreads"};  // EP vendor name
   const uint32_t vendor_id_{0x4D54};      // EP vendor ID

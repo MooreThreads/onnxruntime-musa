@@ -24,6 +24,7 @@ musa/
                              Host <-> MUSA memcpy via musart
       ep_stream.{h,cc}       OrtSyncStream backed by a musaStream_t
       ep_allocator.h         GPU and pinned-host allocators on top of musart
+      musa_arena.{h,cc}      Optional stream-ordered BFC device arena
       ep_profiling.{h,cc}    Plugin-side profiling event hooks
       ep_options.{h,cc}      Parses session-level provider options
       plugin_ep_utils.h      ABI helper macros (status returns, exception bridge)
@@ -60,7 +61,9 @@ Python:
      v
   MusaEpFactory                           (ep_factory.{h,cc})
      |--- GetSupportedDevices -> OrtEpDevice(s) advertised to ORT
-     |--- CreateAllocator    -> ep_allocator.h
+     |--- CreateAllocator    -> cache limit == 0: CustomAllocator
+     |                         cache limit > 0: MusaArenaAllocator
+     |                           -> raw CustomAllocator -> musart
      |--- CreateDataTransfer -> ep_data_transfer.{h,cc}
      |--- CreateSyncStream   -> ep_stream.{h,cc}
      |--- CreateEp           -> MusaEp
@@ -75,6 +78,30 @@ Python:
                                   v
                               musart / mublas (MUSA 5.1.0)
 ```
+
+## Stream-ordered device arena
+
+When `ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB` is a positive integer,
+`MusaEpFactory` wraps the raw MUSA device allocator with
+`MusaArenaAllocator`. The value is the arena reservation hard limit. Logical
+`Free` returns a chunk to the arena but does not immediately release its
+underlying MUSA region.
+
+Each free chunk retains its logical `OrtSyncStream`. It can be reused by that
+same stream, or after stream release clears ownership. ORT sync-id records
+stream synchronization events, but without an allocator-owned event at
+logical `Free` it cannot prove that a wait covers the chunk's final device
+access; therefore an owned chunk is never reused directly by another stream.
+Every chunk belongs to at most one stream ownership set.
+
+`OnSessionRunEnd` does not clear ownership because host-side Run completion is
+not a device-completion fence. When ORT releases the `MusaSyncStream`
+implementation, its destructor first synchronizes that one MUSA stream, then
+clears ownership; adjacent unowned chunks can then coalesce. This avoids a
+device-wide synchronization while ensuring release never exposes unfinished
+device work to another stream.
+Setting the environment variable to `0` or leaving it unset keeps the original
+direct allocator path.
 
 Graph partitioning is kernel-registry driven: ORT asks the EP which nodes it can run, and
 the EP answers based on the (op, domain, opset, type-constraints) tuples registered via the

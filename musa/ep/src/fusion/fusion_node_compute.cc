@@ -49,6 +49,7 @@
 #include "fusion/split_concat_reorder_fusion.h"
 #include "fusion/split_reduce_fusion.h"
 #include "fusion/split_unsqueeze_concat_fusion.h"
+#include "fusion/strided_view_fusion.h"
 #include "fusion/target_id_count_embedding_fusion.h"
 #include "fusion/tile_concat_fusion.h"
 #include "plugin_ep_utils.h"
@@ -268,6 +269,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateReplaceInvalidIdFusion(graph, fused_node);
       } else if (IsSegmentMaxBroadcastFusionGraph(graph)) {
         fusion_compute = CreateSegmentMaxBroadcastFusion(graph, fused_node);
+      } else if (IsStridedViewFusionGraph(graph)) {
+        fusion_compute = CreateStridedViewFusion(graph, fused_node);
       } else {
         fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
       }

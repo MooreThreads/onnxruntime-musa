@@ -33,6 +33,7 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 24 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
 | 25 | Replace Invalid Id Fusion | `FindReplaceInvalidIdFusions` | `true` | [replace_invalid_id.md](fusion/replace_invalid_id.md) |
 | 26 | Segment Max Broadcast Fusion | `FindSegmentMaxBroadcastFusions` | `true` | [segment_max_broadcast.md](fusion/segment_max_broadcast.md) |
+| 27 | Strided View Fusion | `FindStridedViewFusions` | `true` | [strided_view.md](fusion/strided_view.md) |
 
 ## Compile Dispatch Order
 
@@ -62,4 +63,5 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 22 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
 | 23 | `IsReplaceInvalidIdFusionGraph` | `CreateReplaceInvalidIdFusion` | [replace_invalid_id](fusion/replace_invalid_id.md) |
 | 24 | `IsSegmentMaxBroadcastFusionGraph` | `CreateSegmentMaxBroadcastFusion` | [segment_max_broadcast](fusion/segment_max_broadcast.md) |
-| 25 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
+| 25 | `IsStridedViewFusionGraph` | `CreateStridedViewFusion` | [strided_view](fusion/strided_view.md) |
+| 26 | `fallback` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |

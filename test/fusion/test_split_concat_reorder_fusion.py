@@ -10,7 +10,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""End-to-end tests for Reshape -> Split(axis=2) -> Concat(axis=0) fusion."""
+"""End-to-end tests for Split(axis=2) -> Concat(axis=0) fusion."""
 
 import json
 from pathlib import Path
@@ -128,11 +128,38 @@ def test_split_concat_reorder_fusion_rank3_axis2_to_axis0(part_count, part_width
 
     node_names = _profile_musa_node_names(model_bytes, {"X": x})
     assert not any(
-        name.startswith("ReorderReshape") for name in node_names
-    ), node_names
-    assert not any(
         name.startswith("ReorderSplit") for name in node_names
     ), node_names
     assert not any(
         name.startswith("ReorderConcat") for name in node_names
     ), node_names
+
+
+def test_split_concat_fusion_absorbs_optional_transpose():
+    rng = np.random.default_rng(83)
+    x = rng.standard_normal((2, 3, 16)).astype(np.float32)
+    split_outputs = [f"S{i}" for i in range(4)]
+    graph = helper.make_graph(
+        [
+            helper.make_node("Split", ["X"], split_outputs, axis=2,
+                             name="SplitConcatSplit"),
+            helper.make_node("Concat", split_outputs, ["C"], axis=0,
+                             name="SplitConcatConcat"),
+            helper.make_node("Transpose", ["C"], ["Y"], perm=[0, 2, 1],
+                             name="SplitConcatTranspose"),
+        ],
+        "split_concat_optional_transpose_graph",
+        [helper.make_tensor_value_info("X", TensorProto.FLOAT, [2, 3, 16])],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, [8, 4, 3])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    model_bytes = model.SerializeToString()
+
+    musa_outputs = run_model_and_compare(model_bytes, {"X": x}, rtol=1e-6, atol=1e-6)
+    expected = np.transpose(np.concatenate(np.split(x, 4, axis=2), axis=0), (0, 2, 1))
+    np.testing.assert_allclose(musa_outputs[0], expected, rtol=0, atol=0)
+
+    node_names = _profile_musa_node_names(model_bytes, {"X": x})
+    for name in ("SplitConcatSplit", "SplitConcatConcat", "SplitConcatTranspose"):
+        assert not any(event.startswith(name) for event in node_names), node_names

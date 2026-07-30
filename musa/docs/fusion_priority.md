@@ -10,7 +10,7 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 1 | Mhta Scaled Dot Product Attention Fusion | `FindMhtaScaledDotProductAttentionFusions` | `false` | [mhta_scaled_dot_product_attention.md](fusion/mhta_scaled_dot_product_attention.md) |
 | 2 | Reduced Mha Flash Fusion | `FindReducedMhaFlashFusions` | `false` | [reduced_mha_flash.md](fusion/reduced_mha_flash.md) |
 | 3 | Split Unsqueeze Concat Fusion | `FindSplitUnsqueezeConcatFusions` | `false` | [split_unsqueeze_concat.md](fusion/split_unsqueeze_concat.md) |
-| 4 | Split Concat Reorder Fusion | `FindSplitConcatReorderFusions` | `false` | [split_concat_reorder.md](fusion/split_concat_reorder.md) |
+| 4 | Split Concat Fusion | `FindSplitConcatFusions` | `false` | [split_concat.md](fusion/split_concat.md) |
 | 5 | Concat MatMul Fusion | `FindConcatMatMulFusions` | `false` | [concat_matmul.md](fusion/concat_matmul.md) |
 | 6 | Concat Split Fusion | `FindConcatSplitFusions` | `false` | [concat_split.md](fusion/concat_split.md) |
 | 7 | Slice Concat Fusion | `FindSliceConcatFusions` | `false` | [slice_concat.md](fusion/slice_concat.md) |
@@ -49,7 +49,7 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 8 | `IsConcatSplitFusionGraph` | `CreateConcatSplitFusion` | [concat_split](fusion/concat_split.md) |
 | 9 | `IsSliceConcatFusionGraph` | `CreateSliceConcatFusion` | [slice_concat](fusion/slice_concat.md) |
 | 10 | `IsSplitUnsqueezeConcatFusionGraph` | `CreateSplitUnsqueezeConcatFusion` | [split_unsqueeze_concat](fusion/split_unsqueeze_concat.md) |
-| 11 | `IsSplitConcatReorderFusionGraph` | `CreateSplitConcatReorderFusion` | [split_concat_reorder](fusion/split_concat_reorder.md) |
+| 11 | `IsSplitConcatFusionGraph` | `CreateSplitConcatFusion` | [split_concat](fusion/split_concat.md) |
 | 12 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
 | 13 | `IsRmsNormFusionGraph` | `CreateRmsNormFusion` | [rms_norm](fusion/rms_norm.md) |
 | 14 | `IsTargetIdCountEmbeddingFusionGraph` | `CreateTargetIdCountEmbeddingFusion` | [target_id_count_embedding](fusion/target_id_count_embedding.md) |

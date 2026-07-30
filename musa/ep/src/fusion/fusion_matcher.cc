@@ -123,10 +123,10 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindSplitUnsqueezeConcatFusions", false,
                  std::move(split_unsqueeze_concat_fusions), accepted_node_ids);
 
-  auto split_concat_reorder_fusions = FindSplitConcatReorderFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindSplitConcatReorderFusions", false,
-                 std::move(split_concat_reorder_fusions), accepted_node_ids);
+  auto split_concat_fusions =
+      FindSplitConcatFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindSplitConcatFusions", false,
+                 std::move(split_concat_fusions), accepted_node_ids);
 
   auto concat_matmul_fusions =
       FindConcatMatMulFusions(all_nodes, graph_output_names, accepted_node_ids);

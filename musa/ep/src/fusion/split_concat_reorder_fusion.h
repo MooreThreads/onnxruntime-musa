@@ -19,18 +19,20 @@
 
 #include "fusion/fusion_node_compute.h"
 
-struct SplitConcatReorderFusionCompute : FusionNodeCompute {
-  SplitConcatReorderFusionCompute(size_t input_index, int64_t sequence,
-                                  int64_t part_count, int64_t part_width);
+struct SplitConcatFusionCompute : FusionNodeCompute {
+  SplitConcatFusionCompute(size_t input_index, int64_t part_count,
+                           bool transpose_output, int64_t sequence,
+                           int64_t part_width);
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override;
 
   size_t input_index;
-  int64_t sequence;
   int64_t part_count;
+  bool transpose_output;
+  int64_t sequence;
   int64_t part_width;
 };
 
-bool IsSplitConcatReorderFusionGraph(Ort::ConstGraph graph);
-std::unique_ptr<FusionNodeCompute> CreateSplitConcatReorderFusion(
+bool IsSplitConcatFusionGraph(Ort::ConstGraph graph);
+std::unique_ptr<FusionNodeCompute> CreateSplitConcatFusion(
     Ort::ConstGraph graph, Ort::ConstNode fused_node);

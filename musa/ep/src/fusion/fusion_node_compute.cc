@@ -240,8 +240,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateSliceConcatFusion(graph, fused_node);
       } else if (IsSplitUnsqueezeConcatFusionGraph(graph)) {
         fusion_compute = CreateSplitUnsqueezeConcatFusion(graph, fused_node);
-      } else if (IsSplitConcatReorderFusionGraph(graph)) {
-        fusion_compute = CreateSplitConcatReorderFusion(graph, fused_node);
+      } else if (IsSplitConcatFusionGraph(graph)) {
+        fusion_compute = CreateSplitConcatFusion(graph, fused_node);
       } else if (IsTileConcatFusionGraph(graph)) {
         fusion_compute = CreateTileConcatFusion(graph, fused_node);
       } else if (IsRmsNormFusionGraph(graph)) {

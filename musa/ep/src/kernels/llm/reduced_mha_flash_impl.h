@@ -15,7 +15,10 @@ struct MusaReducedMhaFlashParams {
   int64_t mask_batch;
   int64_t mask_heads;
   float scale;
+  float mask_filter_value;
   bool has_mask;
+  bool use_mask_filter_value;
+  bool mask_positive_only;
 };
 
 musaError_t LaunchMusaReducedMhaFlashKernel(const float* packed_qkv,

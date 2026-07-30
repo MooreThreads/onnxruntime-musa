@@ -38,7 +38,11 @@ __global__ void ReducedMhaFlashKernel(const float* qkv, const int32_t* mask,
   float local_max = kNegInf;
   for (int64_t k_pos = threadIdx.x; k_pos < p.sequence; k_pos += blockDim.x) {
     float score = kNegInf;
-    if (!p.has_mask || mask[MaskOffset(p, b, h, q_pos, k_pos)] != 0) {
+    const int32_t mask_value =
+        p.has_mask ? mask[MaskOffset(p, b, h, q_pos, k_pos)] : 1;
+    const bool keep = !p.has_mask ||
+                      (p.mask_positive_only ? mask_value > 0 : mask_value != 0);
+    if (keep || p.use_mask_filter_value) {
       const int64_t k_base = (b * p.sequence + k_pos) * (3 * p.attention_dim) +
                              p.attention_dim + h * p.head_dim;
       float dot = 0.0f;
@@ -48,16 +52,13 @@ __global__ void ReducedMhaFlashKernel(const float* qkv, const int32_t* mask,
       int64_t d = 0;
       if (p.head_dim % 4 == 0) {
         for (; d + 3 < p.head_dim; d += 4) {
-          const float4 qv =
-              *reinterpret_cast<const float4*>(qkv + q_base + d);
-          const float4 kv =
-              *reinterpret_cast<const float4*>(qkv + k_base + d);
+          const float4 qv = *reinterpret_cast<const float4*>(qkv + q_base + d);
+          const float4 kv = *reinterpret_cast<const float4*>(qkv + k_base + d);
           dot += qv.x * kv.x + qv.y * kv.y + qv.z * kv.z + qv.w * kv.w;
         }
       }
-      for (; d < p.head_dim; ++d)
-        dot += qkv[q_base + d] * qkv[k_base + d];
-      score = dot * p.scale;
+      for (; d < p.head_dim; ++d) dot += qkv[q_base + d] * qkv[k_base + d];
+      score = dot * p.scale + (keep ? 0.0f : p.mask_filter_value);
     }
     scores[k_pos] = score;
     local_max = fmaxf(local_max, score);

@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **16**
+- GetCapability priority: **17**
 - Finder: `FindModuloGatherFusions`
 - Finder implementation: `musa/ep/src/fusion/modulo_gather_fusion_matcher.cc`
 - Compile detector: `IsModuloGatherFusionGraph`

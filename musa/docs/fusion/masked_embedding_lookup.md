@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **21**
+- GetCapability priority: **22**
 - Finder: `FindMaskedEmbeddingLookupFusions`
 - Finder implementation: `musa/ep/src/fusion/masked_embedding_lookup_fusion_matcher.cc`
 - Compile detector: `IsMaskedEmbeddingLookupFusionGraph`

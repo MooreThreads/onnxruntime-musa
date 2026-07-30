@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **17**
+- GetCapability priority: **18**
 - Finder: `FindParallelEinsumActivationFusions`
 - Finder implementation: `musa/ep/src/fusion/parallel_einsum_activation_fusion_matcher.cc`
 - Compile detector: `IsParallelEinsumActivationFusionGraph`

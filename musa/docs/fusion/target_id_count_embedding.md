@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **22**
+- GetCapability priority: **23**
 - Finder: `FindTargetIdCountEmbeddingFusions`
 - Finder implementation: `musa/ep/src/fusion/target_id_count_embedding_fusion_matcher.cc`
 - Compile detector: `IsTargetIdCountEmbeddingFusionGraph`

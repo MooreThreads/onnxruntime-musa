@@ -36,11 +36,33 @@ __global__ void SplitConcatReorderFloat2RowsKernel(
   }
 }
 
-__global__ void SplitConcatReorderFloatRowsKernel(const float* input,
-                                                  float* output, int64_t batch,
-                                                  int64_t sequence,
-                                                  int64_t part_count,
-                                                  int64_t part_width) {
+__global__ void SplitConcatReorderFloatRowsKernel(
+    const float* input, float* output, int64_t batch, int64_t sequence,
+    int64_t part_count, int64_t part_width, int64_t trailing_elements) {
+  const int64_t b = static_cast<int64_t>(blockIdx.x) * blockDim.y + threadIdx.y;
+  const int64_t s = static_cast<int64_t>(blockIdx.y);
+  const int64_t part = static_cast<int64_t>(blockIdx.z);
+  if (b >= batch || s >= sequence || part >= part_count) {
+    return;
+  }
+
+  const int64_t packed_width = part_count * part_width;
+  const int64_t input_base =
+      ((b * sequence + s) * packed_width + part * part_width) *
+      trailing_elements;
+  const int64_t output_base =
+      ((part * batch + b) * sequence * part_width + s * part_width) *
+      trailing_elements;
+
+  for (int64_t h = threadIdx.x; h < part_width * trailing_elements;
+       h += blockDim.x) {
+    output[output_base + h] = input[input_base + h];
+  }
+}
+
+__global__ void SplitConcatTransposeFloatRowsKernel(
+    const float* input, float* output, int64_t batch, int64_t sequence,
+    int64_t part_count, int64_t part_width) {
   const int64_t b = static_cast<int64_t>(blockIdx.x) * blockDim.y + threadIdx.y;
   const int64_t s = static_cast<int64_t>(blockIdx.y);
   const int64_t part = static_cast<int64_t>(blockIdx.z);
@@ -51,27 +73,26 @@ __global__ void SplitConcatReorderFloatRowsKernel(const float* input,
   const int64_t packed_width = part_count * part_width;
   const int64_t input_base =
       (b * sequence + s) * packed_width + part * part_width;
-  const int64_t output_base =
-      (part * batch + b) * sequence * part_width + s * part_width;
-
+  const int64_t output_batch = part * batch + b;
   for (int64_t h = threadIdx.x; h < part_width; h += blockDim.x) {
-    output[output_base + h] = input[input_base + h];
+    output[(output_batch * part_width + h) * sequence + s] =
+        input[input_base + h];
   }
 }
 
 }  // namespace
 
-musaError_t LaunchMusaSplitConcatReorderFloat(const float* input, float* output,
-                                              int64_t batch, int64_t sequence,
-                                              int64_t part_count,
-                                              int64_t part_width,
-                                              musaStream_t stream) {
-  const int64_t total_elements = batch * part_count * sequence * part_width;
+musaError_t LaunchMusaSplitConcatReorderFloat(
+    const float* input, float* output, int64_t batch, int64_t sequence,
+    int64_t part_count, int64_t part_width, int64_t trailing_elements,
+    bool transpose_output, musaStream_t stream) {
+  const int64_t total_elements =
+      batch * part_count * sequence * part_width * trailing_elements;
   if (total_elements == 0) {
     return musaSuccess;
   }
 
-  if ((part_width & 1) == 0) {
+  if (!transpose_output && trailing_elements == 1 && (part_width & 1) == 0) {
     const int64_t part_width_chunks = part_width >> 1;
     const int chunk_threads = ClampChunkThreads(part_width_chunks);
     const int rows_per_block = kThreadsPerBlock / chunk_threads;
@@ -88,7 +109,7 @@ musaError_t LaunchMusaSplitConcatReorderFloat(const float* input, float* output,
     return musaGetLastError();
   }
 
-  const int chunk_threads = ClampChunkThreads(part_width);
+  const int chunk_threads = ClampChunkThreads(part_width * trailing_elements);
   const int rows_per_block = kThreadsPerBlock / chunk_threads;
   const dim3 block(static_cast<unsigned int>(chunk_threads),
                    static_cast<unsigned int>(rows_per_block), 1);
@@ -96,7 +117,13 @@ musaError_t LaunchMusaSplitConcatReorderFloat(const float* input, float* output,
       static_cast<unsigned int>((batch + rows_per_block - 1) / rows_per_block),
       static_cast<unsigned int>(sequence),
       static_cast<unsigned int>(part_count));
-  SplitConcatReorderFloatRowsKernel<<<grid, block, 0, stream>>>(
-      input, output, batch, sequence, part_count, part_width);
+  if (transpose_output) {
+    SplitConcatTransposeFloatRowsKernel<<<grid, block, 0, stream>>>(
+        input, output, batch, sequence, part_count, part_width);
+  } else {
+    SplitConcatReorderFloatRowsKernel<<<grid, block, 0, stream>>>(
+        input, output, batch, sequence, part_count, part_width,
+        trailing_elements);
+  }
   return musaGetLastError();
 }

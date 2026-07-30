@@ -460,18 +460,37 @@ OrtStatus* ConcatSplitFusionCompute::Compute(
 bool IsConcatSplitFusionGraph(Ort::ConstGraph graph) {
   int split_count = 0;
   int concat_count = 0;
+  Ort::ConstNode split_node{nullptr};
   for (Ort::ConstNode node : graph.GetNodes()) {
     if (IsOnnxOp(node, "Concat")) {
       ++concat_count;
     } else if (IsOnnxOp(node, "Split")) {
       ++split_count;
+      split_node = node;
     } else if (IsOnnxOp(node, "Sum")) {
       continue;
     } else {
       return false;
     }
   }
-  return concat_count >= 1 && split_count == 1;
+  if (concat_count < 1 || split_count != 1) {
+    return false;
+  }
+
+  std::vector<Ort::ConstValueInfo> split_inputs = split_node.GetInputs();
+  if (split_inputs.empty()) {
+    return false;
+  }
+  for (Ort::ConstNode node : graph.GetNodes()) {
+    if (!IsOnnxOp(node, "Concat")) {
+      continue;
+    }
+    std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+    if (outputs.size() == 1 && Name(outputs[0]) == Name(split_inputs[0])) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::unique_ptr<FusionNodeCompute> CreateConcatSplitFusion(

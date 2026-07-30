@@ -4,8 +4,7 @@
 
 #include <cstdint>
 
-musaError_t LaunchMusaSplitConcatReorderFloat(const float* input, float* output,
-                                              int64_t batch, int64_t sequence,
-                                              int64_t part_count,
-                                              int64_t part_width,
-                                              musaStream_t stream);
+musaError_t LaunchMusaSplitConcatReorderFloat(
+    const float* input, float* output, int64_t batch, int64_t sequence,
+    int64_t part_count, int64_t part_width, int64_t trailing_elements,
+    bool transpose_output, musaStream_t stream);

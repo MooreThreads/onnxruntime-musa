@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **2**
+- GetCapability priority: **1**
 - Finder: `FindReducedMhaFlashFusions`
 - Finder implementation: `musa/ep/src/fusion/reduced_mha_flash_fusion_matcher.cc`
 - Compile detector: `IsReducedMhaFlashFusionGraph`

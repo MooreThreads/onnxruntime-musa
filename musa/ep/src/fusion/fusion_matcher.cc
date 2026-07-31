@@ -118,6 +118,11 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindReducedMhaFlashFusions", false,
                  std::move(reduced_mha_flash_fusions), accepted_node_ids);
 
+  auto moe_fusions =
+      FindMoEFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindMoEFusions", true, std::move(moe_fusions),
+                 accepted_node_ids);
+
   auto parallel_einsum_activation_fusions = FindParallelEinsumActivationFusions(
       all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindParallelEinsumActivationFusions", false,

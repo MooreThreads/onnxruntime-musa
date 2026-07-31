@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **6**
+- GetCapability priority: **7**
 - Finder: `FindCenteredReduceFusions`
 - Finder implementation: `musa/ep/src/fusion/centered_reduce_fusion_matcher.cc`
 - Compile detector: `IsCenteredReduceFusionGraph`

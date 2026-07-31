@@ -123,6 +123,11 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindMoEFusions", true, std::move(moe_fusions),
                  accepted_node_ids);
 
+  auto split_sequence_moe_fusions = FindSplitSequenceMoEFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindSplitSequenceMoEFusions", true,
+                 std::move(split_sequence_moe_fusions), accepted_node_ids);
+
   auto parallel_einsum_activation_fusions = FindParallelEinsumActivationFusions(
       all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindParallelEinsumActivationFusions", false,

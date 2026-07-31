@@ -37,6 +37,7 @@
 #include "fusion/math_concat_log_fusion.h"
 #include "fusion/mhta_scaled_dot_product_attention_fusion.h"
 #include "fusion/modulo_gather_fusion.h"
+#include "fusion/moe_fusion.h"
 #include "fusion/parallel_einsum_activation_fusion.h"
 #include "fusion/parallel_linear_fusion.h"
 #include "fusion/parallel_matmul_concat_fusion.h"
@@ -225,6 +226,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
             CreateMhtaScaledDotProductAttentionFusion(graph, fused_node);
       } else if (IsReducedMhaFlashFusionGraph(graph)) {
         fusion_compute = CreateReducedMhaFlashFusion(graph, fused_node);
+      } else if (IsMoEFusionGraph(graph)) {
+        fusion_compute = CreateMoEFusion(graph, fused_node);
       } else if (IsParallelEinsumActivationFusionGraph(graph)) {
         fusion_compute =
             CreateParallelEinsumActivationFusion(graph, fused_node);

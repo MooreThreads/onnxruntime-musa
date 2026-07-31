@@ -153,7 +153,7 @@ def _camel_words(name: str) -> list[str]:
 def _stem_words(stem: str, known_ops: set[str]) -> list[str]:
     words: list[str] = []
     index = 0
-    op_names = sorted(known_ops, key=len, reverse=True)
+    op_names = sorted(known_ops | {"MoE"}, key=len, reverse=True)
     while index < len(stem):
         match = next((op for op in op_names if stem.startswith(op, index)), None)
         if match is not None:

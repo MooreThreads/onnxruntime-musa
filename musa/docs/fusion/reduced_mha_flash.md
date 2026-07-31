@@ -10,7 +10,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 - Finder implementation: `musa/ep/src/fusion/reduced_mha_flash_fusion_matcher.cc`
 - Compile detector: `IsReducedMhaFlashFusionGraph`
 - Runtime factory: `CreateReducedMhaFlashFusion`
-- Runtime compute: `CreateReducedMhaFlashFusion`
+- Runtime compute: `ReducedMhaFlashFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/reduced_mha_flash_fusion.cc`
 - `drop_constant_initializers`: `false`
 - Before-graph topology source: `musa/ep/src/fusion/reduced_mha_flash_fusion_matcher.cc` finder source
@@ -32,7 +32,7 @@ flowchart LR
   end
   subgraph After[After fusion]
     A0["MUSA fused node"]
-    A1["CreateReducedMhaFlashFusion"]
+    A1["ReducedMhaFlashFusionCompute"]
     A0 --> A1
   end
   Before ==> After

@@ -41,5 +41,6 @@ struct ConcatMatMulFusionCompute : FusionNodeCompute {
   std::vector<std::string> fused_input_names;
 };
 
+bool IsConcatMatMulFusionGraph(Ort::ConstGraph graph);
 std::unique_ptr<FusionNodeCompute> CreateConcatMatMulFusion(
     Ort::ConstGraph graph, Ort::ConstNode fused_node);

@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **20**
+- GetCapability priority: **9**
 - Finder: `FindSparseIdToMaskFusions`
 - Finder implementation: `musa/ep/src/fusion/sparse_id_to_mask_fusion_matcher.cc`
 - Compile detector: `IsSparseIdToMaskFusionGraph`

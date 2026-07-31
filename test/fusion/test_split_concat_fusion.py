@@ -30,7 +30,7 @@ def _profile_musa_node_names(model_bytes, feeds):
 
     session_options = ort.SessionOptions()
     session_options.enable_profiling = True
-    session_options.profile_file_prefix = "split_concat_reorder_fusion"
+    session_options.profile_file_prefix = "split_concat_fusion"
     session_options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
     session_options.add_provider_for_devices(devices, {})
     session = ort.InferenceSession(model_bytes, sess_options=session_options)
@@ -54,7 +54,7 @@ def _profile_musa_node_names(model_bytes, feeds):
         (4, 64),
     ],
 )
-def test_split_concat_reorder_fusion_rank3_axis2_to_axis0(part_count, part_width):
+def test_split_concat_fusion_rank3_axis2_to_axis0(part_count, part_width):
     rng = np.random.default_rng(37)
     sequence = 3
     packed_width = part_count * part_width
@@ -91,7 +91,7 @@ def test_split_concat_reorder_fusion_rank3_axis2_to_axis0(part_count, part_width
     ]
     graph = helper.make_graph(
         nodes,
-        f"split_concat_reorder_fusion_p{part_count}_graph",
+        f"split_concat_fusion_p{part_count}_graph",
         [
             helper.make_tensor_value_info(
                 "X", TensorProto.FLOAT, ["batch", sequence * packed_width]

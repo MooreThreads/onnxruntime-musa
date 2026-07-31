@@ -569,7 +569,10 @@ def _factory_infos(sources: list[tuple[Path, str]]) -> dict[str, FactoryInfo]:
     )
     for factory in factories:
         source, source_text, body = _source_with_function(factory, sources)
-        compute_match = re.search(r"make_unique<(\w+Compute)>", body)
+        compute_match = re.search(
+            r"(?:make_unique|Create\w+Impl)\s*<\s*(\w+FusionCompute)\s*>",
+            body,
+        )
         if compute_match:
             compute_type = compute_match.group(1)
         else:
@@ -821,6 +824,29 @@ def _build_fusions() -> tuple[list[FusionInfo], list[CompileEntry]]:
                 test_graph=test_graph,
             )
         )
+    naming_errors: list[str] = []
+    for fusion in fusions:
+        stem = _stem_from_finder(fusion.capability.finder)
+        expected_detector = f"Is{stem}FusionGraph"
+        expected_factory = f"Create{stem}Fusion"
+        expected_compute = f"{stem}FusionCompute"
+        actual = (
+            fusion.compile_entry.detector,
+            fusion.compile_entry.factory,
+            fusion.compute_type,
+        )
+        expected = (expected_detector, expected_factory, expected_compute)
+        if actual != expected:
+            naming_errors.append(
+                f"{fusion.capability.finder}: expected {expected}, got {actual}"
+            )
+    if naming_errors:
+        raise ValueError(
+            "fusion naming must follow Find<Name>Fusions / "
+            "Is<Name>FusionGraph / Create<Name>Fusion / <Name>FusionCompute:\n"
+            + "\n".join(naming_errors)
+        )
+
     return fusions, compile_entries
 
 

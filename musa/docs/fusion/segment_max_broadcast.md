@@ -5,12 +5,12 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **26**
+- GetCapability priority: **6**
 - Finder: `FindSegmentMaxBroadcastFusions`
 - Finder implementation: `musa/ep/src/fusion/segment_max_broadcast_fusion_matcher.cc`
 - Compile detector: `IsSegmentMaxBroadcastFusionGraph`
 - Runtime factory: `CreateSegmentMaxBroadcastFusion`
-- Runtime compute: `SegmentMaxBroadcastCompute`
+- Runtime compute: `SegmentMaxBroadcastFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/segment_max_broadcast_fusion.cc`
 - `drop_constant_initializers`: `true`
 - Before-graph topology source: `test/fusion/test_segment_max_broadcast_fusion.py::_build_segment_max_broadcast_model`
@@ -83,7 +83,7 @@ flowchart LR
   end
   subgraph After[After fusion]
     A0["MUSA fused node"]
-    A1["SegmentMaxBroadcastCompute"]
+    A1["SegmentMaxBroadcastFusionCompute"]
     A0 --> A1
   end
   Before ==> After

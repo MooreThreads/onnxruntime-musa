@@ -5,6 +5,7 @@
 
 #include <stdexcept>
 
+#include "graph/graph_utils.h"
 #include "kernels/shared_inc/op_kernel_common.h"
 #include "kernels/tensor/transpose_impl.h"
 
@@ -56,16 +57,21 @@ OrtStatus* StridedViewFusionCompute::Compute(
 }
 
 bool IsStridedViewFusionGraph(Ort::ConstGraph graph) {
-  int concat = 0, slice = 0;
+  Ort::ConstNode concat_node{nullptr};
+  int slice_count = 0;
   for (Ort::ConstNode node : graph.GetNodes()) {
-    if (node.GetOperatorType() == "Concat")
-      ++concat;
-    else if (node.GetOperatorType() == "Slice")
-      ++slice;
-    else
+    if (musa_ep::IsOnnxOp(node, "Concat")) {
+      if (concat_node) return false;
+      concat_node = node;
+    } else if (musa_ep::IsOnnxOp(node, "Slice")) {
+      ++slice_count;
+    } else {
       return false;
+    }
   }
-  return concat == 1 && slice >= 2;
+  if (!concat_node || slice_count < 2) return false;
+  auto axis = musa_ep::GetIntAttribute(concat_node, "axis");
+  return axis.has_value() && *axis == 2;
 }
 
 std::unique_ptr<FusionNodeCompute> CreateStridedViewFusion(

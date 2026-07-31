@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "fusion/split_concat_reorder_fusion.h"
+#include "fusion/split_concat_fusion.h"
 
 #include <stdexcept>
 #include <string>

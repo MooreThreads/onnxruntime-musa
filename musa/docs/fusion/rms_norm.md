@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **16**
+- GetCapability priority: **4**
 - Finder: `FindRmsNormFusions`
 - Finder implementation: `musa/ep/src/fusion/rms_norm_fusion_matcher.cc`
 - Compile detector: `IsRmsNormFusionGraph`

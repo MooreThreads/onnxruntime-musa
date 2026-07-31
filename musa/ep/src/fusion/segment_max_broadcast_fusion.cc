@@ -121,9 +121,9 @@ bool ResolveSegmentMaxBroadcastValues(Ort::ConstGraph graph,
   return false;
 }
 
-struct SegmentMaxBroadcastCompute : FusionNodeCompute {
-  SegmentMaxBroadcastCompute(size_t segment_ids_index, size_t values_index,
-                             size_t output_index)
+struct SegmentMaxBroadcastFusionCompute : FusionNodeCompute {
+  SegmentMaxBroadcastFusionCompute(size_t segment_ids_index,
+                                   size_t values_index, size_t output_index)
       : segment_ids_index(segment_ids_index),
         values_index(values_index),
         output_index(output_index) {}
@@ -195,7 +195,7 @@ std::unique_ptr<FusionNodeCompute> CreateSegmentMaxBroadcastFusion(
   }
   auto inputs = ValueIndices(fused_node.GetInputs());
   auto outputs = ValueIndices(fused_node.GetOutputs());
-  return std::make_unique<SegmentMaxBroadcastCompute>(
+  return std::make_unique<SegmentMaxBroadcastFusionCompute>(
       MappedIndex(inputs, musa_ep::Name(resolved.segment_ids),
                   "segment-id input"),
       MappedIndex(inputs, musa_ep::Name(resolved.values), "value input"),

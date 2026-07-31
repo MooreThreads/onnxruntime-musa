@@ -550,6 +550,45 @@ OrtStatus* ComputeDeviceConcatMatMul(
 
 }  // namespace
 
+bool IsConcatMatMulFusionGraph(Ort::ConstGraph graph) {
+  std::vector<Ort::ConstNode> nodes = graph.GetNodes();
+  if (nodes.size() != 2) {
+    return false;
+  }
+
+  Ort::ConstNode concat_node{nullptr};
+  Ort::ConstNode matmul_node{nullptr};
+  for (Ort::ConstNode node : nodes) {
+    if (IsOnnxOp(node, "Concat")) {
+      if (concat_node) {
+        return false;
+      }
+      concat_node = node;
+    } else if (IsOnnxOp(node, "MatMul")) {
+      if (matmul_node) {
+        return false;
+      }
+      matmul_node = node;
+    } else {
+      return false;
+    }
+  }
+
+  if (!concat_node || !matmul_node) {
+    return false;
+  }
+
+  std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
+  std::vector<Ort::ConstValueInfo> matmul_inputs = matmul_node.GetInputs();
+  if (concat_outputs.size() != 1 || matmul_inputs.size() != 2) {
+    return false;
+  }
+
+  const std::string concat_output_name = Name(concat_outputs[0]);
+  return Name(matmul_inputs[0]) == concat_output_name ||
+         Name(matmul_inputs[1]) == concat_output_name;
+}
+
 std::unique_ptr<FusionNodeCompute> CreateConcatMatMulFusion(
     Ort::ConstGraph graph, Ort::ConstNode fused_node) {
   std::vector<Ort::ConstNode> nodes = graph.GetNodes();

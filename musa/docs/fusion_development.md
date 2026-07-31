@@ -42,6 +42,24 @@ GetCapability matcher
 
 `ep.cc` 不应该再承载具体 matcher 细节。它只消费 `FindFusionMatches(...)` 的结果，并注册 fused nodes 和普通单节点 capability。
 
+## 命名约定
+
+每个注册到 GetCapability 的 fusion 必须选择唯一的 canonical `<Name>`，并在所有对外可观察层保持一致：
+
+```text
+Find<Name>Fusions
+Is<Name>FusionGraph
+Create<Name>Fusion
+<Name>FusionCompute
+<name>_fusion_matcher.cc
+<name>_fusion.{h,cc}
+test_<name>_fusion.py
+```
+
+多个 fusion 可以复用同一份底层 GEMM、reorder 或 device kernel 实现，但不能因此共用模糊的 Compile detector/factory 或 runtime compute 类型。例如 `GemmActivation` 和 `FusedGemm` 可以继续共享 linear lowering，runtime graph 中仍必须分别显示 `GemmActivationFusionCompute` 和 `FusedGemmFusionCompute`。
+
+`scripts/gen_fusion_docs.py` 会校验 finder、detector、factory 和 runtime compute 的 canonical stem；任何一层不一致都会直接生成失败。底层 device helper 可以使用描述算法的名称，例如 `LaunchMusaSplitConcatReorderFloat`，因为它不是 fusion 注册身份。
+
 ## 开发步骤
 
 1. 先判断是扩展已有 fusion 还是新建 fusion

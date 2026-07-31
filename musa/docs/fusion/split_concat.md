@@ -5,15 +5,15 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **4**
+- GetCapability priority: **18**
 - Finder: `FindSplitConcatFusions`
-- Finder implementation: `musa/ep/src/fusion/split_concat_reorder_fusion_matcher.cc`
+- Finder implementation: `musa/ep/src/fusion/split_concat_fusion_matcher.cc`
 - Compile detector: `IsSplitConcatFusionGraph`
 - Runtime factory: `CreateSplitConcatFusion`
 - Runtime compute: `SplitConcatFusionCompute`
-- Runtime implementation: `musa/ep/src/fusion/split_concat_reorder_fusion.cc`
+- Runtime implementation: `musa/ep/src/fusion/split_concat_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `musa/ep/src/fusion/split_concat_reorder_fusion_matcher.cc` finder source
+- Before-graph topology source: `musa/ep/src/fusion/split_concat_fusion_matcher.cc` finder source
 
 ## Extracted ONNX Ops
 

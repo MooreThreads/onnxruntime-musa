@@ -334,12 +334,12 @@ bool ResolveTargetIdCountEmbeddingValues(
   return false;
 }
 
-struct TargetIdCountEmbeddingCompute : FusionNodeCompute {
-  TargetIdCountEmbeddingCompute(TargetIdCountEmbeddingValues values,
-                                std::optional<size_t> target_index,
-                                size_t ids_index, size_t table_index,
-                                size_t embedding_output_index,
-                                size_t count_output_index)
+struct TargetIdCountEmbeddingFusionCompute : FusionNodeCompute {
+  TargetIdCountEmbeddingFusionCompute(TargetIdCountEmbeddingValues values,
+                                      std::optional<size_t> target_index,
+                                      size_t ids_index, size_t table_index,
+                                      size_t embedding_output_index,
+                                      size_t count_output_index)
       : values(std::move(values)),
         target_index(target_index),
         ids_index(ids_index),
@@ -509,7 +509,7 @@ std::unique_ptr<FusionNodeCompute> CreateTargetIdCountEmbeddingFusion(
     target_index = MappedIndex(input_indices, musa_ep::Name(values.target),
                                "target input");
   }
-  return std::make_unique<TargetIdCountEmbeddingCompute>(
+  return std::make_unique<TargetIdCountEmbeddingFusionCompute>(
       values, target_index,
       MappedIndex(input_indices, musa_ep::Name(values.ids), "ids input"),
       MappedIndex(input_indices, musa_ep::Name(values.table), "table input"),

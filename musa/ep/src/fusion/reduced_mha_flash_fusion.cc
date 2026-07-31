@@ -81,10 +81,11 @@ OrtStatus* RunGemmWithBias(float* y, const void* x, const void* w,
       y, bias, y_shape[0] * y_shape[1], y_shape[1], stream));
 }
 
-class ReducedMhaFlashFusion final : public FusionNodeCompute {
+class ReducedMhaFlashFusionCompute final : public FusionNodeCompute {
  public:
-  ReducedMhaFlashFusion(size_t x, size_t qw, size_t qb, size_t mask, size_t ow,
-                        size_t ob, int64_t heads, int64_t a, float scale)
+  ReducedMhaFlashFusionCompute(size_t x, size_t qw, size_t qb, size_t mask,
+                               size_t ow, size_t ob, int64_t heads, int64_t a,
+                               float scale)
       : x_(x),
         qw_(qw),
         qb_(qb),
@@ -208,7 +209,7 @@ std::unique_ptr<FusionNodeCompute> CreateReducedMhaFlashFusion(
   auto q = musa_ep::GetIntsAttribute(a, "qkv_hidden_sizes");
   if (!q || q->size() != 3)
     throw std::runtime_error("missing qkv_hidden_sizes");
-  return std::make_unique<ReducedMhaFlashFusion>(
+  return std::make_unique<ReducedMhaFlashFusionCompute>(
       Index(idx, ui[0]), Index(idx, ai[1]), Index(idx, ai[2]),
       ai.size() == 4 ? Index(idx, ai[3]) : SIZE_MAX, Index(idx, mi[1]),
       Index(idx, mi[2]), musa_ep::GetIntAttribute(a, "num_heads").value_or(0),

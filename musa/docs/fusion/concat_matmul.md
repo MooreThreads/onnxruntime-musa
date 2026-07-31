@@ -5,10 +5,10 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **5**
+- GetCapability priority: **16**
 - Finder: `FindConcatMatMulFusions`
 - Finder implementation: `musa/ep/src/fusion/concat_matmul_fusion_matcher.cc`
-- Compile detector: `fallback`
+- Compile detector: `IsConcatMatMulFusionGraph`
 - Runtime factory: `CreateConcatMatMulFusion`
 - Runtime compute: `ConcatMatMulFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/concat_matmul_fusion.cc`

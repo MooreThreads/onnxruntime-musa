@@ -5,15 +5,15 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **12**
+- GetCapability priority: **27**
 - Finder: `FindFusedGemmFusions`
 - Finder implementation: `musa/ep/src/fusion/linear_fusion_matcher.cc`
-- Compile detector: `IsLinearFusionGraph`
-- Runtime factory: `CreateLinearFusion`
-- Runtime compute: `LinearFusionCompute`
+- Compile detector: `IsFusedGemmFusionGraph`
+- Runtime factory: `CreateFusedGemmFusion`
+- Runtime compute: `FusedGemmFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/linear_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `test/fusion/test_linear_fusion.py::test_matmul_add_tanh_fusion`
+- Before-graph topology source: `test/fusion/test_fused_gemm_fusion.py::test_matmul_add_tanh_fusion`
 
 ## Extracted ONNX Ops
 
@@ -32,7 +32,7 @@ flowchart LR
   end
   subgraph After[After fusion]
     A0["MUSA fused node"]
-    A1["LinearFusionCompute"]
+    A1["FusedGemmFusionCompute"]
     A0 --> A1
   end
   Before ==> After

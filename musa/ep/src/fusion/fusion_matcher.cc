@@ -118,16 +118,76 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindReducedMhaFlashFusions", false,
                  std::move(reduced_mha_flash_fusions), accepted_node_ids);
 
+  auto parallel_einsum_activation_fusions = FindParallelEinsumActivationFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindParallelEinsumActivationFusions", false,
+                 std::move(parallel_einsum_activation_fusions),
+                 accepted_node_ids);
+
+  auto rms_norm_fusions =
+      FindRmsNormFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindRmsNormFusions", false,
+                 std::move(rms_norm_fusions), accepted_node_ids);
+
+  auto centered_reduce_fusions = FindCenteredReduceFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindCenteredReduceFusions", false,
+                 std::move(centered_reduce_fusions), accepted_node_ids);
+
+  auto segment_max_broadcast_fusions = FindSegmentMaxBroadcastFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindSegmentMaxBroadcastFusions", true,
+                 std::move(segment_max_broadcast_fusions), accepted_node_ids);
+
+  auto target_id_count_embedding_fusions = FindTargetIdCountEmbeddingFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindTargetIdCountEmbeddingFusions", false,
+                 std::move(target_id_count_embedding_fusions),
+                 accepted_node_ids);
+
+  auto masked_embedding_lookup_fusions = FindMaskedEmbeddingLookupFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindMaskedEmbeddingLookupFusions", false,
+                 std::move(masked_embedding_lookup_fusions), accepted_node_ids);
+
+  auto sparse_id_to_mask_fusions = FindSparseIdToMaskFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindSparseIdToMaskFusions", false,
+                 std::move(sparse_id_to_mask_fusions), accepted_node_ids);
+
+  auto bucketize_gather_fusions = FindBucketizeGatherFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindBucketizeGatherFusions", false,
+                 std::move(bucketize_gather_fusions), accepted_node_ids);
+
+  auto modulo_gather_fusions =
+      FindModuloGatherFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindModuloGatherFusions", false,
+                 std::move(modulo_gather_fusions), accepted_node_ids);
+
+  auto replace_invalid_id_fusions = FindReplaceInvalidIdFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindReplaceInvalidIdFusions", true,
+                 std::move(replace_invalid_id_fusions), accepted_node_ids);
+
+  auto math_concat_log_fusions = FindMathConcatLogFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindMathConcatLogFusions", false,
+                 std::move(math_concat_log_fusions), accepted_node_ids);
+
   auto split_unsqueeze_concat_fusions = FindSplitUnsqueezeConcatFusions(
       all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindSplitUnsqueezeConcatFusions", false,
                  std::move(split_unsqueeze_concat_fusions), accepted_node_ids);
 
-  auto split_concat_fusions =
-      FindSplitConcatFusions(all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindSplitConcatFusions", false,
-                 std::move(split_concat_fusions), accepted_node_ids);
+  auto split_reduce_fusions =
+      FindSplitReduceFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindSplitReduceFusions", false,
+                 std::move(split_reduce_fusions), accepted_node_ids);
 
+  // ConcatSplit can absorb a downstream Concat. Let the more specific
+  // Concat -> MatMul consumer claim that downstream pair first, then
+  // ConcatSplit can safely shrink to the remaining Concat/Split/Sum nodes.
   auto concat_matmul_fusions =
       FindConcatMatMulFusions(all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindConcatMatMulFusions", false,
@@ -138,15 +198,10 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindConcatSplitFusions", false,
                  std::move(concat_split_fusions), accepted_node_ids);
 
-  auto slice_concat_fusions =
-      FindSliceConcatFusions(all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindSliceConcatFusions", false,
-                 std::move(slice_concat_fusions), accepted_node_ids);
-
-  auto tile_concat_fusions =
-      FindTileConcatFusions(all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindTileConcatFusions", false,
-                 std::move(tile_concat_fusions), accepted_node_ids);
+  auto split_concat_fusions =
+      FindSplitConcatFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindSplitConcatFusions", false,
+                 std::move(split_concat_fusions), accepted_node_ids);
 
   // The MatMul -> Unsqueeze -> Concat pattern is more specific than a bare
   // parallel MatMul and must claim its nodes first.
@@ -162,6 +217,31 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindParallelLinearFusions", false,
                  std::move(parallel_linear_fusions), accepted_node_ids);
 
+  auto strided_view_fusions =
+      FindStridedViewFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindStridedViewFusions", true,
+                 std::move(strided_view_fusions), accepted_node_ids);
+
+  auto shape_reshape_fusions =
+      FindShapeReshapeFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindShapeReshapeFusions", true,
+                 std::move(shape_reshape_fusions), accepted_node_ids);
+
+  auto tile_concat_fusions =
+      FindTileConcatFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindTileConcatFusions", false,
+                 std::move(tile_concat_fusions), accepted_node_ids);
+
+  auto slice_concat_fusions =
+      FindSliceConcatFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindSliceConcatFusions", false,
+                 std::move(slice_concat_fusions), accepted_node_ids);
+
+  auto concat_reshape_fusions = FindConcatReshapeFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindConcatReshapeFusions", true,
+                 std::move(concat_reshape_fusions), accepted_node_ids);
+
   auto gemm_activation_fusions = FindGemmActivationFusions(
       all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindGemmActivationFusions", false,
@@ -171,83 +251,6 @@ std::vector<FusionMatch> FindFusionMatches(
       FindFusedGemmFusions(all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindFusedGemmFusions", false,
                  std::move(fused_gemm_fusions), accepted_node_ids);
-
-  auto shape_reshape_fusions =
-      FindShapeReshapeFusions(all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindShapeReshapeFusions", true,
-                 std::move(shape_reshape_fusions), accepted_node_ids);
-
-  auto centered_reduce_fusions = FindCenteredReduceFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindCenteredReduceFusions", false,
-                 std::move(centered_reduce_fusions), accepted_node_ids);
-
-  auto split_reduce_fusions =
-      FindSplitReduceFusions(all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindSplitReduceFusions", false,
-                 std::move(split_reduce_fusions), accepted_node_ids);
-
-  auto rms_norm_fusions =
-      FindRmsNormFusions(all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindRmsNormFusions", false,
-                 std::move(rms_norm_fusions), accepted_node_ids);
-
-  auto modulo_gather_fusions =
-      FindModuloGatherFusions(all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindModuloGatherFusions", false,
-                 std::move(modulo_gather_fusions), accepted_node_ids);
-
-  auto parallel_einsum_activation_fusions = FindParallelEinsumActivationFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindParallelEinsumActivationFusions", false,
-                 std::move(parallel_einsum_activation_fusions),
-                 accepted_node_ids);
-
-  auto math_concat_log_fusions = FindMathConcatLogFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindMathConcatLogFusions", false,
-                 std::move(math_concat_log_fusions), accepted_node_ids);
-
-  auto sparse_id_to_mask_fusions = FindSparseIdToMaskFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindSparseIdToMaskFusions", false,
-                 std::move(sparse_id_to_mask_fusions), accepted_node_ids);
-
-  auto bucketize_gather_fusions = FindBucketizeGatherFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindBucketizeGatherFusions", false,
-                 std::move(bucketize_gather_fusions), accepted_node_ids);
-
-  auto masked_embedding_lookup_fusions = FindMaskedEmbeddingLookupFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindMaskedEmbeddingLookupFusions", false,
-                 std::move(masked_embedding_lookup_fusions), accepted_node_ids);
-
-  auto target_id_count_embedding_fusions = FindTargetIdCountEmbeddingFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindTargetIdCountEmbeddingFusions", false,
-                 std::move(target_id_count_embedding_fusions),
-                 accepted_node_ids);
-
-  auto concat_reshape_fusions = FindConcatReshapeFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindConcatReshapeFusions", true,
-                 std::move(concat_reshape_fusions), accepted_node_ids);
-
-  auto replace_invalid_id_fusions = FindReplaceInvalidIdFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindReplaceInvalidIdFusions", true,
-                 std::move(replace_invalid_id_fusions), accepted_node_ids);
-
-  auto segment_max_broadcast_fusions = FindSegmentMaxBroadcastFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindSegmentMaxBroadcastFusions", true,
-                 std::move(segment_max_broadcast_fusions), accepted_node_ids);
-
-  auto strided_view_fusions =
-      FindStridedViewFusions(all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindStridedViewFusions", true,
-                 std::move(strided_view_fusions), accepted_node_ids);
 
   const bool no_overlap = FusionMatchesHaveNoOverlap(matches);
   assert(no_overlap);

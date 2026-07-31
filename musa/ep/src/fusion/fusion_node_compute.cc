@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <exception>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <typeinfo>
 #include <unordered_set>
@@ -46,7 +47,7 @@
 #include "fusion/shape_reshape_fusion.h"
 #include "fusion/slice_concat_fusion.h"
 #include "fusion/sparse_id_to_mask_fusion.h"
-#include "fusion/split_concat_reorder_fusion.h"
+#include "fusion/split_concat_fusion.h"
 #include "fusion/split_reduce_fusion.h"
 #include "fusion/split_unsqueeze_concat_fusion.h"
 #include "fusion/strided_view_fusion.h"
@@ -224,55 +225,60 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
             CreateMhtaScaledDotProductAttentionFusion(graph, fused_node);
       } else if (IsReducedMhaFlashFusionGraph(graph)) {
         fusion_compute = CreateReducedMhaFlashFusion(graph, fused_node);
-      } else if (IsCenteredReduceFusionGraph(graph)) {
-        fusion_compute = CreateCenteredReduceFusion(graph, fused_node);
-      } else if (IsShapeReshapeFusionGraph(graph)) {
-        fusion_compute = CreateShapeReshapeFusion(graph, fused_node);
-      } else if (IsSplitReduceFusionGraph(graph)) {
-        fusion_compute = CreateSplitReduceFusion(graph, fused_node);
-      } else if (IsParallelLinearFusionGraph(graph)) {
-        fusion_compute = CreateParallelLinearFusion(graph, fused_node);
-      } else if (IsLinearFusionGraph(graph)) {
-        fusion_compute = CreateLinearFusion(graph, fused_node);
-      } else if (IsConcatSplitFusionGraph(graph)) {
-        fusion_compute = CreateConcatSplitFusion(graph, fused_node);
-      } else if (IsSliceConcatFusionGraph(graph)) {
-        fusion_compute = CreateSliceConcatFusion(graph, fused_node);
-      } else if (IsSplitUnsqueezeConcatFusionGraph(graph)) {
-        fusion_compute = CreateSplitUnsqueezeConcatFusion(graph, fused_node);
-      } else if (IsSplitConcatFusionGraph(graph)) {
-        fusion_compute = CreateSplitConcatFusion(graph, fused_node);
-      } else if (IsTileConcatFusionGraph(graph)) {
-        fusion_compute = CreateTileConcatFusion(graph, fused_node);
-      } else if (IsRmsNormFusionGraph(graph)) {
-        fusion_compute = CreateRmsNormFusion(graph, fused_node);
-      } else if (IsTargetIdCountEmbeddingFusionGraph(graph)) {
-        fusion_compute = CreateTargetIdCountEmbeddingFusion(graph, fused_node);
-      } else if (IsModuloGatherFusionGraph(graph)) {
-        fusion_compute = CreateModuloGatherFusion(graph, fused_node);
       } else if (IsParallelEinsumActivationFusionGraph(graph)) {
         fusion_compute =
             CreateParallelEinsumActivationFusion(graph, fused_node);
-      } else if (IsParallelMatMulConcatFusionGraph(graph)) {
-        fusion_compute = CreateParallelMatMulConcatFusion(graph, fused_node);
-      } else if (IsMathConcatLogFusionGraph(graph)) {
-        fusion_compute = CreateMathConcatLogFusion(graph, fused_node);
+      } else if (IsRmsNormFusionGraph(graph)) {
+        fusion_compute = CreateRmsNormFusion(graph, fused_node);
+      } else if (IsCenteredReduceFusionGraph(graph)) {
+        fusion_compute = CreateCenteredReduceFusion(graph, fused_node);
+      } else if (IsSegmentMaxBroadcastFusionGraph(graph)) {
+        fusion_compute = CreateSegmentMaxBroadcastFusion(graph, fused_node);
+      } else if (IsTargetIdCountEmbeddingFusionGraph(graph)) {
+        fusion_compute = CreateTargetIdCountEmbeddingFusion(graph, fused_node);
+      } else if (IsMaskedEmbeddingLookupFusionGraph(graph)) {
+        fusion_compute = CreateMaskedEmbeddingLookupFusion(graph, fused_node);
       } else if (IsSparseIdToMaskFusionGraph(graph)) {
         fusion_compute = CreateSparseIdToMaskFusion(graph, fused_node);
       } else if (IsBucketizeGatherFusionGraph(graph)) {
         fusion_compute = CreateBucketizeGatherFusion(graph, fused_node);
-      } else if (IsMaskedEmbeddingLookupFusionGraph(graph)) {
-        fusion_compute = CreateMaskedEmbeddingLookupFusion(graph, fused_node);
-      } else if (IsConcatReshapeFusionGraph(graph)) {
-        fusion_compute = CreateConcatReshapeFusion(graph, fused_node);
+      } else if (IsModuloGatherFusionGraph(graph)) {
+        fusion_compute = CreateModuloGatherFusion(graph, fused_node);
       } else if (IsReplaceInvalidIdFusionGraph(graph)) {
         fusion_compute = CreateReplaceInvalidIdFusion(graph, fused_node);
-      } else if (IsSegmentMaxBroadcastFusionGraph(graph)) {
-        fusion_compute = CreateSegmentMaxBroadcastFusion(graph, fused_node);
+      } else if (IsMathConcatLogFusionGraph(graph)) {
+        fusion_compute = CreateMathConcatLogFusion(graph, fused_node);
+      } else if (IsSplitUnsqueezeConcatFusionGraph(graph)) {
+        fusion_compute = CreateSplitUnsqueezeConcatFusion(graph, fused_node);
+      } else if (IsSplitReduceFusionGraph(graph)) {
+        fusion_compute = CreateSplitReduceFusion(graph, fused_node);
+      } else if (IsConcatMatMulFusionGraph(graph)) {
+        fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
+      } else if (IsConcatSplitFusionGraph(graph)) {
+        fusion_compute = CreateConcatSplitFusion(graph, fused_node);
+      } else if (IsSplitConcatFusionGraph(graph)) {
+        fusion_compute = CreateSplitConcatFusion(graph, fused_node);
+      } else if (IsParallelMatMulConcatFusionGraph(graph)) {
+        fusion_compute = CreateParallelMatMulConcatFusion(graph, fused_node);
+      } else if (IsParallelLinearFusionGraph(graph)) {
+        fusion_compute = CreateParallelLinearFusion(graph, fused_node);
       } else if (IsStridedViewFusionGraph(graph)) {
         fusion_compute = CreateStridedViewFusion(graph, fused_node);
+      } else if (IsShapeReshapeFusionGraph(graph)) {
+        fusion_compute = CreateShapeReshapeFusion(graph, fused_node);
+      } else if (IsTileConcatFusionGraph(graph)) {
+        fusion_compute = CreateTileConcatFusion(graph, fused_node);
+      } else if (IsSliceConcatFusionGraph(graph)) {
+        fusion_compute = CreateSliceConcatFusion(graph, fused_node);
+      } else if (IsConcatReshapeFusionGraph(graph)) {
+        fusion_compute = CreateConcatReshapeFusion(graph, fused_node);
+      } else if (IsGemmActivationFusionGraph(graph)) {
+        fusion_compute = CreateGemmActivationFusion(graph, fused_node);
+      } else if (IsFusedGemmFusionGraph(graph)) {
+        fusion_compute = CreateFusedGemmFusion(graph, fused_node);
       } else {
-        fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
+        throw std::runtime_error("unsupported MUSA fusion graph: " +
+                                 fused_node_name);
       }
       if (RuntimeGraphDumpEnabled()) {
         RegisterRuntimeFusionInstance(

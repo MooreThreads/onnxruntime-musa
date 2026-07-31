@@ -10,7 +10,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""End-to-end tests for linear Plugin EP fusion patterns."""
+"""End-to-end tests for the GemmActivation Plugin EP fusion."""
 
 import numpy as np
 from onnx import helper, numpy_helper
@@ -93,54 +93,6 @@ def test_reshape_gemm_reshape_relu_reshape_fusion():
         [("Y", TensorProto.FLOAT)],
         initializers=initializers,
         name="reshape_gemm_reshape_relu_reshape_fusion_graph",
-    )
-
-    run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
-
-
-def test_matmul_add_tanh_fusion():
-    rng = np.random.default_rng(3)
-    a = rng.standard_normal((2, 4, 16)).astype(np.float32)
-    b = rng.standard_normal((16, 12)).astype(np.float32)
-    bias = rng.standard_normal((12,)).astype(np.float32)
-
-    nodes = [
-        helper.make_node("MatMul", ["A", "B"], ["M"]),
-        helper.make_node("Add", ["M", "Bias"], ["MB"]),
-        helper.make_node("Tanh", ["MB"], ["Y"]),
-    ]
-    feeds = {"A": a, "B": b, "Bias": bias}
-    model = build_graph_model(
-        nodes,
-        feeds,
-        [("Y", TensorProto.FLOAT)],
-        name="matmul_add_tanh_fusion_graph",
-    )
-
-    run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
-
-
-def test_matmul_add_tanh_fusion_with_initializer_inputs():
-    rng = np.random.default_rng(4)
-    a = rng.standard_normal((2, 4, 16)).astype(np.float32)
-    b = rng.standard_normal((16, 12)).astype(np.float32)
-    bias = rng.standard_normal((12,)).astype(np.float32)
-
-    nodes = [
-        helper.make_node("MatMul", ["A", "B"], ["M"]),
-        helper.make_node("Add", ["M", "Bias"], ["MB"]),
-        helper.make_node("Tanh", ["MB"], ["Y"]),
-    ]
-    feeds = {"A": a}
-    model = build_graph_model(
-        nodes,
-        feeds,
-        [("Y", TensorProto.FLOAT)],
-        initializers=[
-            numpy_helper.from_array(b, "B"),
-            numpy_helper.from_array(bias, "Bias"),
-        ],
-        name="matmul_add_tanh_initializer_fusion_graph",
     )
 
     run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)

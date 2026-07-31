@@ -21,6 +21,10 @@
 
 #include "fusion/fusion_node_compute.h"
 
-bool IsLinearFusionGraph(Ort::ConstGraph graph);
-std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
+bool IsGemmActivationFusionGraph(Ort::ConstGraph graph);
+std::unique_ptr<FusionNodeCompute> CreateGemmActivationFusion(
+    Ort::ConstGraph graph, Ort::ConstNode fused_node);
+
+bool IsFusedGemmFusionGraph(Ort::ConstGraph graph);
+std::unique_ptr<FusionNodeCompute> CreateFusedGemmFusion(
     Ort::ConstGraph graph, Ort::ConstNode fused_node);

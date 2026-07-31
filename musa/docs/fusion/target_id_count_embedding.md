@@ -5,12 +5,12 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **23**
+- GetCapability priority: **7**
 - Finder: `FindTargetIdCountEmbeddingFusions`
 - Finder implementation: `musa/ep/src/fusion/target_id_count_embedding_fusion_matcher.cc`
 - Compile detector: `IsTargetIdCountEmbeddingFusionGraph`
 - Runtime factory: `CreateTargetIdCountEmbeddingFusion`
-- Runtime compute: `TargetIdCountEmbeddingCompute`
+- Runtime compute: `TargetIdCountEmbeddingFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/target_id_count_embedding_fusion.cc`
 - `drop_constant_initializers`: `false`
 - Before-graph topology source: `test/fusion/test_target_id_count_embedding_fusion.py::_build_model`
@@ -54,7 +54,7 @@ flowchart LR
   end
   subgraph After[After fusion]
     A0["MUSA fused node"]
-    A1["TargetIdCountEmbeddingCompute"]
+    A1["TargetIdCountEmbeddingFusionCompute"]
     A0 --> A1
   end
   Before ==> After

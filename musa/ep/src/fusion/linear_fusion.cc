@@ -221,12 +221,12 @@ OrtStatus* RunDeviceFusedGemm(
       activation_alpha, stream));
 }
 
-struct LinearFusionCompute : FusionNodeCompute {
-  LinearFusionCompute(size_t a_input_index, size_t b_input_index,
-                      size_t bias_input_index, bool trans_a, bool trans_b,
-                      float alpha, float beta, bool flatten_a,
-                      std::string activation, float activation_alpha,
-                      std::vector<int64_t> final_output_shape = {})
+struct LinearFusionComputeBase : FusionNodeCompute {
+  LinearFusionComputeBase(size_t a_input_index, size_t b_input_index,
+                          size_t bias_input_index, bool trans_a, bool trans_b,
+                          float alpha, float beta, bool flatten_a,
+                          std::string activation, float activation_alpha,
+                          std::vector<int64_t> final_output_shape = {})
       : a_input_index(a_input_index),
         b_input_index(b_input_index),
         bias_input_index(bias_input_index),
@@ -337,6 +337,14 @@ struct LinearFusionCompute : FusionNodeCompute {
   std::vector<int64_t> final_output_shape;
 };
 
+struct GemmActivationFusionCompute final : LinearFusionComputeBase {
+  using LinearFusionComputeBase::LinearFusionComputeBase;
+};
+
+struct FusedGemmFusionCompute final : LinearFusionComputeBase {
+  using LinearFusionComputeBase::LinearFusionComputeBase;
+};
+
 std::string ActivationNameAndAlpha(Ort::ConstNode activation_node,
                                    float& activation_alpha) {
   std::string activation = activation_node.GetOperatorType();
@@ -367,7 +375,8 @@ std::unordered_map<std::string, size_t> FusedInputIndices(
   return fused_input_indices;
 }
 
-std::unique_ptr<FusionNodeCompute> CreateGemmActivationFusion(
+template <typename ComputeType>
+std::unique_ptr<FusionNodeCompute> CreateGemmActivationFusionCompute(
     Ort::ConstNode gemm_node, Ort::ConstNode activation_node,
     Ort::ConstNode fused_node) {
   std::vector<Ort::ConstValueInfo> gemm_inputs = gemm_node.GetInputs();
@@ -388,7 +397,7 @@ std::unique_ptr<FusionNodeCompute> CreateGemmActivationFusion(
   if (gemm_inputs.size() == 3) {
     bias_index = GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[2]));
   }
-  return std::make_unique<LinearFusionCompute>(
+  return std::make_unique<ComputeType>(
       GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[0])),
       GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[1])), bias_index,
       ReadIntAttribute(gemm_node, "transA", 0) != 0,
@@ -398,7 +407,8 @@ std::unique_ptr<FusionNodeCompute> CreateGemmActivationFusion(
       activation_alpha);
 }
 
-std::unique_ptr<FusionNodeCompute> CreateReshapeGemmActivationFusion(
+template <typename ComputeType>
+std::unique_ptr<FusionNodeCompute> CreateReshapeGemmActivationFusionCompute(
     Ort::ConstNode gemm_node, Ort::ConstNode activation_node,
     Ort::ConstNode input_reshape_node, Ort::ConstNode tail_node,
     Ort::ConstNode fused_node) {
@@ -443,7 +453,7 @@ std::unique_ptr<FusionNodeCompute> CreateReshapeGemmActivationFusion(
   if (gemm_inputs.size() == 3) {
     bias_index = GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[2]));
   }
-  return std::make_unique<LinearFusionCompute>(
+  return std::make_unique<ComputeType>(
       GetFusedInputIndex(fused_input_indices, Name(a_input)),
       GetFusedInputIndex(fused_input_indices, Name(gemm_inputs[1])), bias_index,
       ReadIntAttribute(gemm_node, "transA", 0) != 0,
@@ -453,7 +463,8 @@ std::unique_ptr<FusionNodeCompute> CreateReshapeGemmActivationFusion(
       std::move(activation), activation_alpha, *final_shape);
 }
 
-std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
+template <typename ComputeType>
+std::unique_ptr<FusionNodeCompute> CreateFusedGemmFusionCompute(
     Ort::ConstNode matmul_node, Ort::ConstNode add_node,
     Ort::ConstNode activation_node, Ort::ConstNode fused_node) {
   std::vector<Ort::ConstValueInfo> matmul_inputs = matmul_node.GetInputs();
@@ -488,7 +499,7 @@ std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
   if (activation_node) {
     activation = ActivationNameAndAlpha(activation_node, activation_alpha);
   }
-  return std::make_unique<LinearFusionCompute>(
+  return std::make_unique<ComputeType>(
       GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[0])),
       GetFusedInputIndex(fused_input_indices, Name(matmul_inputs[1])),
       GetFusedInputIndex(fused_input_indices,
@@ -496,24 +507,14 @@ std::unique_ptr<FusionNodeCompute> CreateMatMulAddActivationFusion(
       false, false, 1.0f, 1.0f, true, std::move(activation), activation_alpha);
 }
 
-}  // namespace
+enum class LinearFusionKind {
+  kGemmActivation,
+  kFusedGemm,
+};
 
-bool IsLinearFusionGraph(Ort::ConstGraph graph) {
-  bool has_gemm = false;
-  bool has_matmul = false;
-  bool has_add = false;
-  bool has_activation = false;
-  for (Ort::ConstNode node : graph.GetNodes()) {
-    has_gemm = has_gemm || IsOnnxOp(node, "Gemm");
-    has_matmul = has_matmul || IsOnnxOp(node, "MatMul");
-    has_add = has_add || IsOnnxOp(node, "Add");
-    has_activation = has_activation || IsActivationOp(node);
-  }
-  return (has_gemm && has_activation) || (has_matmul && has_add);
-}
-
-std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
-    Ort::ConstGraph graph, Ort::ConstNode fused_node) {
+template <typename ComputeType>
+std::unique_ptr<FusionNodeCompute> CreateLinearFusionImpl(
+    Ort::ConstGraph graph, Ort::ConstNode fused_node, LinearFusionKind kind) {
   Ort::ConstNode gemm_node{nullptr};
   Ort::ConstNode matmul_node{nullptr};
   Ort::ConstNode add_node{nullptr};
@@ -539,7 +540,8 @@ std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
     }
   }
 
-  if (gemm_node && activation_node) {
+  if (kind == LinearFusionKind::kGemmActivation && gemm_node &&
+      activation_node) {
     std::vector<Ort::ConstValueInfo> gemm_inputs = gemm_node.GetInputs();
     std::vector<Ort::ConstValueInfo> gemm_outputs = gemm_node.GetOutputs();
     std::vector<Ort::ConstValueInfo> activation_outputs =
@@ -574,17 +576,67 @@ std::unique_ptr<FusionNodeCompute> CreateLinearFusion(
       }
     }
     if (output_reshape_node) {
-      return CreateReshapeGemmActivationFusion(gemm_node, activation_node,
-                                               input_reshape_node, tail_node,
-                                               fused_node);
+      return CreateReshapeGemmActivationFusionCompute<ComputeType>(
+          gemm_node, activation_node, input_reshape_node, tail_node,
+          fused_node);
     }
-    return CreateGemmActivationFusion(gemm_node, activation_node, fused_node);
+    return CreateGemmActivationFusionCompute<ComputeType>(
+        gemm_node, activation_node, fused_node);
   }
-  if (matmul_node && add_node) {
-    return CreateMatMulAddActivationFusion(matmul_node, add_node,
-                                           activation_node, fused_node);
+  if (kind == LinearFusionKind::kFusedGemm && matmul_node && add_node) {
+    return CreateFusedGemmFusionCompute<ComputeType>(
+        matmul_node, add_node, activation_node, fused_node);
   }
 
   throw std::runtime_error(
-      "FusedGemm fusion expects Gemm+activation or MatMul+Add(+activation)");
+      kind == LinearFusionKind::kGemmActivation
+          ? "GemmActivation fusion expects Gemm+activation"
+          : "FusedGemm fusion expects MatMul+Add(+activation)");
+}
+
+}  // namespace
+
+bool IsGemmActivationFusionGraph(Ort::ConstGraph graph) {
+  int gemm_count = 0;
+  int activation_count = 0;
+  for (Ort::ConstNode node : graph.GetNodes()) {
+    if (IsOnnxOp(node, "Gemm")) {
+      ++gemm_count;
+    } else if (IsActivationOp(node)) {
+      ++activation_count;
+    } else if (!IsOnnxOp(node, "Reshape") && !IsOnnxOp(node, "Unsqueeze")) {
+      return false;
+    }
+  }
+  return gemm_count == 1 && activation_count == 1;
+}
+
+std::unique_ptr<FusionNodeCompute> CreateGemmActivationFusion(
+    Ort::ConstGraph graph, Ort::ConstNode fused_node) {
+  return CreateLinearFusionImpl<GemmActivationFusionCompute>(
+      graph, fused_node, LinearFusionKind::kGemmActivation);
+}
+
+bool IsFusedGemmFusionGraph(Ort::ConstGraph graph) {
+  int matmul_count = 0;
+  int add_count = 0;
+  int activation_count = 0;
+  for (Ort::ConstNode node : graph.GetNodes()) {
+    if (IsOnnxOp(node, "MatMul")) {
+      ++matmul_count;
+    } else if (IsOnnxOp(node, "Add")) {
+      ++add_count;
+    } else if (IsActivationOp(node)) {
+      ++activation_count;
+    } else {
+      return false;
+    }
+  }
+  return matmul_count == 1 && add_count == 1 && activation_count <= 1;
+}
+
+std::unique_ptr<FusionNodeCompute> CreateFusedGemmFusion(
+    Ort::ConstGraph graph, Ort::ConstNode fused_node) {
+  return CreateLinearFusionImpl<FusedGemmFusionCompute>(
+      graph, fused_node, LinearFusionKind::kFusedGemm);
 }

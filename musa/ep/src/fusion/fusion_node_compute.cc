@@ -50,6 +50,7 @@
 #include "fusion/sparse_id_to_mask_fusion.h"
 #include "fusion/split_concat_fusion.h"
 #include "fusion/split_reduce_fusion.h"
+#include "fusion/split_sequence_moe_fusion.h"
 #include "fusion/split_unsqueeze_concat_fusion.h"
 #include "fusion/strided_view_fusion.h"
 #include "fusion/target_id_count_embedding_fusion.h"
@@ -228,6 +229,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateReducedMhaFlashFusion(graph, fused_node);
       } else if (IsMoEFusionGraph(graph)) {
         fusion_compute = CreateMoEFusion(graph, fused_node);
+      } else if (IsSplitSequenceMoEFusionGraph(graph)) {
+        fusion_compute = CreateSplitSequenceMoEFusion(graph, fused_node);
       } else if (IsParallelEinsumActivationFusionGraph(graph)) {
         fusion_compute =
             CreateParallelEinsumActivationFusion(graph, fused_node);

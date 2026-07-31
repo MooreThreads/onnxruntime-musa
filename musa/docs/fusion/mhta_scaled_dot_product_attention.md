@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **1**
+- GetCapability priority: **2**
 - Finder: `FindMhtaScaledDotProductAttentionFusions`
 - Finder implementation: `musa/ep/src/fusion/mhta_scaled_dot_product_attention_fusion_matcher.cc`
 - Compile detector: `IsMhtaScaledDotProductAttentionFusionGraph`

@@ -7,8 +7,8 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 
 | Priority | Fusion | Finder | `drop_constant_initializers` | Doc |
 | --- | --- | --- | --- | --- |
-| 1 | Mhta Scaled Dot Product Attention Fusion | `FindMhtaScaledDotProductAttentionFusions` | `false` | [mhta_scaled_dot_product_attention.md](fusion/mhta_scaled_dot_product_attention.md) |
-| 2 | Reduced Mha Flash Fusion | `FindReducedMhaFlashFusions` | `false` | [reduced_mha_flash.md](fusion/reduced_mha_flash.md) |
+| 1 | Reduced Mha Flash Fusion | `FindReducedMhaFlashFusions` | `false` | [reduced_mha_flash.md](fusion/reduced_mha_flash.md) |
+| 2 | Mhta Scaled Dot Product Attention Fusion | `FindMhtaScaledDotProductAttentionFusions` | `false` | [mhta_scaled_dot_product_attention.md](fusion/mhta_scaled_dot_product_attention.md) |
 | 3 | MoE Fusion | `FindMoEFusions` | `true` | [moe.md](fusion/moe.md) |
 | 4 | Split Sequence MoE Fusion | `FindSplitSequenceMoEFusions` | `true` | [split_sequence_moe.md](fusion/split_sequence_moe.md) |
 | 5 | Parallel Einsum Activation Fusion | `FindParallelEinsumActivationFusions` | `false` | [parallel_einsum_activation.md](fusion/parallel_einsum_activation.md) |

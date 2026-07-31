@@ -106,17 +106,20 @@ std::vector<FusionMatch> FindFusionMatches(
   std::unordered_set<size_t> accepted_node_ids;
   std::vector<FusionMatch> matches;
 
+  auto reduced_mha_flash_fusions = FindReducedMhaFlashFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindReducedMhaFlashFusions", false,
+                 std::move(reduced_mha_flash_fusions), accepted_node_ids);
+
+  // Keep the broader reduced MHA pattern ahead of the local SDPA matcher so
+  // future ONNX-node-based expansions do not get preempted by the narrower
+  // attention chain.
   auto mhta_scaled_dot_product_attention_fusions =
       FindMhtaScaledDotProductAttentionFusions(all_nodes, graph_output_names,
                                                accepted_node_ids);
   AddFusionMatch(matches, "FindMhtaScaledDotProductAttentionFusions", false,
                  std::move(mhta_scaled_dot_product_attention_fusions),
                  accepted_node_ids);
-
-  auto reduced_mha_flash_fusions = FindReducedMhaFlashFusions(
-      all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindReducedMhaFlashFusions", false,
-                 std::move(reduced_mha_flash_fusions), accepted_node_ids);
 
   auto moe_fusions =
       FindMoEFusions(all_nodes, graph_output_names, accepted_node_ids);

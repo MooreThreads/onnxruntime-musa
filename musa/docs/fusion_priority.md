@@ -7,7 +7,7 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 
 | Priority | Fusion | Finder | `drop_constant_initializers` | Doc |
 | --- | --- | --- | --- | --- |
-| 1 | Reduced Mha Flash Fusion | `FindReducedMhaFlashFusions` | `false` | [reduced_mha_flash.md](fusion/reduced_mha_flash.md) |
+| 1 | Qkv Attention Output Projection Fusion | `FindQkvAttentionOutputProjectionFusions` | `false` | [qkv_attention_output_projection.md](fusion/qkv_attention_output_projection.md) |
 | 2 | Mhta Scaled Dot Product Attention Fusion | `FindMhtaScaledDotProductAttentionFusions` | `false` | [mhta_scaled_dot_product_attention.md](fusion/mhta_scaled_dot_product_attention.md) |
 | 3 | MoE Fusion | `FindMoEFusions` | `true` | [moe.md](fusion/moe.md) |
 | 4 | Split Sequence MoE Fusion | `FindSplitSequenceMoEFusions` | `true` | [split_sequence_moe.md](fusion/split_sequence_moe.md) |
@@ -42,7 +42,7 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | Priority | Detector | Factory | Related generated docs |
 | --- | --- | --- | --- |
 | 1 | `IsMhtaScaledDotProductAttentionFusionGraph` | `CreateMhtaScaledDotProductAttentionFusion` | [mhta_scaled_dot_product_attention](fusion/mhta_scaled_dot_product_attention.md) |
-| 2 | `IsReducedMhaFlashFusionGraph` | `CreateReducedMhaFlashFusion` | [reduced_mha_flash](fusion/reduced_mha_flash.md) |
+| 2 | `IsQkvAttentionOutputProjectionFusionGraph` | `CreateQkvAttentionOutputProjectionFusion` | [qkv_attention_output_projection](fusion/qkv_attention_output_projection.md) |
 | 3 | `IsMoEFusionGraph` | `CreateMoEFusion` | [moe](fusion/moe.md) |
 | 4 | `IsSplitSequenceMoEFusionGraph` | `CreateSplitSequenceMoEFusion` | [split_sequence_moe](fusion/split_sequence_moe.md) |
 | 5 | `IsParallelEinsumActivationFusionGraph` | `CreateParallelEinsumActivationFusion` | [parallel_einsum_activation](fusion/parallel_einsum_activation.md) |

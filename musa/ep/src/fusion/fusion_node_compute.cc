@@ -41,7 +41,7 @@
 #include "fusion/parallel_einsum_activation_fusion.h"
 #include "fusion/parallel_linear_fusion.h"
 #include "fusion/parallel_matmul_concat_fusion.h"
-#include "fusion/reduced_mha_flash_fusion.h"
+#include "fusion/qkv_attention_output_projection_fusion.h"
 #include "fusion/replace_invalid_id_fusion.h"
 #include "fusion/rms_norm_fusion.h"
 #include "fusion/segment_max_broadcast_fusion.h"
@@ -225,8 +225,9 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       if (IsMhtaScaledDotProductAttentionFusionGraph(graph)) {
         fusion_compute =
             CreateMhtaScaledDotProductAttentionFusion(graph, fused_node);
-      } else if (IsReducedMhaFlashFusionGraph(graph)) {
-        fusion_compute = CreateReducedMhaFlashFusion(graph, fused_node);
+      } else if (IsQkvAttentionOutputProjectionFusionGraph(graph)) {
+        fusion_compute =
+            CreateQkvAttentionOutputProjectionFusion(graph, fused_node);
       } else if (IsMoEFusionGraph(graph)) {
         fusion_compute = CreateMoEFusion(graph, fused_node);
       } else if (IsSplitSequenceMoEFusionGraph(graph)) {

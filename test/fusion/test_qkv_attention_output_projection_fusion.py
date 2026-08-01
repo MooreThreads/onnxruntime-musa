@@ -31,7 +31,7 @@ def _reference(x, qkv_weight, qkv_bias, mask, out_weight, out_bias, heads, scale
 def _profile(model, feeds, tmp_path):
     so = ort.SessionOptions()
     so.enable_profiling = True
-    so.profile_file_prefix = str(tmp_path / "reduced_mha_flash")
+    so.profile_file_prefix = str(tmp_path / "qkv_attention_output_projection")
     so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
     so.add_provider_for_devices(musa_devices(), {})
     session = ort.InferenceSession(model, sess_options=so)
@@ -46,7 +46,7 @@ def _profile(model, feeds, tmp_path):
     return result, events
 
 
-def test_reduced_mha_flash_fuses_four_attention_nodes(tmp_path):
+def test_qkv_attention_output_projection_fuses_four_attention_nodes(tmp_path):
     rng = np.random.default_rng(20260730)
     sequence, input_dim, attention_dim, output_dim, heads = 5, 12, 8, 10, 2
     x = rng.standard_normal((sequence, input_dim)).astype(np.float32)
@@ -69,7 +69,7 @@ def test_reduced_mha_flash_fuses_four_attention_nodes(tmp_path):
             helper.make_node("Reshape", ["A", "shape"], ["A2"]),
             helper.make_node("Gemm", ["A2", "out_weight", "out_bias"], ["Y"], transB=1),
         ],
-        "reduced_mha_flash_four_node_graph",
+        "qkv_attention_output_projection_four_node_graph",
         [
             helper.make_tensor_value_info("X", TensorProto.FLOAT, x.shape),
             helper.make_tensor_value_info("mask", TensorProto.INT32, mask.shape),

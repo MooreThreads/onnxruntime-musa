@@ -8,6 +8,6 @@
 
 #include "fusion/fusion_node_compute.h"
 
-bool IsReducedMhaFlashFusionGraph(Ort::ConstGraph graph);
-std::unique_ptr<FusionNodeCompute> CreateReducedMhaFlashFusion(
+bool IsQkvAttentionOutputProjectionFusionGraph(Ort::ConstGraph graph);
+std::unique_ptr<FusionNodeCompute> CreateQkvAttentionOutputProjectionFusion(
     Ort::ConstGraph graph, Ort::ConstNode fused_node);

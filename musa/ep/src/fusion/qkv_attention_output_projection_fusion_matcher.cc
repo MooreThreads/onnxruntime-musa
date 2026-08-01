@@ -18,10 +18,10 @@ float ReadFloatAttribute(Ort::ConstNode node, const char* name,
              : default_value;
 }
 
-bool CanFuse(Ort::ConstNode gemm,
-             const std::unordered_set<std::string>& graph_outputs,
-             const std::unordered_set<size_t>& accepted,
-             std::vector<Ort::ConstNode>& nodes) {
+bool CanFuseQkvAttentionOutputProjection(
+    Ort::ConstNode gemm, const std::unordered_set<std::string>& graph_outputs,
+    const std::unordered_set<size_t>& accepted,
+    std::vector<Ort::ConstNode>& nodes) {
   if (!IsOnnxOp(gemm, "Gemm") || accepted.count(gemm.GetId()) != 0 ||
       GetIntAttribute(gemm, "transA").value_or(0) != 0 ||
       GetIntAttribute(gemm, "transB").value_or(0) != 1 ||
@@ -80,14 +80,15 @@ bool CanFuse(Ort::ConstNode gemm,
 }
 }  // namespace
 
-std::vector<std::vector<Ort::ConstNode>> FindReducedMhaFlashFusions(
+std::vector<std::vector<Ort::ConstNode>>
+FindQkvAttentionOutputProjectionFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_outputs,
     const std::unordered_set<size_t>& accepted) {
   std::vector<std::vector<Ort::ConstNode>> result;
   for (Ort::ConstNode n : all_nodes) {
     std::vector<Ort::ConstNode> nodes;
-    if (CanFuse(n, graph_outputs, accepted, nodes))
+    if (CanFuseQkvAttentionOutputProjection(n, graph_outputs, accepted, nodes))
       result.push_back(std::move(nodes));
   }
   return result;

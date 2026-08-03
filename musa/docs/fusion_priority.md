@@ -7,66 +7,68 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 
 | Priority | Fusion | Finder | `drop_constant_initializers` | Doc |
 | --- | --- | --- | --- | --- |
-| 1 | Qkv Attention Output Projection Fusion | `FindQkvAttentionOutputProjectionFusions` | `false` | [qkv_attention_output_projection.md](fusion/qkv_attention_output_projection.md) |
-| 2 | Mhta Scaled Dot Product Attention Fusion | `FindMhtaScaledDotProductAttentionFusions` | `false` | [mhta_scaled_dot_product_attention.md](fusion/mhta_scaled_dot_product_attention.md) |
-| 3 | MoE Fusion | `FindMoEFusions` | `true` | [moe.md](fusion/moe.md) |
-| 4 | Split Sequence MoE Fusion | `FindSplitSequenceMoEFusions` | `true` | [split_sequence_moe.md](fusion/split_sequence_moe.md) |
-| 5 | Parallel Einsum Activation Fusion | `FindParallelEinsumActivationFusions` | `false` | [parallel_einsum_activation.md](fusion/parallel_einsum_activation.md) |
-| 6 | Rms Norm Fusion | `FindRmsNormFusions` | `false` | [rms_norm.md](fusion/rms_norm.md) |
-| 7 | Centered Reduce Fusion | `FindCenteredReduceFusions` | `false` | [centered_reduce.md](fusion/centered_reduce.md) |
-| 8 | Segment Max Broadcast Fusion | `FindSegmentMaxBroadcastFusions` | `true` | [segment_max_broadcast.md](fusion/segment_max_broadcast.md) |
-| 9 | Target Id Count Embedding Fusion | `FindTargetIdCountEmbeddingFusions` | `false` | [target_id_count_embedding.md](fusion/target_id_count_embedding.md) |
-| 10 | Masked Embedding Lookup Fusion | `FindMaskedEmbeddingLookupFusions` | `false` | [masked_embedding_lookup.md](fusion/masked_embedding_lookup.md) |
-| 11 | Sparse Id To Mask Fusion | `FindSparseIdToMaskFusions` | `false` | [sparse_id_to_mask.md](fusion/sparse_id_to_mask.md) |
-| 12 | Bucketize Gather Fusion | `FindBucketizeGatherFusions` | `false` | [bucketize_gather.md](fusion/bucketize_gather.md) |
-| 13 | Modulo Gather Fusion | `FindModuloGatherFusions` | `false` | [modulo_gather.md](fusion/modulo_gather.md) |
-| 14 | Replace Invalid Id Fusion | `FindReplaceInvalidIdFusions` | `true` | [replace_invalid_id.md](fusion/replace_invalid_id.md) |
-| 15 | Math Concat Log Fusion | `FindMathConcatLogFusions` | `false` | [math_concat_log.md](fusion/math_concat_log.md) |
-| 16 | Split Unsqueeze Concat Fusion | `FindSplitUnsqueezeConcatFusions` | `false` | [split_unsqueeze_concat.md](fusion/split_unsqueeze_concat.md) |
-| 17 | Split Reduce Fusion | `FindSplitReduceFusions` | `false` | [split_reduce.md](fusion/split_reduce.md) |
-| 18 | Concat MatMul Fusion | `FindConcatMatMulFusions` | `false` | [concat_matmul.md](fusion/concat_matmul.md) |
-| 19 | Concat Split Fusion | `FindConcatSplitFusions` | `false` | [concat_split.md](fusion/concat_split.md) |
-| 20 | Split Concat Fusion | `FindSplitConcatFusions` | `false` | [split_concat.md](fusion/split_concat.md) |
-| 21 | Parallel MatMul Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
-| 22 | Parallel Linear Fusion | `FindParallelLinearFusions` | `false` | [parallel_linear.md](fusion/parallel_linear.md) |
-| 23 | Strided View Fusion | `FindStridedViewFusions` | `true` | [strided_view.md](fusion/strided_view.md) |
-| 24 | Shape Reshape Fusion | `FindShapeReshapeFusions` | `true` | [shape_reshape.md](fusion/shape_reshape.md) |
-| 25 | Tile Concat Fusion | `FindTileConcatFusions` | `false` | [tile_concat.md](fusion/tile_concat.md) |
-| 26 | Slice Concat Fusion | `FindSliceConcatFusions` | `false` | [slice_concat.md](fusion/slice_concat.md) |
-| 27 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
-| 28 | Gemm Activation Fusion | `FindGemmActivationFusions` | `false` | [gemm_activation.md](fusion/gemm_activation.md) |
-| 29 | Fused Gemm Fusion | `FindFusedGemmFusions` | `false` | [fused_gemm.md](fusion/fused_gemm.md) |
+| 1 | Multi Kqv Mha Output Projection Fusion | `FindMultiKqvMhaOutputProjectionFusions` | `false` | [multi_kqv_mha_output_projection.md](fusion/multi_kqv_mha_output_projection.md) |
+| 2 | Qkv Attention Output Projection Fusion | `FindQkvAttentionOutputProjectionFusions` | `false` | [qkv_attention_output_projection.md](fusion/qkv_attention_output_projection.md) |
+| 3 | Mhta Scaled Dot Product Attention Fusion | `FindMhtaScaledDotProductAttentionFusions` | `false` | [mhta_scaled_dot_product_attention.md](fusion/mhta_scaled_dot_product_attention.md) |
+| 4 | MoE Fusion | `FindMoEFusions` | `true` | [moe.md](fusion/moe.md) |
+| 5 | Split Sequence MoE Fusion | `FindSplitSequenceMoEFusions` | `true` | [split_sequence_moe.md](fusion/split_sequence_moe.md) |
+| 6 | Parallel Einsum Activation Fusion | `FindParallelEinsumActivationFusions` | `false` | [parallel_einsum_activation.md](fusion/parallel_einsum_activation.md) |
+| 7 | Rms Norm Fusion | `FindRmsNormFusions` | `false` | [rms_norm.md](fusion/rms_norm.md) |
+| 8 | Centered Reduce Fusion | `FindCenteredReduceFusions` | `false` | [centered_reduce.md](fusion/centered_reduce.md) |
+| 9 | Segment Max Broadcast Fusion | `FindSegmentMaxBroadcastFusions` | `true` | [segment_max_broadcast.md](fusion/segment_max_broadcast.md) |
+| 10 | Target Id Count Embedding Fusion | `FindTargetIdCountEmbeddingFusions` | `false` | [target_id_count_embedding.md](fusion/target_id_count_embedding.md) |
+| 11 | Masked Embedding Lookup Fusion | `FindMaskedEmbeddingLookupFusions` | `false` | [masked_embedding_lookup.md](fusion/masked_embedding_lookup.md) |
+| 12 | Sparse Id To Mask Fusion | `FindSparseIdToMaskFusions` | `false` | [sparse_id_to_mask.md](fusion/sparse_id_to_mask.md) |
+| 13 | Bucketize Gather Fusion | `FindBucketizeGatherFusions` | `false` | [bucketize_gather.md](fusion/bucketize_gather.md) |
+| 14 | Modulo Gather Fusion | `FindModuloGatherFusions` | `false` | [modulo_gather.md](fusion/modulo_gather.md) |
+| 15 | Replace Invalid Id Fusion | `FindReplaceInvalidIdFusions` | `true` | [replace_invalid_id.md](fusion/replace_invalid_id.md) |
+| 16 | Math Concat Log Fusion | `FindMathConcatLogFusions` | `false` | [math_concat_log.md](fusion/math_concat_log.md) |
+| 17 | Split Unsqueeze Concat Fusion | `FindSplitUnsqueezeConcatFusions` | `false` | [split_unsqueeze_concat.md](fusion/split_unsqueeze_concat.md) |
+| 18 | Split Reduce Fusion | `FindSplitReduceFusions` | `false` | [split_reduce.md](fusion/split_reduce.md) |
+| 19 | Concat MatMul Fusion | `FindConcatMatMulFusions` | `false` | [concat_matmul.md](fusion/concat_matmul.md) |
+| 20 | Concat Split Fusion | `FindConcatSplitFusions` | `false` | [concat_split.md](fusion/concat_split.md) |
+| 21 | Split Concat Fusion | `FindSplitConcatFusions` | `false` | [split_concat.md](fusion/split_concat.md) |
+| 22 | Parallel MatMul Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
+| 23 | Parallel Linear Fusion | `FindParallelLinearFusions` | `false` | [parallel_linear.md](fusion/parallel_linear.md) |
+| 24 | Strided View Fusion | `FindStridedViewFusions` | `true` | [strided_view.md](fusion/strided_view.md) |
+| 25 | Shape Reshape Fusion | `FindShapeReshapeFusions` | `true` | [shape_reshape.md](fusion/shape_reshape.md) |
+| 26 | Tile Concat Fusion | `FindTileConcatFusions` | `false` | [tile_concat.md](fusion/tile_concat.md) |
+| 27 | Slice Concat Fusion | `FindSliceConcatFusions` | `false` | [slice_concat.md](fusion/slice_concat.md) |
+| 28 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
+| 29 | Gemm Activation Fusion | `FindGemmActivationFusions` | `false` | [gemm_activation.md](fusion/gemm_activation.md) |
+| 30 | Fused Gemm Fusion | `FindFusedGemmFusions` | `false` | [fused_gemm.md](fusion/fused_gemm.md) |
 
 ## Compile Dispatch Order
 
 | Priority | Detector | Factory | Related generated docs |
 | --- | --- | --- | --- |
-| 1 | `IsMhtaScaledDotProductAttentionFusionGraph` | `CreateMhtaScaledDotProductAttentionFusion` | [mhta_scaled_dot_product_attention](fusion/mhta_scaled_dot_product_attention.md) |
-| 2 | `IsQkvAttentionOutputProjectionFusionGraph` | `CreateQkvAttentionOutputProjectionFusion` | [qkv_attention_output_projection](fusion/qkv_attention_output_projection.md) |
-| 3 | `IsMoEFusionGraph` | `CreateMoEFusion` | [moe](fusion/moe.md) |
-| 4 | `IsSplitSequenceMoEFusionGraph` | `CreateSplitSequenceMoEFusion` | [split_sequence_moe](fusion/split_sequence_moe.md) |
-| 5 | `IsParallelEinsumActivationFusionGraph` | `CreateParallelEinsumActivationFusion` | [parallel_einsum_activation](fusion/parallel_einsum_activation.md) |
-| 6 | `IsRmsNormFusionGraph` | `CreateRmsNormFusion` | [rms_norm](fusion/rms_norm.md) |
-| 7 | `IsCenteredReduceFusionGraph` | `CreateCenteredReduceFusion` | [centered_reduce](fusion/centered_reduce.md) |
-| 8 | `IsSegmentMaxBroadcastFusionGraph` | `CreateSegmentMaxBroadcastFusion` | [segment_max_broadcast](fusion/segment_max_broadcast.md) |
-| 9 | `IsTargetIdCountEmbeddingFusionGraph` | `CreateTargetIdCountEmbeddingFusion` | [target_id_count_embedding](fusion/target_id_count_embedding.md) |
-| 10 | `IsMaskedEmbeddingLookupFusionGraph` | `CreateMaskedEmbeddingLookupFusion` | [masked_embedding_lookup](fusion/masked_embedding_lookup.md) |
-| 11 | `IsSparseIdToMaskFusionGraph` | `CreateSparseIdToMaskFusion` | [sparse_id_to_mask](fusion/sparse_id_to_mask.md) |
-| 12 | `IsBucketizeGatherFusionGraph` | `CreateBucketizeGatherFusion` | [bucketize_gather](fusion/bucketize_gather.md) |
-| 13 | `IsModuloGatherFusionGraph` | `CreateModuloGatherFusion` | [modulo_gather](fusion/modulo_gather.md) |
-| 14 | `IsReplaceInvalidIdFusionGraph` | `CreateReplaceInvalidIdFusion` | [replace_invalid_id](fusion/replace_invalid_id.md) |
-| 15 | `IsMathConcatLogFusionGraph` | `CreateMathConcatLogFusion` | [math_concat_log](fusion/math_concat_log.md) |
-| 16 | `IsSplitUnsqueezeConcatFusionGraph` | `CreateSplitUnsqueezeConcatFusion` | [split_unsqueeze_concat](fusion/split_unsqueeze_concat.md) |
-| 17 | `IsSplitReduceFusionGraph` | `CreateSplitReduceFusion` | [split_reduce](fusion/split_reduce.md) |
-| 18 | `IsConcatMatMulFusionGraph` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
-| 19 | `IsConcatSplitFusionGraph` | `CreateConcatSplitFusion` | [concat_split](fusion/concat_split.md) |
-| 20 | `IsSplitConcatFusionGraph` | `CreateSplitConcatFusion` | [split_concat](fusion/split_concat.md) |
-| 21 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
-| 22 | `IsParallelLinearFusionGraph` | `CreateParallelLinearFusion` | [parallel_linear](fusion/parallel_linear.md) |
-| 23 | `IsStridedViewFusionGraph` | `CreateStridedViewFusion` | [strided_view](fusion/strided_view.md) |
-| 24 | `IsShapeReshapeFusionGraph` | `CreateShapeReshapeFusion` | [shape_reshape](fusion/shape_reshape.md) |
-| 25 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
-| 26 | `IsSliceConcatFusionGraph` | `CreateSliceConcatFusion` | [slice_concat](fusion/slice_concat.md) |
-| 27 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
-| 28 | `IsGemmActivationFusionGraph` | `CreateGemmActivationFusion` | [gemm_activation](fusion/gemm_activation.md) |
-| 29 | `IsFusedGemmFusionGraph` | `CreateFusedGemmFusion` | [fused_gemm](fusion/fused_gemm.md) |
+| 1 | `IsMultiKqvMhaOutputProjectionFusionGraph` | `CreateMultiKqvMhaOutputProjectionFusion` | [multi_kqv_mha_output_projection](fusion/multi_kqv_mha_output_projection.md) |
+| 2 | `IsMhtaScaledDotProductAttentionFusionGraph` | `CreateMhtaScaledDotProductAttentionFusion` | [mhta_scaled_dot_product_attention](fusion/mhta_scaled_dot_product_attention.md) |
+| 3 | `IsQkvAttentionOutputProjectionFusionGraph` | `CreateQkvAttentionOutputProjectionFusion` | [qkv_attention_output_projection](fusion/qkv_attention_output_projection.md) |
+| 4 | `IsMoEFusionGraph` | `CreateMoEFusion` | [moe](fusion/moe.md) |
+| 5 | `IsSplitSequenceMoEFusionGraph` | `CreateSplitSequenceMoEFusion` | [split_sequence_moe](fusion/split_sequence_moe.md) |
+| 6 | `IsParallelEinsumActivationFusionGraph` | `CreateParallelEinsumActivationFusion` | [parallel_einsum_activation](fusion/parallel_einsum_activation.md) |
+| 7 | `IsRmsNormFusionGraph` | `CreateRmsNormFusion` | [rms_norm](fusion/rms_norm.md) |
+| 8 | `IsCenteredReduceFusionGraph` | `CreateCenteredReduceFusion` | [centered_reduce](fusion/centered_reduce.md) |
+| 9 | `IsSegmentMaxBroadcastFusionGraph` | `CreateSegmentMaxBroadcastFusion` | [segment_max_broadcast](fusion/segment_max_broadcast.md) |
+| 10 | `IsTargetIdCountEmbeddingFusionGraph` | `CreateTargetIdCountEmbeddingFusion` | [target_id_count_embedding](fusion/target_id_count_embedding.md) |
+| 11 | `IsMaskedEmbeddingLookupFusionGraph` | `CreateMaskedEmbeddingLookupFusion` | [masked_embedding_lookup](fusion/masked_embedding_lookup.md) |
+| 12 | `IsSparseIdToMaskFusionGraph` | `CreateSparseIdToMaskFusion` | [sparse_id_to_mask](fusion/sparse_id_to_mask.md) |
+| 13 | `IsBucketizeGatherFusionGraph` | `CreateBucketizeGatherFusion` | [bucketize_gather](fusion/bucketize_gather.md) |
+| 14 | `IsModuloGatherFusionGraph` | `CreateModuloGatherFusion` | [modulo_gather](fusion/modulo_gather.md) |
+| 15 | `IsReplaceInvalidIdFusionGraph` | `CreateReplaceInvalidIdFusion` | [replace_invalid_id](fusion/replace_invalid_id.md) |
+| 16 | `IsMathConcatLogFusionGraph` | `CreateMathConcatLogFusion` | [math_concat_log](fusion/math_concat_log.md) |
+| 17 | `IsSplitUnsqueezeConcatFusionGraph` | `CreateSplitUnsqueezeConcatFusion` | [split_unsqueeze_concat](fusion/split_unsqueeze_concat.md) |
+| 18 | `IsSplitReduceFusionGraph` | `CreateSplitReduceFusion` | [split_reduce](fusion/split_reduce.md) |
+| 19 | `IsConcatMatMulFusionGraph` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
+| 20 | `IsConcatSplitFusionGraph` | `CreateConcatSplitFusion` | [concat_split](fusion/concat_split.md) |
+| 21 | `IsSplitConcatFusionGraph` | `CreateSplitConcatFusion` | [split_concat](fusion/split_concat.md) |
+| 22 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
+| 23 | `IsParallelLinearFusionGraph` | `CreateParallelLinearFusion` | [parallel_linear](fusion/parallel_linear.md) |
+| 24 | `IsStridedViewFusionGraph` | `CreateStridedViewFusion` | [strided_view](fusion/strided_view.md) |
+| 25 | `IsShapeReshapeFusionGraph` | `CreateShapeReshapeFusion` | [shape_reshape](fusion/shape_reshape.md) |
+| 26 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
+| 27 | `IsSliceConcatFusionGraph` | `CreateSliceConcatFusion` | [slice_concat](fusion/slice_concat.md) |
+| 28 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
+| 29 | `IsGemmActivationFusionGraph` | `CreateGemmActivationFusion` | [gemm_activation](fusion/gemm_activation.md) |
+| 30 | `IsFusedGemmFusionGraph` | `CreateFusedGemmFusion` | [fused_gemm](fusion/fused_gemm.md) |

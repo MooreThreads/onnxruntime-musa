@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **1**
+- GetCapability priority: **2**
 - Finder: `FindQkvAttentionOutputProjectionFusions`
 - Finder implementation: `musa/ep/src/fusion/qkv_attention_output_projection_fusion_matcher.cc`
 - Compile detector: `IsQkvAttentionOutputProjectionFusionGraph`

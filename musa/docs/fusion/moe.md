@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **3**
+- GetCapability priority: **4**
 - Finder: `FindMoEFusions`
 - Finder implementation: `musa/ep/src/fusion/moe_fusion_matcher.cc`
 - Compile detector: `IsMoEFusionGraph`

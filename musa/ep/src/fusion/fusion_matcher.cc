@@ -106,6 +106,13 @@ std::vector<FusionMatch> FindFusionMatches(
   std::unordered_set<size_t> accepted_node_ids;
   std::vector<FusionMatch> matches;
 
+  auto multi_kqv_mha_output_projection_fusions =
+      FindMultiKqvMhaOutputProjectionFusions(all_nodes, graph_output_names,
+                                             accepted_node_ids);
+  AddFusionMatch(matches, "FindMultiKqvMhaOutputProjectionFusions", false,
+                 std::move(multi_kqv_mha_output_projection_fusions),
+                 accepted_node_ids);
+
   auto qkv_attention_output_projection_fusions =
       FindQkvAttentionOutputProjectionFusions(all_nodes, graph_output_names,
                                               accepted_node_ids);

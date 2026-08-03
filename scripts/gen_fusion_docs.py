@@ -153,7 +153,9 @@ def _camel_words(name: str) -> list[str]:
 def _stem_words(stem: str, known_ops: set[str]) -> list[str]:
     words: list[str] = []
     index = 0
-    op_names = sorted(known_ops | {"MoE"}, key=len, reverse=True)
+    # "Multi" is a semantic fusion prefix, not the ONNX Mul operator.  Keep
+    # it intact so Multi* fusion names produce readable generated slugs.
+    op_names = sorted(known_ops | {"MoE", "Multi"}, key=len, reverse=True)
     while index < len(stem):
         match = next((op for op in op_names if stem.startswith(op, index)), None)
         if match is not None:

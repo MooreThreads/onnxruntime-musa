@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **12**
+- GetCapability priority: **13**
 - Finder: `FindBucketizeGatherFusions`
 - Finder implementation: `musa/ep/src/fusion/bucketize_gather_fusion_matcher.cc`
 - Compile detector: `IsBucketizeGatherFusionGraph`

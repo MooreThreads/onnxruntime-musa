@@ -38,6 +38,7 @@
 #include "fusion/mhta_scaled_dot_product_attention_fusion.h"
 #include "fusion/modulo_gather_fusion.h"
 #include "fusion/moe_fusion.h"
+#include "fusion/multi_kqv_mha_output_projection_fusion.h"
 #include "fusion/parallel_einsum_activation_fusion.h"
 #include "fusion/parallel_linear_fusion.h"
 #include "fusion/parallel_matmul_concat_fusion.h"
@@ -57,6 +58,9 @@
 #include "fusion/tile_concat_fusion.h"
 #include "plugin_ep_utils.h"
 #include "runtime_graph_dump.h"
+
+using musa_ep::CreateMultiKqvMhaOutputProjectionFusion;
+using musa_ep::IsMultiKqvMhaOutputProjectionFusionGraph;
 
 /*
  * Fusion node runtime bridge
@@ -222,7 +226,10 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
 
       std::string fused_node_name = fused_node.GetName();
       auto& fusion_compute = ep->GetFusionComputes()[fused_node_name];
-      if (IsMhtaScaledDotProductAttentionFusionGraph(graph)) {
+      if (IsMultiKqvMhaOutputProjectionFusionGraph(graph)) {
+        fusion_compute =
+            CreateMultiKqvMhaOutputProjectionFusion(graph, fused_node);
+      } else if (IsMhtaScaledDotProductAttentionFusionGraph(graph)) {
         fusion_compute =
             CreateMhtaScaledDotProductAttentionFusion(graph, fused_node);
       } else if (IsQkvAttentionOutputProjectionFusionGraph(graph)) {

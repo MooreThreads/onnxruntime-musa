@@ -43,6 +43,7 @@
 #include "fusion/parallel_linear_fusion.h"
 #include "fusion/parallel_matmul_concat_fusion.h"
 #include "fusion/qkv_attention_output_projection_fusion.h"
+#include "fusion/rec_rank_calibration_fusion.h"
 #include "fusion/replace_invalid_id_fusion.h"
 #include "fusion/rms_norm_fusion.h"
 #include "fusion/segment_max_broadcast_fusion.h"
@@ -60,7 +61,9 @@
 #include "runtime_graph_dump.h"
 
 using musa_ep::CreateMultiKqvMhaOutputProjectionFusion;
+using musa_ep::CreateRecRankCalibrationFusion;
 using musa_ep::IsMultiKqvMhaOutputProjectionFusionGraph;
+using musa_ep::IsRecRankCalibrationFusionGraph;
 
 /*
  * Fusion node runtime bridge
@@ -248,6 +251,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateCenteredReduceFusion(graph, fused_node);
       } else if (IsSegmentMaxBroadcastFusionGraph(graph)) {
         fusion_compute = CreateSegmentMaxBroadcastFusion(graph, fused_node);
+      } else if (IsRecRankCalibrationFusionGraph(graph)) {
+        fusion_compute = CreateRecRankCalibrationFusion(graph, fused_node);
       } else if (IsTargetIdCountEmbeddingFusionGraph(graph)) {
         fusion_compute = CreateTargetIdCountEmbeddingFusion(graph, fused_node);
       } else if (IsMaskedEmbeddingLookupFusionGraph(graph)) {

@@ -161,6 +161,11 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindSegmentMaxBroadcastFusions", true,
                  std::move(segment_max_broadcast_fusions), accepted_node_ids);
 
+  auto rec_rank_calibration_fusions = FindRecRankCalibrationFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindRecRankCalibrationFusions", true,
+                 std::move(rec_rank_calibration_fusions), accepted_node_ids);
+
   auto target_id_count_embedding_fusions = FindTargetIdCountEmbeddingFusions(
       all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindTargetIdCountEmbeddingFusions", false,

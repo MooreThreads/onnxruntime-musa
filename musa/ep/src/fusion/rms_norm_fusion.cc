@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "graph/graph_utils.h"
 #include "kernels/nn/rms_norm_impl.h"
 #include "kernels/shared_inc/op_kernel_common.h"
 
@@ -207,6 +208,7 @@ bool IsRmsNormFusionGraph(Ort::ConstGraph graph) {
   int add_count = 0;
   int sqrt_count = 0;
   int div_count = 0;
+  int pow_count = 0;
   for (Ort::ConstNode node : graph.GetNodes()) {
     if (IsOnnxOp(node, "Mul")) {
       ++mul_count;
@@ -218,12 +220,16 @@ bool IsRmsNormFusionGraph(Ort::ConstGraph graph) {
       ++sqrt_count;
     } else if (IsOnnxOp(node, "Div")) {
       ++div_count;
+    } else if (IsOnnxOp(node, "Pow")) {
+      ++pow_count;
     } else {
       return false;
     }
   }
-  return mul_count == 2 && reduce_mean_count == 1 && add_count == 1 &&
-         sqrt_count == 1 && div_count == 1;
+  return reduce_mean_count == 1 && add_count == 1 && sqrt_count == 1 &&
+         div_count == 1 &&
+         ((mul_count == 2 && pow_count == 0) ||
+          (mul_count == 1 && pow_count == 1));
 }
 
 std::unique_ptr<FusionNodeCompute> CreateRmsNormFusion(
@@ -300,13 +306,22 @@ std::unique_ptr<FusionNodeCompute> CreateRmsNormFusion(
     throw std::runtime_error("RmsNorm ReduceMean is invalid");
   }
   Ort::ConstNode square_node = ProducerInGraph(producers, reduce_inputs[0]);
-  if (!IsOnnxOp(square_node, "Mul")) {
-    throw std::runtime_error("RmsNorm requires Mul(x, x) square");
+  if (!IsOnnxOp(square_node, "Mul") && !IsOnnxOp(square_node, "Pow")) {
+    throw std::runtime_error("RmsNorm requires square before ReduceMean");
   }
   std::vector<Ort::ConstValueInfo> square_inputs = square_node.GetInputs();
-  if (square_inputs.size() != 2 || Name(square_inputs[0]) != Name(input) ||
-      Name(square_inputs[1]) != Name(input)) {
-    throw std::runtime_error("RmsNorm square must be Mul(input, input)");
+  if (square_inputs.size() != 2 || Name(square_inputs[0]) != Name(input)) {
+    throw std::runtime_error("RmsNorm square input is invalid");
+  }
+  if (IsOnnxOp(square_node, "Mul")) {
+    if (Name(square_inputs[1]) != Name(input)) {
+      throw std::runtime_error("RmsNorm square must be Mul(input, input)");
+    }
+  } else {
+    auto exponent = musa_ep::ReadScalarFloatInitializer(square_inputs[1]);
+    if (!exponent.has_value() || *exponent != 2.0f) {
+      throw std::runtime_error("RmsNorm Pow exponent must be 2");
+    }
   }
 
   auto fused_input_indices = FusedInputIndices(fused_node);

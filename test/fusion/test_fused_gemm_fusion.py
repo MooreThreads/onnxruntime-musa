@@ -13,6 +13,7 @@
 """End-to-end tests for the FusedGemm Plugin EP fusion."""
 
 import numpy as np
+import onnx
 import onnxruntime as ort
 from onnx import helper, numpy_helper
 
@@ -90,3 +91,38 @@ def test_matmul_add_tanh_fusion_with_initializer_inputs():
     )
 
     _run_fused_gemm_and_compare(model, feeds)
+
+
+def test_symbolic_residual_add_is_not_fused_as_bias():
+    rng = np.random.default_rng(5)
+    a = rng.standard_normal((1, 4, 16)).astype(np.float32)
+    b = rng.standard_normal((16, 12)).astype(np.float32)
+    residual = rng.standard_normal((1, 4, 12)).astype(np.float32)
+
+    graph = helper.make_graph(
+        [
+            helper.make_node("MatMul", ["A", "B"], ["M"]),
+            helper.make_node("Add", ["M", "Residual"], ["Y"]),
+        ],
+        "symbolic_residual_add_graph",
+        [
+            helper.make_tensor_value_info(
+                "A", TensorProto.FLOAT, ["batch", "sequence", 16]
+            ),
+            helper.make_tensor_value_info("B", TensorProto.FLOAT, [16, 12]),
+            helper.make_tensor_value_info(
+                "Residual", TensorProto.FLOAT, ["batch", "sequence", 12]
+            ),
+        ],
+        [
+            helper.make_tensor_value_info(
+                "Y", TensorProto.FLOAT, ["batch", "sequence", 12]
+            )
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+
+    _run_fused_gemm_and_compare(
+        model.SerializeToString(), {"A": a, "B": b, "Residual": residual}
+    )

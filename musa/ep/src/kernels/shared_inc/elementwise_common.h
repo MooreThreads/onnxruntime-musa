@@ -141,22 +141,25 @@ inline OrtStatus* BinaryDeviceCompute(Ort::KernelContext& ctx,
   }
   MusaElementType musa_elem_type;
   if (!ToMusaElementType(elem_type, musa_elem_type) ||
-      !IsGpuMemory(lhs.GetTensorMemoryInfo()) ||
-      !IsGpuMemory(rhs.GetTensorMemoryInfo()) ||
       !CanUseBroadcastKernel(out_shape, shape0, shape1)) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
+
+  musaStream_t stream = GetComputeStream(ctx);
+  DeviceInputBuffer lhs_buffer;
+  DeviceInputBuffer rhs_buffer;
+  RETURN_IF_ERROR(lhs_buffer.Bind(lhs, stream));
+  RETURN_IF_ERROR(rhs_buffer.Bind(rhs, stream));
 
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
   if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
 
-  musaError_t status =
-      LaunchMusaBinaryKernel(lhs.GetTensorRawData(), rhs.GetTensorRawData(),
-                             y.GetTensorMutableRawData(),
-                             MakeBroadcastParams(out_shape, shape0, shape1),
-                             device_op, musa_elem_type, GetComputeStream(ctx));
+  musaError_t status = LaunchMusaBinaryKernel(
+      lhs_buffer.data(), rhs_buffer.data(), y.GetTensorMutableRawData(),
+      MakeBroadcastParams(out_shape, shape0, shape1), device_op, musa_elem_type,
+      stream);
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }

@@ -13,8 +13,14 @@
 """End-to-end CPU-vs-MUSA test for the Sub operator."""
 
 import numpy as np
+from onnx import helper, numpy_helper
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import (
+    TensorProto,
+    build_graph_model,
+    run_and_compare,
+    run_model_and_compare,
+)
 
 
 def test_sub_float():
@@ -45,3 +51,22 @@ def test_sub_float_multidirectional_broadcast():
     a = np.random.default_rng(2).standard_normal((2, 3, 1)).astype(np.float32)
     b = np.random.default_rng(3).standard_normal((1, 1, 4)).astype(np.float32)
     run_and_compare("Sub", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.FLOAT)])
+
+
+def test_sub_mixed_cpu_shape_metadata_and_device_input():
+    x = np.zeros((3, 4), dtype=np.float32)
+    rhs = np.array(1, dtype=np.int64)
+    nodes = [
+        helper.make_node("Shape", ["X"], ["shape"]),
+        helper.make_node("Gather", ["shape", "index"], ["dim"]),
+        helper.make_node("Sub", ["dim", "Rhs"], ["Y"]),
+    ]
+    model = build_graph_model(
+        nodes,
+        {"X": x, "Rhs": rhs},
+        [("Y", TensorProto.INT64)],
+        initializers=[numpy_helper.from_array(np.array(0, dtype=np.int64), "index")],
+        name="sub_mixed_cpu_shape_metadata_and_device_input_graph",
+    )
+
+    run_model_and_compare(model, {"X": x, "Rhs": rhs})

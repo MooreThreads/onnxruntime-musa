@@ -95,7 +95,7 @@ bool CanFuseMatMulAddActivation(Ort::ConstNode matmul_node,
   }
 
   auto bias_shape = GetStaticShape(add_inputs[bias_idx]);
-  if (bias_shape.has_value() && b_shape.has_value() &&
+  if (!bias_shape.has_value() || !b_shape.has_value() ||
       !IsBiasShapeForMatMulN(*bias_shape, (*b_shape)[1])) {
     return false;
   }
@@ -144,7 +144,7 @@ bool CanFuseMatMulAdd(Ort::ConstNode matmul_node, Ort::ConstNode add_node,
   }
 
   auto bias_shape = GetStaticShape(add_inputs[bias_idx]);
-  if (bias_shape.has_value() &&
+  if (!bias_shape.has_value() ||
       !IsBiasShapeForMatMulN(*bias_shape, (*b_shape)[1])) {
     return false;
   }

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Build a wheel for the onnxruntime-musa package."""
+"""Build the provider-only wheel for the ONNX Runtime MUSA Plugin EP."""
 
 import argparse
+import json
 import platform
 import re
 import shutil
@@ -13,12 +14,13 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
 ORT_VERSION_FILE = REPO_ROOT / "third_party" / "onnxruntime" / "VERSION_NUMBER"
+MANIFEST_NAME = "onnxruntime_musa_ep_manifest.json"
 
 
 def _read_ort_version() -> str:
     """Read `X.Y.Z` from the pinned ONNX Runtime submodule.
 
-    Returns `X.Y.Z`. The wheel uses this as the ABI pin for the `onnxruntime` dep.
+    Returns `X.Y.Z`. The wheel validates this against the plugin manifest.
     """
     if not ORT_VERSION_FILE.is_file():
         raise FileNotFoundError(
@@ -97,12 +99,31 @@ def prepare_staging_dir(
             f"No plugin binaries found in {binary_dir}. Looked for: {BINARY_PATTERNS}"
         )
 
-    min_ort_version = _read_ort_version()
+    manifest_src = binary_dir / MANIFEST_NAME
+    if not manifest_src.is_file():
+        raise FileNotFoundError(
+            f"Plugin manifest not found at {manifest_src}. "
+            "Re-run CMake configuration before building the wheel."
+        )
+
+    manifest = json.loads(manifest_src.read_text(encoding="utf-8"))
+    expected_ort_version = _read_ort_version()
+    if manifest.get("plugin_version") != version:
+        raise ValueError(
+            "Plugin manifest version does not match --version: "
+            f"{manifest.get('plugin_version')!r} != {version!r}"
+        )
+    if manifest.get("ort_build_version") != expected_ort_version:
+        raise ValueError(
+            "Plugin manifest ORT version does not match the pinned submodule: "
+            f"{manifest.get('ort_build_version')!r} != {expected_ort_version!r}"
+        )
+    shutil.copy2(manifest_src, package_dir / "manifest.json")
 
     gen_file_from_template(
         SCRIPT_DIR / "pyproject.toml.in",
         staging_dir / "pyproject.toml",
-        {"package_name": package_name, "version": version, "onnxruntime_version": min_ort_version},
+        {"package_name": package_name, "version": version},
     )
 
 

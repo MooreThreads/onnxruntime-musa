@@ -1,8 +1,11 @@
 # onnxruntime_musa
 
-Python helper package shipped inside the `onnxruntime-musa` wheel. It bundles the plugin
+Python helper package shipped inside the `onnxruntime-ep-musa` provider wheel. It bundles the plugin
 shared library (`libonnxruntime_providers_musa_plugin.so`) and exposes two helpers used
-to register the MUSA Plugin Execution Provider into a stock ONNX Runtime install.
+to register the MUSA Plugin Execution Provider into a compatible ONNX Runtime host.
+
+The provider wheel intentionally does not depend on `onnxruntime` or `onnxruntime-gpu`.
+Install exactly one compatible ORT host flavor before installing this wheel.
 
 ## Usage
 
@@ -12,6 +15,7 @@ import onnxruntime_musa as musa_ep
 
 ep_name = musa_ep.get_ep_name()         # "MUSAExecutionProvider"
 lib_path = musa_ep.get_library_path()   # absolute path to the bundled .so / .dll
+manifest = musa_ep.get_manifest()       # ORT API/build compatibility metadata
 
 ort.register_execution_provider_library(ep_name, lib_path)
 
@@ -45,7 +49,7 @@ MUSA run, and compare the MUSA output against the CPU reference.
 ## Requirements
 
 - Python >= 3.11
-- `onnxruntime` matching the wheel's `Requires-Dist` constraint (auto-derived from the
-  pinned ORT submodule; currently `~=1.26.0`)
+- One compatible ORT host flavor installed separately. The current plugin is built and tested
+  with ORT 1.26.0 / `ORT_API_VERSION=26`; inspect `get_manifest()` for packaged metadata.
 - MUSA toolkit runtime libraries reachable by the dynamic linker. See the repository
   developer guide for environment setup.

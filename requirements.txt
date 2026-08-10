@@ -1,4 +1,5 @@
-# Requirements for onnxruntime-musa
+# Development and test requirements for onnxruntime-musa.
+# The provider-only wheel intentionally has no hard dependency on an ORT host flavor.
 # Python: >=3.11 (enforced by pyproject.toml `requires-python`)
 onnxruntime==1.26.0
 onnx==1.21.0

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 from typing import Any
 
@@ -9,6 +10,8 @@ __all__ = [
     "get_ep_name",
     "get_ep_names",
     "get_library_path",
+    "get_manifest",
+    "get_manifest_path",
     "make_provider_options",
 ]
 
@@ -28,6 +31,23 @@ def get_library_path() -> str:
             f"found {len(paths)}: {[p.name for p in paths]}"
         )
     return str(paths[0])
+
+
+def get_manifest_path() -> str:
+    """Return the path to the installed MUSA Plugin EP manifest."""
+    path = _module_dir / "manifest.json"
+    if not path.is_file():
+        raise RuntimeError(f"MUSA Plugin EP manifest not found at {path}")
+    return str(path)
+
+
+def get_manifest() -> dict[str, Any]:
+    """Load and return the installed MUSA Plugin EP compatibility manifest."""
+    with pathlib.Path(get_manifest_path()).open(encoding="utf-8") as manifest_file:
+        manifest = json.load(manifest_file)
+    if not isinstance(manifest, dict):
+        raise RuntimeError("MUSA Plugin EP manifest must contain a JSON object")
+    return manifest
 
 
 def get_ep_name() -> str:

@@ -15,10 +15,6 @@ maintainers = [
   {name = "Moore Threads Technology Co., Ltd."},
 ]
 requires-python = ">=3.11"
-dependencies = [
-  # ABI is pinned to the ORT submodule version (third_party/onnxruntime/VERSION_NUMBER).
-  "onnxruntime~=@onnxruntime_version@",
-]
 keywords = [
   "onnxruntime",
   "onnx",
@@ -53,4 +49,4 @@ license-files = ["LICENSE", "NOTICE"]
 include = ["onnxruntime_musa*"]
 
 [tool.setuptools.package-data]
-onnxruntime_musa = ["*.dll", "*.so", "*.so.*"]
+onnxruntime_musa = ["*.dll", "*.so", "*.so.*", "*.json"]

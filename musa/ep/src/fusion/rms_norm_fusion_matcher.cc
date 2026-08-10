@@ -153,18 +153,34 @@ bool CanFuseRmsNorm(
 
   std::vector<Ort::ConstValueInfo> reduce_inputs = reduce_node.GetInputs();
   std::vector<Ort::ConstValueInfo> reduce_outputs = reduce_node.GetOutputs();
-  if (reduce_inputs.size() < 2 || reduce_outputs.size() != 1 ||
+  if (reduce_inputs.empty() || reduce_outputs.size() != 1 ||
       GetIntAttribute(reduce_node, "keepdims").value_or(1) != 1 ||
       graph_output_names.count(Name(reduce_outputs[0])) != 0 ||
       !IsFloatTensorValueInfo(reduce_outputs[0]) ||
-      !ReduceAxesAreLastDim(reduce_node, input_shape->size()) ||
       !ReduceOutputKeepsLastDim(reduce_outputs[0], *input_shape) ||
       !ValueHasOnlyConsumers(reduce_outputs[0], add_node)) {
     return false;
   }
 
+  std::optional<std::vector<int64_t>> axes;
+  if (reduce_inputs.size() >= 2) {
+    axes = ReadSmallIntInitializer(reduce_inputs[1]);
+  } else {
+    axes = GetIntsAttribute(reduce_node, "axes");
+  }
+  if (!axes.has_value() || axes->size() != 1) {
+    return false;
+  }
+  int64_t normalized_axis = 0;
+  if (!NormalizeAxis((*axes)[0], input_shape->size(), normalized_axis) ||
+      normalized_axis != static_cast<int64_t>(input_shape->size() - 1)) {
+    return false;
+  }
+
   producer_it = producers.find(Name(reduce_inputs[0]));
-  if (producer_it == producers.end() || !IsOnnxOp(producer_it->second, "Mul")) {
+  if (producer_it == producers.end() ||
+      (!IsOnnxOp(producer_it->second, "Mul") &&
+       !IsOnnxOp(producer_it->second, "Pow"))) {
     return false;
   }
   Ort::ConstNode square_node = producer_it->second;
@@ -173,11 +189,21 @@ bool CanFuseRmsNorm(
   if (accepted_node_ids.count(square_node.GetId()) != 0 ||
       square_inputs.size() != 2 || square_outputs.size() != 1 ||
       graph_output_names.count(Name(square_outputs[0])) != 0 ||
-      Name(square_inputs[0]) != Name(div_inputs[0]) ||
-      Name(square_inputs[1]) != Name(div_inputs[0]) ||
       !IsFloatTensorValueInfo(square_outputs[0]) ||
       !HasOnlyConsumer(square_outputs[0], reduce_node, 0)) {
     return false;
+  }
+  if (IsOnnxOp(square_node, "Mul")) {
+    if (Name(square_inputs[0]) != Name(div_inputs[0]) ||
+        Name(square_inputs[1]) != Name(div_inputs[0])) {
+      return false;
+    }
+  } else {
+    auto exponent = ReadScalarFloatInitializer(square_inputs[1]);
+    if (Name(square_inputs[0]) != Name(div_inputs[0]) ||
+        !exponent.has_value() || *exponent != 2.0f) {
+      return false;
+    }
   }
 
   std::unordered_set<size_t> selected_node_ids;

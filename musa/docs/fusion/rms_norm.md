@@ -13,18 +13,18 @@ This file is generated from the current C++ fusion source and matching fusion te
 - Runtime compute: `RmsNormFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/rms_norm_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `test/fusion/test_rms_norm_fusion.py::_build_rms_norm_model`
+- Before-graph topology source: `test/fusion/test_rms_norm_fusion.py::_build_pow_rms_norm_model`
 
 ## Extracted ONNX Ops
 
-`Mul`, `Div`, `Sqrt`, `Add`, `ReduceMean`
+`Mul`, `Div`, `Sqrt`, `Add`, `ReduceMean`, `Pow`
 
 ## Mermaid
 
 ```mermaid
 flowchart LR
   subgraph Before[Before fusion]
-    B0["Mul"]
+    B0["Pow"]
     B1["ReduceMean"]
     B2["Add"]
     B3["Sqrt"]

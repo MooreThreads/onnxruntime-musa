@@ -10,7 +10,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""End-to-end test for the Mul/ReduceMean/Add/Sqrt/Div/Mul RMSNorm fusion."""
+"""End-to-end tests for RMSNorm fusion lowerings."""
 
 import json
 import os
@@ -50,21 +50,40 @@ def _build_rms_norm_model() -> bytes:
     return model.SerializeToString()
 
 
-def test_rms_norm_fusion(tmp_path):
-    model = _build_rms_norm_model()
-    x = np.linspace(-2.0, 2.0, num=2 * 3 * 5, dtype=np.float32).reshape(2, 3, 5)
-    feeds = {"X": x}
+def _build_pow_rms_norm_model() -> bytes:
+    two = numpy_helper.from_array(np.array(2.0, dtype=np.float32), name="two")
+    eps = numpy_helper.from_array(np.array(1.0e-6, dtype=np.float32), name="eps")
+    gamma = numpy_helper.from_array(
+        np.linspace(0.5, 1.5, num=5, dtype=np.float32), name="gamma"
+    )
+    nodes = [
+        helper.make_node("Pow", ["X", "two"], ["Square"], name="rms_norm/Pow"),
+        helper.make_node(
+            "ReduceMean", ["Square"], ["Mean"], axes=[-1], keepdims=1,
+            name="rms_norm/MeanAttr"
+        ),
+        helper.make_node("Add", ["Mean", "eps"], ["MeanEps"], name="rms_norm/add"),
+        helper.make_node("Sqrt", ["MeanEps"], ["Denom"], name="rms_norm/Sqrt"),
+        helper.make_node("Div", ["X", "Denom"], ["Normed"], name="rms_norm/truediv"),
+        helper.make_node("Mul", ["Normed", "gamma"], ["Y"], name="rms_norm/mul"),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "rms_norm_pow_fusion",
+        [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", 3, 5])],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
+        initializer=[two, eps, gamma],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
 
-    (actual,) = run_model_and_compare(model, feeds, rtol=1e-5, atol=1e-5)
-    gamma = np.linspace(0.5, 1.5, num=5, dtype=np.float32)
-    expected = x * np.reciprocal(np.sqrt(np.mean(x * x, axis=-1, keepdims=True) + 1e-6))
-    expected = expected * gamma
-    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
 
+def _profile_op_names(model: bytes, feeds, profile_prefix: str):
     so = ort.SessionOptions()
     so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
     so.enable_profiling = True
-    so.profile_file_prefix = str(tmp_path / "rms_norm_fusion")
+    so.profile_file_prefix = profile_prefix
     so.add_provider_for_devices(musa_devices(), {})
     session = ort.InferenceSession(model, sess_options=so)
     session.run(None, feeds)
@@ -75,12 +94,37 @@ def test_rms_norm_fusion(tmp_path):
     finally:
         if os.path.exists(profile_path):
             os.remove(profile_path)
-
-    node_events = [
-        e
+    return {
+        e.get("args", {}).get("op_name")
         for e in events
         if e.get("cat") == "Node" and e.get("name", "").endswith("_kernel_time")
-    ]
-    op_names = {e.get("args", {}).get("op_name") for e in node_events}
+    }
+
+
+def test_rms_norm_fusion(tmp_path):
+    model = _build_rms_norm_model()
+    x = np.linspace(-2.0, 2.0, num=2 * 3 * 5, dtype=np.float32).reshape(2, 3, 5)
+    feeds = {"X": x}
+    (actual,) = run_model_and_compare(model, feeds, rtol=1e-5, atol=1e-5)
+    gamma = np.linspace(0.5, 1.5, num=5, dtype=np.float32)
+    expected = x * np.reciprocal(np.sqrt(np.mean(x * x, axis=-1, keepdims=True) + 1e-6))
+    expected = expected * gamma
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+    op_names = _profile_op_names(model, feeds, str(tmp_path / "rms_norm_fusion"))
     assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
     assert not ({"ReduceMean", "Add", "Sqrt", "Div", "Mul"} & op_names)
+
+
+def test_pow_rms_norm_fusion(tmp_path):
+    model = _build_pow_rms_norm_model()
+    x = np.linspace(-2.0, 2.0, num=2 * 3 * 5, dtype=np.float32).reshape(2, 3, 5)
+    feeds = {"X": x}
+    (actual,) = run_model_and_compare(model, feeds, rtol=1e-5, atol=1e-5)
+    gamma = np.linspace(0.5, 1.5, num=5, dtype=np.float32)
+    expected = x * np.reciprocal(
+        np.sqrt(np.mean(np.power(x, 2), axis=-1, keepdims=True) + 1e-6)
+    ) * gamma
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+    op_names = _profile_op_names(model, feeds, str(tmp_path / "rms_norm_pow_fusion"))
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
+    assert not ({"Pow", "ReduceMean", "Add", "Sqrt", "Div", "Mul"} & op_names)

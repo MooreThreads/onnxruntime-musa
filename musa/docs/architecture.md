@@ -2,8 +2,9 @@
 
 `onnxruntime-musa` ships an out-of-tree **Plugin Execution Provider** for ONNX Runtime
 targeting Moore Threads (MThreads) MUSA GPUs. The plugin is a single shared library that a
-stock `pip install onnxruntime` loads on demand via
-`ort.register_execution_provider_library(...)`. No ORT source build is required.
+compatible Python or C++ ORT host loads on demand via
+`RegisterExecutionProviderLibrary(...)`. The provider package does not contain or link
+`libonnxruntime.so`.
 
 ## Layout
 
@@ -43,17 +44,20 @@ musa/
         musa_runtime.h       Thin wrappers + error-string helpers around musart
     python/
       build_wheel.py         Stages the .so, renders pyproject.toml from .in, runs pip wheel
-      pyproject.toml.in      Template; @onnxruntime_version@ is auto-derived from
-                             third_party/onnxruntime/VERSION
+      pyproject.toml.in      Provider-only wheel template (no ORT flavor dependency)
       onnxruntime_musa/      Installed Python package (get_library_path / get_ep_name)
+    cmake/                   Installed CMake package exposing the plugin/manifest paths
+    onnxruntime_musa_ep_manifest.json.in
+                             ORT API, plugin, platform and MUSA runtime metadata
   docs/                      This directory, plus the auto-generated supported_ops.md
+examples/cpp/               Python-free ORT host/plugin registration probe
 ```
 
 ## Runtime call graph
 
 ```
-Python:
-  ort.register_execution_provider_library("MUSAExecutionProvider", lib_path)
+Python or C++ ORT host:
+  RegisterExecutionProviderLibrary("MUSAExecutionProvider", lib_path)
      |
      v  dlopen(.so)
   CreateEpFactories                       (ep_lib_entry.cc)
@@ -138,6 +142,7 @@ Everything else has hidden visibility, so the plugin can evolve without breaking
 - **Build time**: only the MUSA toolkit (`musart`, `mublas`) and the vendored ORT public
   headers under [`third_party/onnxruntime/include/`](../../third_party/onnxruntime/). No
   GSL; `std::span` (C++20) is used instead.
-- **Run time**: any `onnxruntime` matching the wheel's `onnxruntime~=<vendored-version>`
-  constraint, plus the MUSA toolkit shared libraries. See
+- **Run time**: a compatible ORT host selected by the application (`onnxruntime`,
+  `onnxruntime-gpu`, or an ORT C++ SDK/runtime), plus the MUSA toolkit shared libraries. The
+  provider-only wheel intentionally does not force one Python ORT flavor. See
   [developer_guide.md](developer_guide.md) for environment setup.

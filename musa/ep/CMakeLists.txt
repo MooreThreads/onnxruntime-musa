@@ -85,6 +85,47 @@ set_target_properties(${MUSA_PLUGIN_TARGET}
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+set(MUSA_PLUGIN_INSTALL_FILENAME
+  "${CMAKE_SHARED_LIBRARY_PREFIX}onnxruntime_providers_musa_plugin${CMAKE_SHARED_LIBRARY_SUFFIX}"
+)
+set(MUSA_EP_MANIFEST_NAME "onnxruntime_musa_ep_manifest.json")
+set(MUSA_EP_MANIFEST_PATH "${CMAKE_BINARY_DIR}/${MUSA_EP_MANIFEST_NAME}")
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime_musa_ep_manifest.json.in"
+  "${MUSA_EP_MANIFEST_PATH}"
+  @ONLY
+)
+
+set(MUSA_EP_CMAKE_PACKAGE_DIR
+  "${CMAKE_INSTALL_LIBDIR}/cmake/onnxruntime_musa_ep"
+)
+configure_package_config_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/onnxruntime_musa_epConfig.cmake.in"
+  "${CMAKE_BINARY_DIR}/onnxruntime_musa_epConfig.cmake"
+  INSTALL_DESTINATION "${MUSA_EP_CMAKE_PACKAGE_DIR}"
+)
+write_basic_package_version_file(
+  "${CMAKE_BINARY_DIR}/onnxruntime_musa_epConfigVersion.cmake"
+  VERSION "${ONNXRUNTIME_MUSA_VERSION}"
+  COMPATIBILITY SameMajorVersion
+)
+
+install(TARGETS ${MUSA_PLUGIN_TARGET}
+  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+install(FILES "${MUSA_EP_MANIFEST_PATH}"
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/onnxruntime-ep-musa"
+)
+install(FILES
+  "${CMAKE_BINARY_DIR}/onnxruntime_musa_epConfig.cmake"
+  "${CMAKE_BINARY_DIR}/onnxruntime_musa_epConfigVersion.cmake"
+  DESTINATION "${MUSA_EP_CMAKE_PACKAGE_DIR}"
+)
+install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_SOURCE_DIR}/NOTICE"
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/onnxruntime-ep-musa"
+)
+
 if(UNIX AND NOT APPLE)
   target_link_options(${MUSA_PLUGIN_TARGET} PRIVATE
     "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/ep_lib.lds"

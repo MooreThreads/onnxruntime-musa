@@ -44,7 +44,9 @@ __device__ __forceinline__ float Score(const float* q, const float* k,
   }
   const int64_t mask_offset = MaskOffset(params, b, h, row, col);
   if (params.boolean_mask) {
-    const bool keep = static_cast<const uint8_t*>(mask)[mask_offset] != 0;
+    const bool keep = params.boolean_mask_int32
+                          ? static_cast<const int32_t*>(mask)[mask_offset] == 1
+                          : static_cast<const uint8_t*>(mask)[mask_offset] != 0;
     return keep ? dot * params.scale : -3.4028234663852886e38f;
   }
   return dot * params.scale +

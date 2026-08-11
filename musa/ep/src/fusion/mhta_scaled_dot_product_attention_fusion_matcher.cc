@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -93,6 +94,39 @@ bool IsBoolTensorValueInfo(Ort::ConstValueInfo value_info) {
   return value_info.TypeInfo().GetONNXType() == ONNX_TYPE_TENSOR &&
          value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
              ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
+}
+
+bool IsInt32TensorValueInfo(Ort::ConstValueInfo value_info) {
+  return value_info.TypeInfo().GetONNXType() == ONNX_TYPE_TENSOR &&
+         value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
+             ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32;
+}
+
+bool IsInt64TensorValueInfo(Ort::ConstValueInfo value_info) {
+  return value_info.TypeInfo().GetONNXType() == ONNX_TYPE_TENSOR &&
+         value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
+             ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
+}
+
+bool IsCastTo(Ort::ConstNode node, ONNXTensorElementDataType elem_type) {
+  return IsOnnxOp(node, "Cast") &&
+         GetIntAttribute(node, "to").value_or(-1) == elem_type;
+}
+
+bool HasOnlyConsumers(Ort::ConstValueInfo value,
+                      std::initializer_list<Ort::ConstNode> expected) {
+  const auto consumers = value.GetConsumers();
+  if (consumers.size() != expected.size()) {
+    return false;
+  }
+  for (const auto& consumer : consumers) {
+    bool found = false;
+    for (Ort::ConstNode node : expected) {
+      found |= consumer.node.GetId() == node.GetId();
+    }
+    if (!found) return false;
+  }
+  return true;
 }
 
 bool IsScalarFloatValue(Ort::ConstValueInfo value_info, float expected) {
@@ -376,8 +410,80 @@ bool CanFuseMhtaScaledDotProductAttention(
 // Matches the boolean keep-mask form emitted by ranking-gr:
 //   MatMul -> Mul(scale) -> Where(mask, score, -inf) -> Softmax
 //   -> Where(mask, probability, 0) -> MatMul(V)
-// Keep the mask producer outside the fusion so dynamic Slice/Cast/Equal
-// subgraphs remain reusable and are still executed on their normal provider.
+bool TryAppendRawInt32MaskPreprocessing(
+    Ort::ConstValueInfo boolean_mask, Ort::ConstNode pre_where,
+    Ort::ConstNode post_where,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& accepted_node_ids,
+    std::unordered_set<size_t>& selected,
+    std::vector<Ort::ConstNode>& fusion_nodes) {
+  Ort::ConstNode equal{nullptr};
+  if (!GetProducer(boolean_mask, equal) || !IsOnnxOp(equal, "Equal")) {
+    return true;
+  }
+  const auto equal_inputs = equal.GetInputs();
+  const auto equal_outputs = equal.GetOutputs();
+  if (equal_inputs.size() != 2 || equal_outputs.size() != 1 ||
+      graph_output_names.count(Name(equal_outputs[0])) != 0) {
+    return false;
+  }
+  Ort::ConstNode cast{nullptr};
+  bool has_one = false;
+  for (Ort::ConstValueInfo input : equal_inputs) {
+    Ort::ConstNode producer{nullptr};
+    if (GetProducer(input, producer) &&
+        IsCastTo(producer, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64)) {
+      cast = producer;
+    } else {
+      has_one |= ReadScalarIntInitializer(input).value_or(0) == 1;
+    }
+  }
+  if (!cast || !has_one || !IsBoolTensorValueInfo(equal_outputs[0]) ||
+      !HasOnlyConsumers(equal_outputs[0], {pre_where, post_where})) {
+    return false;
+  }
+
+  const auto cast_inputs = cast.GetInputs();
+  const auto cast_outputs = cast.GetOutputs();
+  Ort::ConstNode slice{nullptr};
+  if (cast_inputs.size() != 1 || cast_outputs.size() != 1 ||
+      graph_output_names.count(Name(cast_outputs[0])) != 0 ||
+      !ValueHasOnlyConsumers(cast_outputs[0], equal) ||
+      !GetProducer(cast_inputs[0], slice) || !IsOnnxOp(slice, "Slice")) {
+    return false;
+  }
+
+  const auto slice_inputs = slice.GetInputs();
+  const auto slice_outputs = slice.GetOutputs();
+  const auto starts = slice_inputs.size() == 5
+                          ? ReadIntInitializerNoLimit(slice_inputs[1])
+                          : std::nullopt;
+  const auto axes = slice_inputs.size() == 5
+                        ? ReadIntInitializerNoLimit(slice_inputs[3])
+                        : std::nullopt;
+  const auto steps = slice_inputs.size() == 5
+                         ? ReadIntInitializerNoLimit(slice_inputs[4])
+                         : std::nullopt;
+  if (slice_inputs.size() != 5 || slice_outputs.size() != 1) return false;
+  if (!IsInt32TensorValueInfo(slice_inputs[0]) ||
+      !IsInt32TensorValueInfo(slice_outputs[0]))
+    return false;
+  if (!IsInt64TensorValueInfo(slice_inputs[2])) return false;
+  if (graph_output_names.count(Name(slice_outputs[0])) != 0 ||
+      !ValueHasOnlyConsumers(slice_outputs[0], cast))
+    return false;
+  if (!starts.has_value() || *starts != std::vector<int64_t>{0}) return false;
+  if (!axes.has_value() || *axes != std::vector<int64_t>{3}) return false;
+  if (!steps.has_value() || *steps != std::vector<int64_t>{1}) return false;
+
+  for (Ort::ConstNode node : {slice, cast, equal}) {
+    if (!AddFusionNode(node, accepted_node_ids, selected, fusion_nodes)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool CanFuseBooleanMhtaScaledDotProductAttention(
     Ort::ConstNode value_matmul,
     const std::unordered_set<std::string>& graph_output_names,
@@ -469,6 +575,11 @@ bool CanFuseBooleanMhtaScaledDotProductAttention(
                               post_where, value_matmul}) {
     if (!AddFusionNode(node, accepted_node_ids, selected, fusion_nodes))
       return false;
+  }
+  if (!TryAppendRawInt32MaskPreprocessing(pre_inputs[0], pre_where, post_where,
+                                          graph_output_names, accepted_node_ids,
+                                          selected, fusion_nodes)) {
+    return false;
   }
   return FusionHasNoExternalPathBetweenSelectedNodes(fusion_nodes, selected);
 }

@@ -21,10 +21,13 @@ struct MusaMhtaSdpaFp32Params {
   int64_t mask_k;
   bool key_is_bhds;
   bool sim_rank3;
+  // When true, mask is a BOOL keep-mask and invalid keys receive -inf.
+  // Otherwise mask is a FLOAT additive mask scaled by mask_scale.
+  bool boolean_mask;
 };
 
 musaError_t LaunchMusaMhtaSdpaFp32Kernel(const float* q, const float* k,
-                                         const float* v, const float* mask,
+                                         const float* v, const void* mask,
                                          float* output,
                                          MusaMhtaSdpaFp32Params params,
                                          musaStream_t stream);

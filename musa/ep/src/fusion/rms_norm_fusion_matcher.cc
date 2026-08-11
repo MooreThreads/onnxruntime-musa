@@ -147,6 +147,7 @@ bool CanFuseRmsNorm(
     }
   }
   if (!reduce_node || accepted_node_ids.count(reduce_node.GetId()) != 0 ||
+      !IsFloatTensorValueInfo(epsilon_input) ||
       !ReadScalarFloatInitializer(epsilon_input).has_value()) {
     return false;
   }

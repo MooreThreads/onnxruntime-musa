@@ -22,9 +22,9 @@ from onnx import helper, numpy_helper
 from op_test_utils import TensorProto, musa_devices, run_model_and_compare
 
 
-def _build_rms_norm_model() -> bytes:
+def _build_rms_norm_model(epsilon: float = 1.0e-6) -> bytes:
     axes = numpy_helper.from_array(np.array([-1], dtype=np.int64), name="axes")
-    eps = numpy_helper.from_array(np.array(1.0e-6, dtype=np.float32), name="eps")
+    eps = numpy_helper.from_array(np.array(epsilon, dtype=np.float32), name="eps")
     gamma = numpy_helper.from_array(
         np.linspace(0.5, 1.5, num=5, dtype=np.float32), name="gamma"
     )
@@ -128,3 +128,21 @@ def test_pow_rms_norm_fusion(tmp_path):
     op_names = _profile_op_names(model, feeds, str(tmp_path / "rms_norm_pow_fusion"))
     assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
     assert not ({"Pow", "ReduceMean", "Add", "Sqrt", "Div", "Mul"} & op_names)
+
+
+def test_rms_norm_fusion_caches_initializer_epsilon(tmp_path):
+    epsilon = 0.25
+    model = _build_rms_norm_model(epsilon)
+    x = np.linspace(-1.0, 1.0, num=2 * 3 * 5, dtype=np.float32).reshape(2, 3, 5)
+    feeds = {"X": x}
+    (actual,) = run_model_and_compare(model, feeds, rtol=1e-5, atol=1e-5)
+    gamma = np.linspace(0.5, 1.5, num=5, dtype=np.float32)
+    expected = x * np.reciprocal(
+        np.sqrt(np.mean(x * x, axis=-1, keepdims=True) + epsilon)
+    ) * gamma
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+    op_names = _profile_op_names(
+        model, feeds, str(tmp_path / "rms_norm_cached_epsilon")
+    )
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
+    assert not ({"ReduceMean", "Add", "Sqrt", "Div", "Mul"} & op_names)

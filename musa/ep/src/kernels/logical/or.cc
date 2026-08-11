@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "logical/logical_ops_common.h"
 #include "logical/logical_ops_impl.h"
 #include "shared_inc/op_kernel_common.h"
 
@@ -32,6 +33,10 @@ OrtStatus* Or::Compute(Ort::KernelContext& ctx) const {
   auto shape0 = info0.GetShape();
   auto shape1 = info1.GetShape();
   auto out_shape = BroadcastShape(shape0, shape1);
+  if (musa_logical_ops::TryMudnnLogicalBinary(
+          ctx, shape0, shape1, ::musa::dnn::Binary::Mode::LOGICAL_OR)) {
+    return nullptr;
+  }
   Ort::ConstValue lhs_value = ctx.GetInput(0);
   Ort::ConstValue rhs_value = ctx.GetInput(1);
   if (IsGpuMemory(lhs_value.GetTensorMemoryInfo()) &&

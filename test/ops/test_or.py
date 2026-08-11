@@ -33,3 +33,15 @@ def test_or_bool_multidirectional_broadcast():
     a = np.array([True, False, False], dtype=np.bool_).reshape(1, 3, 1)
     b = np.array([False, False, True, True], dtype=np.bool_).reshape(1, 1, 4)
     run_and_compare("Or", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.BOOL)])
+
+
+def test_or_bool_empty_tensor():
+    a = np.empty((0, 3), dtype=np.bool_)
+    b = np.empty((1, 3), dtype=np.bool_)
+    run_and_compare("Or", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.BOOL)])
+
+
+def test_or_bool_rank6_fallback():
+    a = np.array([True, False, True, False], dtype=np.bool_).reshape(1, 2, 1, 2, 1, 1)
+    b = np.array([False, True, True], dtype=np.bool_).reshape(1, 1, 1, 1, 1, 3)
+    run_and_compare("Or", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.BOOL)])

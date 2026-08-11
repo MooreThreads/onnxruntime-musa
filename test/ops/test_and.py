@@ -21,3 +21,27 @@ def test_and_bool_broadcast():
     a = np.array([[True, False], [True, True]], dtype=np.bool_)
     b = np.array([[False, False], [True, False]], dtype=np.bool_)
     run_and_compare("And", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.BOOL)])
+
+
+def test_and_bool_scalar_broadcast():
+    a = np.array([[True, False], [False, True]], dtype=np.bool_)
+    b = np.array(True, dtype=np.bool_)
+    run_and_compare("And", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.BOOL)])
+
+
+def test_and_bool_multidirectional_broadcast():
+    a = np.array([True, False, True], dtype=np.bool_).reshape(1, 3, 1)
+    b = np.array([False, True, False, True], dtype=np.bool_).reshape(1, 1, 4)
+    run_and_compare("And", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.BOOL)])
+
+
+def test_and_bool_empty_tensor():
+    a = np.empty((0, 3), dtype=np.bool_)
+    b = np.empty((1, 3), dtype=np.bool_)
+    run_and_compare("And", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.BOOL)])
+
+
+def test_and_bool_rank6_fallback():
+    a = np.array([True, False, True, False], dtype=np.bool_).reshape(1, 2, 1, 2, 1, 1)
+    b = np.array([False, True, True], dtype=np.bool_).reshape(1, 1, 1, 1, 1, 3)
+    run_and_compare("And", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.BOOL)])

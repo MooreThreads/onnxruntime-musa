@@ -14,8 +14,6 @@
 #include "fusion/rms_norm_fusion.h"
 
 #include <climits>
-#include <cstring>
-#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -89,20 +87,6 @@ size_t GetMappedIndex(const std::unordered_map<std::string, size_t>& indices,
   return it->second;
 }
 
-float ReadScalarFloat(Ort::ConstValue value) {
-  auto info = value.GetTensorTypeAndShapeInfo();
-  if (info.GetElementCount() != 1 ||
-      info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    throw std::runtime_error("RmsNorm epsilon input must be scalar float");
-  }
-
-  std::vector<uint8_t> bytes;
-  Ort::ThrowOnError(CopyToHost(value, bytes));
-  float result = 0.0f;
-  std::memcpy(&result, bytes.data(), sizeof(float));
-  return result;
-}
-
 bool IsFloatGpuTensor(Ort::ConstValue value) {
   auto info = value.GetTensorTypeAndShapeInfo();
   ONNXTensorElementDataType elem_type = info.GetElementType();
@@ -121,18 +105,17 @@ bool IsFloatTensor(Ort::ConstValue value) {
 }  // namespace
 
 struct RmsNormFusionCompute : FusionNodeCompute {
-  RmsNormFusionCompute(size_t input_index, size_t epsilon_index,
-                       size_t gamma_index, size_t output_index)
+  RmsNormFusionCompute(size_t input_index, size_t gamma_index,
+                       size_t output_index, float epsilon)
       : input_index(input_index),
-        epsilon_index(epsilon_index),
         gamma_index(gamma_index),
-        output_index(output_index) {}
+        output_index(output_index),
+        epsilon(epsilon) {}
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override {
     try {
       Ort::KernelContext ctx(kernel_context);
       Ort::ConstValue input = ctx.GetInput(input_index);
-      Ort::ConstValue epsilon = ctx.GetInput(epsilon_index);
       Ort::ConstValue gamma = ctx.GetInput(gamma_index);
       if (!IsFloatGpuTensor(input)) {
         return Ort::GetApi().CreateStatus(
@@ -186,8 +169,8 @@ struct RmsNormFusionCompute : FusionNodeCompute {
       return LaunchStatus(LaunchMusaRmsNormKernel(
           input.GetTensorRawData(),
           reinterpret_cast<const float*>(gamma_buffer.data()),
-          output.GetTensorMutableRawData(), rows, norm_size,
-          ReadScalarFloat(epsilon), elem_type, stream));
+          output.GetTensorMutableRawData(), rows, norm_size, epsilon, elem_type,
+          stream));
     } catch (const Ort::Exception& ex) {
       Ort::Status status(ex);
       return status.release();
@@ -197,9 +180,9 @@ struct RmsNormFusionCompute : FusionNodeCompute {
   }
 
   size_t input_index;
-  size_t epsilon_index;
   size_t gamma_index;
   size_t output_index;
+  float epsilon;
 };
 
 bool IsRmsNormFusionGraph(Ort::ConstGraph graph) {
@@ -300,6 +283,11 @@ std::unique_ptr<FusionNodeCompute> CreateRmsNormFusion(
   if (!IsOnnxOp(reduce_node, "ReduceMean")) {
     throw std::runtime_error("RmsNorm requires ReduceMean before Add");
   }
+  auto epsilon = musa_ep::ReadScalarFloatInitializer(epsilon_input);
+  if (!musa_ep::IsFloatTensorValueInfo(epsilon_input) || !epsilon.has_value()) {
+    throw std::runtime_error(
+        "RmsNorm epsilon must be a scalar float initializer");
+  }
 
   std::vector<Ort::ConstValueInfo> reduce_inputs = reduce_node.GetInputs();
   if (reduce_inputs.empty()) {
@@ -327,8 +315,8 @@ std::unique_ptr<FusionNodeCompute> CreateRmsNormFusion(
   auto fused_input_indices = FusedInputIndices(fused_node);
   return std::make_unique<RmsNormFusionCompute>(
       GetMappedIndex(fused_input_indices, Name(input), "input"),
-      GetMappedIndex(fused_input_indices, Name(epsilon_input), "epsilon"),
       GetMappedIndex(fused_input_indices, Name(gamma_input), "gamma"),
       GetMappedIndex(fused_output_indices, Name(output_mul_outputs[0]),
-                     "output"));
+                     "output"),
+      *epsilon);
 }

@@ -30,6 +30,7 @@ struct ParallelLinearBranch {
   Ort::ConstNode linear{nullptr};
   Ort::ConstNode add{nullptr};
   Ort::ConstNode activation{nullptr};
+  Ort::ConstValueInfo output{nullptr};
 };
 
 int64_t ReadIntAttribute(Ort::ConstNode node, const char* name,
@@ -151,11 +152,109 @@ bool ParseBranch(Ort::ConstNode matmul,
     return false;
   }
 
-  branch = {matmul, add, activation};
+  if (activation) {
+    linear_output = activation.GetOutputs()[0];
+  }
+  branch = {matmul, add, activation, linear_output};
   group_key = std::string("Linear|") + Name(matmul_inputs[0]) + "|" +
               std::to_string((*weight_shape)[0]) + "|" +
               std::to_string((*weight_shape)[1]) + "|" + activation_name;
   return true;
+}
+
+bool IsExpectedInputPair(Ort::ConstNode node, Ort::ConstValueInfo lhs,
+                         Ort::ConstValueInfo rhs) {
+  auto inputs = node.GetInputs();
+  return inputs.size() == 2 &&
+         ((Name(inputs[0]) == Name(lhs) && Name(inputs[1]) == Name(rhs)) ||
+          (Name(inputs[0]) == Name(rhs) && Name(inputs[1]) == Name(lhs)));
+}
+
+bool TryAppendGatedMlpNodes(
+    const std::vector<ParallelLinearBranch>& branches,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& accepted_node_ids,
+    std::vector<Ort::ConstNode>& nodes) {
+  if (branches.size() != 2 || branches[0].activation ||
+      branches[1].activation) {
+    return false;
+  }
+
+  for (size_t gate_index = 0; gate_index < branches.size(); ++gate_index) {
+    const size_t up_index = 1 - gate_index;
+    Ort::ConstValueInfo gate = branches[gate_index].output;
+    Ort::ConstValueInfo up = branches[up_index].output;
+    if (graph_output_names.count(Name(gate)) != 0 ||
+        graph_output_names.count(Name(up)) != 0) {
+      continue;
+    }
+
+    Ort::ConstNode sigmoid{nullptr};
+    for (const auto& consumer : gate.GetConsumers()) {
+      if (consumer.index == 0 && IsOnnxOp(consumer.node, "Sigmoid")) {
+        sigmoid = consumer.node;
+      }
+    }
+    if (!sigmoid || accepted_node_ids.count(sigmoid.GetId()) != 0) {
+      continue;
+    }
+    auto sigmoid_inputs = sigmoid.GetInputs();
+    auto sigmoid_outputs = sigmoid.GetOutputs();
+    if (sigmoid_inputs.size() != 1 || sigmoid_outputs.size() != 1 ||
+        Name(sigmoid_inputs[0]) != Name(gate) ||
+        graph_output_names.count(Name(sigmoid_outputs[0])) != 0) {
+      continue;
+    }
+
+    auto sigmoid_consumers = sigmoid_outputs[0].GetConsumers();
+    if (sigmoid_consumers.size() != 1 ||
+        !IsOnnxOp(sigmoid_consumers[0].node, "Mul") ||
+        accepted_node_ids.count(sigmoid_consumers[0].node.GetId()) != 0) {
+      continue;
+    }
+    Ort::ConstNode gate_mul = sigmoid_consumers[0].node;
+    auto gate_mul_outputs = gate_mul.GetOutputs();
+    if (gate_mul_outputs.size() != 1 ||
+        !IsExpectedInputPair(gate_mul, gate, sigmoid_outputs[0]) ||
+        graph_output_names.count(Name(gate_mul_outputs[0])) != 0) {
+      continue;
+    }
+
+    auto gate_consumers = gate.GetConsumers();
+    if (gate_consumers.size() != 2) {
+      continue;
+    }
+    bool has_sigmoid_consumer = false;
+    bool has_gate_mul_consumer = false;
+    for (const auto& consumer : gate_consumers) {
+      has_sigmoid_consumer |= consumer.node.GetId() == sigmoid.GetId();
+      has_gate_mul_consumer |= consumer.node.GetId() == gate_mul.GetId();
+    }
+    if (!has_sigmoid_consumer || !has_gate_mul_consumer) {
+      continue;
+    }
+
+    auto gate_mul_consumers = gate_mul_outputs[0].GetConsumers();
+    auto up_consumers = up.GetConsumers();
+    if (gate_mul_consumers.size() != 1 || up_consumers.size() != 1 ||
+        gate_mul_consumers[0].node.GetId() != up_consumers[0].node.GetId() ||
+        !IsOnnxOp(gate_mul_consumers[0].node, "Mul")) {
+      continue;
+    }
+    Ort::ConstNode output_mul = gate_mul_consumers[0].node;
+    auto output_mul_outputs = output_mul.GetOutputs();
+    if (accepted_node_ids.count(output_mul.GetId()) != 0 ||
+        output_mul_outputs.size() != 1 ||
+        !IsExpectedInputPair(output_mul, gate_mul_outputs[0], up)) {
+      continue;
+    }
+
+    nodes.push_back(sigmoid);
+    nodes.push_back(gate_mul);
+    nodes.push_back(output_mul);
+    return true;
+  }
+  return false;
 }
 
 }  // namespace
@@ -190,6 +289,8 @@ std::vector<std::vector<Ort::ConstNode>> FindParallelLinearFusions(
         nodes.push_back(branch.activation);
       }
     }
+    TryAppendGatedMlpNodes(branches, graph_output_names, accepted_node_ids,
+                           nodes);
     fusions.push_back(std::move(nodes));
   }
   return fusions;

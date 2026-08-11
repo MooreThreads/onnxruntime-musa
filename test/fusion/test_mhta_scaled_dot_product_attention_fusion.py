@@ -194,6 +194,65 @@ def test_mhta_boolean_mask_scaled_dot_product_attention_fusion(tmp_path):
     assert "Mul" not in musa_ops
 
 
+def test_mhta_absorbs_ranking_gr_int32_mask_preprocessing(tmp_path):
+    """Consume the shared INT32 mask before Slice/Cast/Equal."""
+    rng = np.random.default_rng(54)
+    batch, heads, seqlen, head_dim = 1, 3, 5, 4
+    raw_mask = rng.integers(0, 3, (batch, 1, seqlen, seqlen + 2), dtype=np.int32)
+    raw_mask[:, :, :-1, 0] = 1
+    raw_mask[:, :, -1, :seqlen] = 0
+    feeds = {
+        "Q": rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float32),
+        "K": rng.standard_normal((batch, heads, head_dim, seqlen)).astype(np.float32),
+        "V": rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float32),
+        "RawMask": raw_mask,
+    }
+    scale = np.array(1.0 / np.sqrt(head_dim), dtype=np.float32)
+    neg_inf = np.array(-np.inf, dtype=np.float32)
+    zero = np.array(0.0, dtype=np.float32)
+    starts = np.array([0], dtype=np.int64)
+    ends = np.array([seqlen], dtype=np.int64)
+    axes = np.array([3], dtype=np.int64)
+    steps = np.array([1], dtype=np.int64)
+    one = np.array(1, dtype=np.int64)
+    model = build_graph_model(
+        [
+            helper.make_node("Slice", ["RawMask", "starts", "ends", "axes", "steps"], ["MaskSlice"]),
+            helper.make_node("Cast", ["MaskSlice"], ["MaskInt64"], to=TensorProto.INT64),
+            helper.make_node("Equal", ["MaskInt64", "one"], ["Mask"]),
+            helper.make_node("MatMul", ["Q", "K"], ["Score"]),
+            helper.make_node("Mul", ["Score", "scale"], ["Scaled"]),
+            helper.make_node("Where", ["Mask", "Scaled", "neg_inf"], ["MaskedScore"]),
+            helper.make_node("Softmax", ["MaskedScore"], ["Prob"], axis=-1),
+            helper.make_node("Where", ["Mask", "Prob", "zero"], ["MaskedProb"]),
+            helper.make_node("MatMul", ["MaskedProb", "V"], ["Y"]),
+        ],
+        inputs=feeds,
+        outputs=[("Y", TensorProto.FLOAT)],
+        initializers=[
+            numpy_helper.from_array(value, name=name)
+            for name, value in {
+                "scale": scale,
+                "neg_inf": neg_inf,
+                "zero": zero,
+                "starts": starts,
+                "ends": ends,
+                "axes": axes,
+                "steps": steps,
+                "one": one,
+            }.items()
+        ],
+        name="mhta_ranking_gr_raw_int32_mask_graph",
+    )
+
+    outputs = run_model_and_compare(model, feeds, rtol=1e-4, atol=1e-4)
+    np.testing.assert_array_equal(outputs[0][:, :, -1, :], 0.0)
+    _, events = _profile_musa_session(model, feeds, tmp_path, "mhta_raw_int32_mask")
+    musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+    assert not {"Slice", "Cast", "Equal", "Where", "Softmax", "Mul"} & musa_ops
+
+
 def test_mhta_scaled_dot_product_attention_fp16_runflash(tmp_path):
     """FP16 must take the muDNN RunFlash branch and remain fused."""
     rng = np.random.default_rng(45)

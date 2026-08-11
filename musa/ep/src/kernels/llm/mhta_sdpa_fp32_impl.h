@@ -24,6 +24,10 @@ struct MusaMhtaSdpaFp32Params {
   // When true, mask is a BOOL keep-mask and invalid keys receive -inf.
   // Otherwise mask is a FLOAT additive mask scaled by mask_scale.
   bool boolean_mask;
+  // ranking-gr builds its BOOL keep-mask as Equal(Cast(Slice(INT32)), 1).
+  // The fused path reads the unsliced INT32 mask directly and applies the
+  // same equality while limiting columns to seqlen_k.
+  bool boolean_mask_int32;
 };
 
 musaError_t LaunchMusaMhtaSdpaFp32Kernel(const float* q, const float* k,

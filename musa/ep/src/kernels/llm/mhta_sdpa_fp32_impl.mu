@@ -21,7 +21,7 @@ MaskOffset(const MusaMhtaSdpaFp32Params& params, int64_t b, int64_t h,
 }
 
 __device__ __forceinline__ float Score(const float* q, const float* k,
-                                       const float* mask,
+                                       const void* mask,
                                        const MusaMhtaSdpaFp32Params& params,
                                        int64_t b, int64_t h, int64_t row,
                                        int64_t col) {
@@ -42,12 +42,17 @@ __device__ __forceinline__ float Score(const float* q, const float* k,
                                   : (k_head_base + col * params.head_dim + d));
     dot += q[q_base + d] * k[k_offset];
   }
+  const int64_t mask_offset = MaskOffset(params, b, h, row, col);
+  if (params.boolean_mask) {
+    const bool keep = static_cast<const uint8_t*>(mask)[mask_offset] != 0;
+    return keep ? dot * params.scale : -3.4028234663852886e38f;
+  }
   return dot * params.scale +
-         mask[MaskOffset(params, b, h, row, col)] * params.mask_scale;
+         static_cast<const float*>(mask)[mask_offset] * params.mask_scale;
 }
 
 __global__ void MhtaSdpaFp32Kernel(const float* q, const float* k,
-                                   const float* v, const float* mask,
+                                   const float* v, const void* mask,
                                    float* output,
                                    MusaMhtaSdpaFp32Params params) {
   const int64_t row_id = static_cast<int64_t>(blockIdx.x);
@@ -83,7 +88,9 @@ __global__ void MhtaSdpaFp32Kernel(const float* q, const float* k,
   const float max_score = reduce[0];
   float local_sum = 0.0f;
   for (int64_t col = threadIdx.x; col < params.seqlen_k; col += blockDim.x) {
-    const float weight = expf(scores[col] - max_score);
+    const float weight = scores[col] == -3.4028234663852886e38f
+                             ? 0.0f
+                             : expf(scores[col] - max_score);
     scores[col] = weight;
     local_sum += weight;
   }
@@ -96,7 +103,7 @@ __global__ void MhtaSdpaFp32Kernel(const float* q, const float* k,
     __syncthreads();
   }
 
-  const float inv_sum = 1.0f / reduce[0];
+  const float inv_sum = reduce[0] == 0.0f ? 0.0f : 1.0f / reduce[0];
   const int64_t output_base =
       ((b * params.heads + h) * params.seqlen_q + row) * params.head_dim;
   const int64_t v_head_base =
@@ -113,7 +120,7 @@ __global__ void MhtaSdpaFp32Kernel(const float* q, const float* k,
 }  // namespace
 
 musaError_t LaunchMusaMhtaSdpaFp32Kernel(const float* q, const float* k,
-                                         const float* v, const float* mask,
+                                         const float* v, const void* mask,
                                          float* output,
                                          MusaMhtaSdpaFp32Params params,
                                          musaStream_t stream) {

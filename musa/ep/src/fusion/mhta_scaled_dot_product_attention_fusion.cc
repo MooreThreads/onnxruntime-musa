@@ -89,14 +89,16 @@ class MhtaScaledDotProductAttentionFusionCompute final
   MhtaScaledDotProductAttentionFusionCompute(size_t q_index, size_t k_index,
                                              size_t v_index, size_t mask_index,
                                              float scale, float mask_scale,
-                                             MhtaSdpaLayout layout)
+                                             MhtaSdpaLayout layout,
+                                             bool boolean_mask = false)
       : q_index_(q_index),
         k_index_(k_index),
         v_index_(v_index),
         mask_index_(mask_index),
         scale_(scale),
         mask_scale_(mask_scale),
-        layout_(layout) {}
+        layout_(layout),
+        boolean_mask_(boolean_mask) {}
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override;
 
@@ -108,6 +110,7 @@ class MhtaScaledDotProductAttentionFusionCompute final
   float scale_;
   float mask_scale_;
   MhtaSdpaLayout layout_;
+  bool boolean_mask_;
 };
 
 bool IsMhtaSdpaTensorType(ONNXTensorElementDataType elem_type) {
@@ -241,15 +244,22 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     ValidateMhtaSdpaTensor(q, "Q");
     ValidateMhtaSdpaTensor(k, "K");
     ValidateMhtaSdpaTensor(v, "V");
-    ValidateMhtaSdpaTensor(mask, "mask");
     const ONNXTensorElementDataType elem_type =
         q.GetTensorTypeAndShapeInfo().GetElementType();
+    const ONNXTensorElementDataType mask_type =
+        mask.GetTensorTypeAndShapeInfo().GetElementType();
     if (k.GetTensorTypeAndShapeInfo().GetElementType() != elem_type ||
         v.GetTensorTypeAndShapeInfo().GetElementType() != elem_type ||
-        mask.GetTensorTypeAndShapeInfo().GetElementType() != elem_type) {
+        (!boolean_mask_ && mask_type != elem_type) ||
+        (boolean_mask_ && mask_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL)) {
       return Ort::GetApi().CreateStatus(
           ORT_NOT_IMPLEMENTED,
-          "MHTA SDPA requires Q/K/V/mask to have the same element type");
+          "MHTA SDPA requires matching Q/K/V/mask types or a BOOL keep-mask");
+    }
+    if (boolean_mask_ && elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+      return Ort::GetApi().CreateStatus(
+          ORT_NOT_IMPLEMENTED,
+          "MHTA boolean-mask SDPA currently supports FP32 Q/K/V only");
     }
 
     std::vector<int64_t> q_shape = Shape(q);
@@ -310,9 +320,13 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     const std::vector<int64_t> mask_shape = Shape(mask);
 
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      MusaMhtaSdpaFp32Params params{
-          batch, heads, seqlen_q, seqlen_k, head_dim,   scale_,   mask_scale_,
-          0,     0,     0,        0,        !sim_rank3, sim_rank3};
+      MusaMhtaSdpaFp32Params params{batch,       heads,
+                                    seqlen_q,    seqlen_k,
+                                    head_dim,    scale_,
+                                    mask_scale_, 0,
+                                    0,           0,
+                                    0,           !sim_rank3,
+                                    sim_rank3,   boolean_mask_};
       if (!SetupMhtaSdpaMaskParams(mask_shape, batch, heads, seqlen_q, seqlen_k,
                                    &params)) {
         return Ort::GetApi().CreateStatus(
@@ -323,8 +337,7 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       musaError_t launch_status = LaunchMusaMhtaSdpaFp32Kernel(
           static_cast<const float*>(q_buffer.data()),
           static_cast<const float*>(k_buffer.data()),
-          static_cast<const float*>(v_buffer.data()),
-          static_cast<const float*>(mask_buffer.data()),
+          static_cast<const float*>(v_buffer.data()), mask_buffer.data(),
           output.GetTensorMutableData<float>(), params, stream);
       if (launch_status != musaSuccess) {
         throw std::runtime_error(std::string("MHTA SDPA FP32 kernel failed: ") +
@@ -503,6 +516,7 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
   size_t add_count = 0;
   size_t div_count = 0;
   size_t softmax_count = 0;
+  size_t where_count = 0;
   size_t unsqueeze_count = 0;
   size_t reshape_count = 0;
   for (Ort::ConstNode node : graph.GetNodes()) {
@@ -518,6 +532,8 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
       ++div_count;
     } else if (IsOnnxOp(node, "Softmax")) {
       ++softmax_count;
+    } else if (IsOnnxOp(node, "Where")) {
+      ++where_count;
     } else if (IsOnnxOp(node, "Unsqueeze")) {
       ++unsqueeze_count;
     } else if (IsOnnxOp(node, "Reshape")) {
@@ -529,13 +545,17 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
   const bool simple_bhsd = matmul_count == 2 && einsum_count == 0 &&
                            mul_count == 1 && add_count == 1 && div_count == 1 &&
                            softmax_count == 1 && unsqueeze_count == 0 &&
-                           reshape_count == 0;
+                           reshape_count == 0 && where_count == 0;
+  const bool boolean_bhsd =
+      matmul_count == 2 && einsum_count == 0 && mul_count == 1 &&
+      add_count == 0 && div_count == 0 && softmax_count == 1 &&
+      where_count == 2 && unsqueeze_count == 0 && reshape_count == 0;
   const bool sim_rank3 = matmul_count == 1 && einsum_count == 1 &&
                          add_count == 1 && softmax_count == 1 &&
                          unsqueeze_count == 1 && reshape_count == 1 &&
                          ((mul_count == 2 && div_count == 0) ||
                           (mul_count == 1 && div_count == 1));
-  return simple_bhsd || sim_rank3;
+  return simple_bhsd || boolean_bhsd || sim_rank3;
 }
 
 std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
@@ -551,6 +571,7 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
   Ort::ConstNode reshape_node{nullptr};
   std::unordered_map<std::string, Ort::ConstNode> producers;
   std::vector<Ort::ConstNode> mul_nodes;
+  std::vector<Ort::ConstNode> where_nodes;
   for (Ort::ConstNode node : graph.GetNodes()) {
     for (Ort::ConstValueInfo output : node.GetOutputs()) {
       producers.emplace(Name(output), node);
@@ -564,6 +585,8 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
       div_node = node;
     } else if (IsOnnxOp(node, "Softmax")) {
       softmax_node = node;
+    } else if (IsOnnxOp(node, "Where")) {
+      where_nodes.push_back(node);
     } else if (IsOnnxOp(node, "Einsum")) {
       einsum_node = node;
     } else if (IsOnnxOp(node, "Unsqueeze")) {
@@ -572,11 +595,69 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
       reshape_node = node;
     }
   }
-  if (!add_node || !softmax_node) {
+  if (!softmax_node) {
     throw std::runtime_error("invalid MHTA SDPA fused graph");
   }
 
   auto fused_indices = FusedInputIndices(fused_node);
+
+  if (where_nodes.size() == 2) {
+    Ort::ConstNode post_where{nullptr};
+    for (Ort::ConstNode node : graph.GetNodes()) {
+      if (!IsOnnxOp(node, "MatMul")) continue;
+      const auto inputs = node.GetInputs();
+      if (inputs.size() != 2) continue;
+      auto producer_it = producers.find(Name(inputs[0]));
+      if (producer_it != producers.end() &&
+          IsOnnxOp(producer_it->second, "Where")) {
+        value_matmul = node;
+        post_where = producer_it->second;
+        break;
+      }
+    }
+    if (!value_matmul || !post_where || !mul_node) {
+      throw std::runtime_error("invalid MHTA boolean-mask value topology");
+    }
+    const auto post_inputs = post_where.GetInputs();
+    const auto softmax_inputs = softmax_node.GetInputs();
+    if (post_inputs.size() != 3 || softmax_inputs.size() != 1 ||
+        Name(post_inputs[1]) != Name(softmax_node.GetOutputs()[0])) {
+      throw std::runtime_error("invalid MHTA boolean-mask Softmax topology");
+    }
+    auto pre_where_it = producers.find(Name(softmax_inputs[0]));
+    if (pre_where_it == producers.end() ||
+        !IsOnnxOp(pre_where_it->second, "Where")) {
+      throw std::runtime_error("invalid MHTA boolean-mask score topology");
+    }
+    const auto pre_inputs = pre_where_it->second.GetInputs();
+    const auto mul_inputs = mul_node.GetInputs();
+    if (pre_inputs.size() != 3 || mul_inputs.size() != 2 ||
+        Name(pre_inputs[0]) != Name(post_inputs[0]) ||
+        Name(pre_inputs[1]) != Name(mul_node.GetOutputs()[0])) {
+      throw std::runtime_error("invalid MHTA boolean-mask Where topology");
+    }
+    auto score_it = producers.find(Name(mul_inputs[0]));
+    if (score_it == producers.end() || !IsOnnxOp(score_it->second, "MatMul")) {
+      throw std::runtime_error("invalid MHTA boolean-mask MatMul topology");
+    }
+    score_matmul = score_it->second;
+    const auto score_inputs = score_matmul.GetInputs();
+    const auto value_inputs = value_matmul.GetInputs();
+    if (score_inputs.size() != 2 || value_inputs.size() != 2) {
+      throw std::runtime_error("invalid MHTA boolean-mask inputs");
+    }
+    const float scale = ReadScalarFloatAttributeInput(mul_inputs[1]);
+    return std::make_unique<MhtaScaledDotProductAttentionFusionCompute>(
+        InputIndex(fused_indices, score_inputs[0]),
+        InputIndex(fused_indices, score_inputs[1]),
+        InputIndex(fused_indices, value_inputs[1]),
+        InputIndex(fused_indices, pre_inputs[0]), scale, 0.0f,
+        MhtaSdpaLayout::kBhsd, true);
+  }
+
+  if (!add_node) {
+    throw std::runtime_error("invalid MHTA SDPA fused graph");
+  }
 
   if (einsum_node) {
     if (!unsqueeze_node || !reshape_node ||

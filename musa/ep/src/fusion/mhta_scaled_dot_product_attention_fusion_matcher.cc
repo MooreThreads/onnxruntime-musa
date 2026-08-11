@@ -89,6 +89,19 @@ bool HasSameMhtaSdpaDataType(Ort::ConstValueInfo lhs, Ort::ConstValueInfo rhs) {
              rhs.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
 }
 
+bool IsBoolTensorValueInfo(Ort::ConstValueInfo value_info) {
+  return value_info.TypeInfo().GetONNXType() == ONNX_TYPE_TENSOR &&
+         value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
+             ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
+}
+
+bool IsScalarFloatValue(Ort::ConstValueInfo value_info, float expected) {
+  const auto value = ReadScalarFloatInitializer(value_info);
+  if (!value.has_value()) return false;
+  if (std::isinf(expected)) return std::isinf(*value) && *value < 0.0f;
+  return *value == expected;
+}
+
 bool MhtaSdpaShapesHaveSameDataType(Ort::ConstValueInfo q,
                                     Ort::ConstValueInfo k,
                                     Ort::ConstValueInfo v,
@@ -360,6 +373,106 @@ bool CanFuseMhtaScaledDotProductAttention(
   return true;
 }
 
+// Matches the boolean keep-mask form emitted by ranking-gr:
+//   MatMul -> Mul(scale) -> Where(mask, score, -inf) -> Softmax
+//   -> Where(mask, probability, 0) -> MatMul(V)
+// Keep the mask producer outside the fusion so dynamic Slice/Cast/Equal
+// subgraphs remain reusable and are still executed on their normal provider.
+bool CanFuseBooleanMhtaScaledDotProductAttention(
+    Ort::ConstNode value_matmul,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& accepted_node_ids,
+    std::vector<Ort::ConstNode>& fusion_nodes) {
+  if (!IsOnnxOp(value_matmul, "MatMul") ||
+      accepted_node_ids.count(value_matmul.GetId()) != 0)
+    return false;
+  const auto value_inputs = value_matmul.GetInputs();
+  const auto value_outputs = value_matmul.GetOutputs();
+  if (value_inputs.size() != 2 || value_outputs.size() != 1) return false;
+
+  Ort::ConstNode post_where{nullptr};
+  if (!GetProducer(value_inputs[0], post_where) ||
+      !IsOnnxOp(post_where, "Where") ||
+      accepted_node_ids.count(post_where.GetId()) != 0)
+    return false;
+  const auto post_inputs = post_where.GetInputs();
+  const auto post_outputs = post_where.GetOutputs();
+  if (post_inputs.size() != 3 || post_outputs.size() != 1 ||
+      !HasSingleConsumer(post_outputs[0], graph_output_names) ||
+      Name(post_outputs[0]) != Name(value_inputs[0]) ||
+      !IsBoolTensorValueInfo(post_inputs[0]) ||
+      !IsScalarFloatValue(post_inputs[2], 0.0f))
+    return false;
+
+  Ort::ConstNode softmax{nullptr};
+  if (!GetProducer(post_inputs[1], softmax) || !IsOnnxOp(softmax, "Softmax") ||
+      accepted_node_ids.count(softmax.GetId()) != 0)
+    return false;
+  const auto softmax_inputs = softmax.GetInputs();
+  const auto softmax_outputs = softmax.GetOutputs();
+  if (softmax_inputs.size() != 1 || softmax_outputs.size() != 1 ||
+      Name(softmax_outputs[0]) != Name(post_inputs[1]) ||
+      !HasSingleConsumer(softmax_outputs[0], graph_output_names) ||
+      !IsLastAxisSoftmax(softmax, softmax_inputs[0]))
+    return false;
+
+  Ort::ConstNode pre_where{nullptr};
+  if (!GetProducer(softmax_inputs[0], pre_where) ||
+      !IsOnnxOp(pre_where, "Where") ||
+      accepted_node_ids.count(pre_where.GetId()) != 0)
+    return false;
+  const auto pre_inputs = pre_where.GetInputs();
+  const auto pre_outputs = pre_where.GetOutputs();
+  if (pre_inputs.size() != 3 || pre_outputs.size() != 1 ||
+      Name(pre_outputs[0]) != Name(softmax_inputs[0]) ||
+      !HasSingleConsumer(pre_outputs[0], graph_output_names) ||
+      !IsBoolTensorValueInfo(pre_inputs[0]) ||
+      Name(pre_inputs[0]) != Name(post_inputs[0]) ||
+      !IsScalarFloatValue(pre_inputs[2], -INFINITY))
+    return false;
+
+  Ort::ConstNode scale_mul{nullptr};
+  if (!GetProducer(pre_inputs[1], scale_mul) || !IsOnnxOp(scale_mul, "Mul") ||
+      accepted_node_ids.count(scale_mul.GetId()) != 0)
+    return false;
+  const auto scale_inputs = scale_mul.GetInputs();
+  const auto scale_outputs = scale_mul.GetOutputs();
+  if (scale_inputs.size() != 2 || scale_outputs.size() != 1 ||
+      Name(scale_outputs[0]) != Name(pre_inputs[1]) ||
+      !HasSingleConsumer(scale_outputs[0], graph_output_names))
+    return false;
+  size_t scale_index = 0;
+  const auto scale = ScalarInputValue(scale_mul, 0, &scale_index);
+  if (!scale.has_value() || scale_index != 1 || !std::isfinite(*scale))
+    return false;
+
+  Ort::ConstNode score_matmul{nullptr};
+  if (!GetProducer(scale_inputs[0], score_matmul) ||
+      !IsOnnxOp(score_matmul, "MatMul") ||
+      accepted_node_ids.count(score_matmul.GetId()) != 0)
+    return false;
+  const auto score_inputs = score_matmul.GetInputs();
+  const auto score_outputs = score_matmul.GetOutputs();
+  if (score_inputs.size() != 2 || score_outputs.size() != 1 ||
+      Name(score_outputs[0]) != Name(scale_inputs[0]) ||
+      !HasSingleConsumer(score_outputs[0], graph_output_names) ||
+      !IsFloatTensorValueInfo(score_inputs[0]) ||
+      !IsFloatTensorValueInfo(score_inputs[1]) ||
+      !IsFloatTensorValueInfo(value_inputs[1]) ||
+      !IsFloatTensorValueInfo(value_outputs[0]) ||
+      !ShapesAreSupported(score_inputs[0], score_inputs[1], value_inputs[1],
+                          value_outputs[0]))
+    return false;
+
+  std::unordered_set<size_t> selected;
+  for (Ort::ConstNode node : {score_matmul, scale_mul, pre_where, softmax,
+                              post_where, value_matmul}) {
+    if (!AddFusionNode(node, accepted_node_ids, selected, fusion_nodes))
+      return false;
+  }
+  return FusionHasNoExternalPathBetweenSelectedNodes(fusion_nodes, selected);
+}
+
 bool CanFuseSimRank3MhtaScaledDotProductAttention(
     Ort::ConstNode output_reshape,
     const std::unordered_set<std::string>& graph_output_names,
@@ -552,7 +665,9 @@ FindMhtaScaledDotProductAttentionFusions(
   std::vector<std::vector<Ort::ConstNode>> fusions;
   for (Ort::ConstNode node : all_nodes) {
     std::vector<Ort::ConstNode> fusion_nodes;
-    if (CanFuseMhtaScaledDotProductAttention(node, graph_output_names,
+    if (CanFuseBooleanMhtaScaledDotProductAttention(
+            node, graph_output_names, accepted_node_ids, fusion_nodes) ||
+        CanFuseMhtaScaledDotProductAttention(node, graph_output_names,
                                              accepted_node_ids, fusion_nodes) ||
         CanFuseSimRank3MhtaScaledDotProductAttention(
             node, graph_output_names, accepted_node_ids, fusion_nodes)) {

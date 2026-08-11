@@ -16,10 +16,12 @@
 #include <mudnn.h>
 #include <musa_runtime.h>
 
+#include <algorithm>
 #include <climits>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -40,6 +42,13 @@ struct BranchInfo {
 };
 
 constexpr size_t kNoBiasInput = std::numeric_limits<size_t>::max();
+constexpr size_t kNoOutputIndex = std::numeric_limits<size_t>::max();
+
+struct GatedMlpInfo {
+  std::string gate_output;
+  std::string up_output;
+  std::string fused_output;
+};
 
 class DeviceBuffer {
  public:
@@ -221,15 +230,89 @@ size_t IndexOf(const std::unordered_map<std::string, size_t>& indices,
   return it->second;
 }
 
+bool InputsMatch(Ort::ConstNode node, const std::string& lhs,
+                 const std::string& rhs) {
+  auto inputs = node.GetInputs();
+  return inputs.size() == 2 &&
+         ((Name(inputs[0]) == lhs && Name(inputs[1]) == rhs) ||
+          (Name(inputs[0]) == rhs && Name(inputs[1]) == lhs));
+}
+
+std::optional<GatedMlpInfo> FindGatedMlpInfo(
+    Ort::ConstGraph graph, const std::vector<std::string>& branch_outputs) {
+  if (branch_outputs.size() != 2) {
+    return std::nullopt;
+  }
+
+  Ort::ConstNode sigmoid{nullptr};
+  std::vector<Ort::ConstNode> muls;
+  for (Ort::ConstNode node : graph.GetNodes()) {
+    if (IsOnnxOp(node, "Sigmoid")) {
+      if (sigmoid) {
+        return std::nullopt;
+      }
+      sigmoid = node;
+    } else if (IsOnnxOp(node, "Mul")) {
+      muls.push_back(node);
+    }
+  }
+  if (!sigmoid || muls.size() != 2) {
+    return std::nullopt;
+  }
+
+  auto sigmoid_inputs = sigmoid.GetInputs();
+  auto sigmoid_outputs = sigmoid.GetOutputs();
+  if (sigmoid_inputs.size() != 1 || sigmoid_outputs.size() != 1) {
+    return std::nullopt;
+  }
+  const std::string gate_output = Name(sigmoid_inputs[0]);
+  size_t gate_index = branch_outputs.size();
+  for (size_t i = 0; i < branch_outputs.size(); ++i) {
+    if (branch_outputs[i] == gate_output) {
+      gate_index = i;
+    }
+  }
+  if (gate_index == branch_outputs.size()) {
+    return std::nullopt;
+  }
+  const std::string& up_output = branch_outputs[1 - gate_index];
+
+  Ort::ConstNode gate_mul{nullptr};
+  for (Ort::ConstNode mul : muls) {
+    if (InputsMatch(mul, gate_output, Name(sigmoid_outputs[0]))) {
+      gate_mul = mul;
+    }
+  }
+  if (!gate_mul || gate_mul.GetOutputs().size() != 1) {
+    return std::nullopt;
+  }
+  const std::string gate_mul_output = Name(gate_mul.GetOutputs()[0]);
+
+  Ort::ConstNode output_mul{nullptr};
+  for (Ort::ConstNode mul : muls) {
+    if (mul.GetId() != gate_mul.GetId() &&
+        InputsMatch(mul, gate_mul_output, up_output)) {
+      output_mul = mul;
+    }
+  }
+  if (!output_mul || output_mul.GetOutputs().size() != 1) {
+    return std::nullopt;
+  }
+  return GatedMlpInfo{gate_output, up_output, Name(output_mul.GetOutputs()[0])};
+}
+
 }  // namespace
 
 struct ParallelLinearFusionCompute : FusionNodeCompute {
   ParallelLinearFusionCompute(size_t input_index,
                               std::vector<BranchInfo> branches,
-                              bool has_activation)
+                              bool has_activation, bool gated_mlp,
+                              size_t gated_output_index)
       : input_index(input_index),
         branches(std::move(branches)),
-        has_activation(has_activation) {}
+        has_activation(has_activation),
+        gated_mlp(gated_mlp),
+        gated_output_index(gated_output_index) {}
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override {
     try {
@@ -294,15 +377,26 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
       output_shape.back() = branch_width;
 
       std::vector<float*> output_pointers;
-      output_pointers.reserve(branches.size());
-      for (const BranchInfo& branch : branches) {
+      float* gated_output = nullptr;
+      if (gated_mlp) {
         Ort::UnownedValue output =
-            ctx.GetOutput(branch.output_index, output_shape);
+            ctx.GetOutput(gated_output_index, output_shape);
         if (!IsGpuMemory(output.GetTensorMemoryInfo())) {
           return Ort::GetApi().CreateStatus(
               ORT_NOT_IMPLEMENTED, "ParallelLinear requires MUSA outputs");
         }
-        output_pointers.push_back(output.GetTensorMutableData<float>());
+        gated_output = output.GetTensorMutableData<float>();
+      } else {
+        output_pointers.reserve(branches.size());
+        for (const BranchInfo& branch : branches) {
+          Ort::UnownedValue output =
+              ctx.GetOutput(branch.output_index, output_shape);
+          if (!IsGpuMemory(output.GetTensorMemoryInfo())) {
+            return Ort::GetApi().CreateStatus(
+                ORT_NOT_IMPLEMENTED, "ParallelLinear requires MUSA outputs");
+          }
+          output_pointers.push_back(output.GetTensorMutableData<float>());
+        }
       }
 
       // MatMul with zero rows has empty outputs by ONNX semantics.  Keep the
@@ -344,25 +438,42 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
           scratch.merged_output.data<float>(), flat_input_shape,
           merged_weight_shape, merged_output_shape, stream));
 
-      const size_t pointer_bytes = branches.size() * 2 * sizeof(const float*);
-      RETURN_IF_ERROR(scratch.pointer_arrays.Resize(pointer_bytes, stream));
-      std::vector<const float*> host_pointers;
-      host_pointers.reserve(branches.size() * 2);
-      for (float* output : output_pointers) {
-        host_pointers.push_back(output);
+      musaError_t post_status = musaSuccess;
+      if (gated_mlp) {
+        post_status = LaunchParallelLinearGatedMlpPostFloatKernel(
+            scratch.merged_output.data<float>(), gated_output, bias_pointers[0],
+            bias_pointers[1], rows, branch_width, stream);
+      } else if (branches.size() == 2 || branches.size() == 3) {
+        post_status = LaunchParallelLinearPostDirectFloatKernel(
+            scratch.merged_output.data<float>(), output_pointers[0],
+            output_pointers[1],
+            branches.size() == 3 ? output_pointers[2] : nullptr,
+            bias_pointers[0], bias_pointers[1],
+            branches.size() == 3 ? bias_pointers[2] : nullptr, rows,
+            branch_count, branch_width, MusaUnaryOp::Relu, has_activation, 0.0f,
+            stream);
+      } else {
+        const size_t pointer_bytes = branches.size() * 2 * sizeof(const float*);
+        RETURN_IF_ERROR(scratch.pointer_arrays.Resize(pointer_bytes, stream));
+        std::vector<const float*> host_pointers;
+        host_pointers.reserve(branches.size() * 2);
+        for (float* output : output_pointers) {
+          host_pointers.push_back(output);
+        }
+        host_pointers.insert(host_pointers.end(), bias_pointers.begin(),
+                             bias_pointers.end());
+        RETURN_IF_ERROR(CopyTemporaryHostToDevice(
+            scratch.pointer_arrays.data<void*>(), host_pointers.data(),
+            pointer_bytes, stream));
+        float** device_outputs = scratch.pointer_arrays.data<float*>();
+        const float* const* device_biases =
+            reinterpret_cast<const float* const*>(device_outputs +
+                                                  branches.size());
+        post_status = LaunchParallelLinearPostFloatKernel(
+            scratch.merged_output.data<float>(), device_outputs, device_biases,
+            rows, branch_count, branch_width, MusaUnaryOp::Relu, has_activation,
+            0.0f, stream);
       }
-      host_pointers.insert(host_pointers.end(), bias_pointers.begin(),
-                           bias_pointers.end());
-      RETURN_IF_ERROR(CopyTemporaryHostToDevice(
-          scratch.pointer_arrays.data<void*>(), host_pointers.data(),
-          pointer_bytes, stream));
-      float** device_outputs = scratch.pointer_arrays.data<float*>();
-      const float* const* device_biases = reinterpret_cast<const float* const*>(
-          device_outputs + branches.size());
-      musaError_t post_status = LaunchParallelLinearPostFloatKernel(
-          scratch.merged_output.data<float>(), device_outputs, device_biases,
-          rows, branch_count, branch_width, MusaUnaryOp::Relu, has_activation,
-          0.0f, stream);
       if (post_status != musaSuccess) {
         return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
                                           MusaErrorString(post_status));
@@ -379,6 +490,8 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
   size_t input_index;
   std::vector<BranchInfo> branches;
   bool has_activation;
+  bool gated_mlp;
+  size_t gated_output_index;
 };
 
 bool IsParallelLinearFusionGraph(Ort::ConstGraph graph) {
@@ -386,6 +499,8 @@ bool IsParallelLinearFusionGraph(Ort::ConstGraph graph) {
   size_t gemm_count = 0;
   size_t add_count = 0;
   size_t relu_count = 0;
+  size_t sigmoid_count = 0;
+  size_t mul_count = 0;
   for (Ort::ConstNode node : graph.GetNodes()) {
     if (IsOnnxOp(node, "MatMul")) {
       ++matmul_count;
@@ -395,13 +510,22 @@ bool IsParallelLinearFusionGraph(Ort::ConstGraph graph) {
       ++add_count;
     } else if (IsOnnxOp(node, "Relu")) {
       ++relu_count;
+    } else if (IsOnnxOp(node, "Sigmoid")) {
+      ++sigmoid_count;
+    } else if (IsOnnxOp(node, "Mul")) {
+      ++mul_count;
     } else {
       return false;
     }
   }
   const size_t linear_count = matmul_count + gemm_count;
-  return linear_count >= 2 && add_count <= matmul_count &&
-         (relu_count == 0 || relu_count == linear_count);
+  const bool ordinary = linear_count >= 2 && add_count <= matmul_count &&
+                        sigmoid_count == 0 && mul_count == 0 &&
+                        (relu_count == 0 || relu_count == linear_count);
+  const bool gated_mlp = linear_count == 2 && add_count <= matmul_count &&
+                         relu_count == 0 && sigmoid_count == 1 &&
+                         mul_count == 2;
+  return ordinary || gated_mlp;
 }
 
 std::unique_ptr<FusionNodeCompute> CreateParallelLinearFusion(
@@ -417,7 +541,12 @@ std::unique_ptr<FusionNodeCompute> CreateParallelLinearFusion(
 
   std::string common_input;
   size_t input_index = 0;
-  std::vector<BranchInfo> branches;
+  struct PendingBranch {
+    size_t weight_input_index;
+    size_t bias_input_index;
+    std::string output_name;
+  };
+  std::vector<PendingBranch> pending_branches;
   bool has_activation = false;
   for (Ort::ConstNode matmul : graph.GetNodes()) {
     const bool is_matmul = IsOnnxOp(matmul, "MatMul");
@@ -455,11 +584,44 @@ std::unique_ptr<FusionNodeCompute> CreateParallelLinearFusion(
       has_activation = true;
       output_name = Name(activation_it->second.GetOutputs()[0]);
     }
-    branches.push_back(
+    pending_branches.push_back(
         {IndexOf(input_indices, Name(matmul_inputs[1])),
          bias != nullptr ? IndexOf(input_indices, Name(bias)) : kNoBiasInput,
-         IndexOf(output_indices, output_name)});
+         output_name});
+  }
+
+  std::vector<std::string> branch_outputs;
+  branch_outputs.reserve(pending_branches.size());
+  for (const PendingBranch& branch : pending_branches) {
+    branch_outputs.push_back(branch.output_name);
+  }
+  std::optional<GatedMlpInfo> gated_info =
+      FindGatedMlpInfo(graph, branch_outputs);
+
+  std::vector<BranchInfo> branches;
+  branches.reserve(pending_branches.size());
+  size_t gated_output_index = kNoOutputIndex;
+  if (gated_info.has_value()) {
+    for (const std::string& output_name :
+         {gated_info->gate_output, gated_info->up_output}) {
+      auto it = std::find_if(pending_branches.begin(), pending_branches.end(),
+                             [&](const PendingBranch& branch) {
+                               return branch.output_name == output_name;
+                             });
+      if (it == pending_branches.end()) {
+        throw std::runtime_error("ParallelLinear gated branch is missing");
+      }
+      branches.push_back(
+          {it->weight_input_index, it->bias_input_index, kNoOutputIndex});
+    }
+    gated_output_index = IndexOf(output_indices, gated_info->fused_output);
+  } else {
+    for (const PendingBranch& branch : pending_branches) {
+      branches.push_back({branch.weight_input_index, branch.bias_input_index,
+                          IndexOf(output_indices, branch.output_name)});
+    }
   }
   return std::make_unique<ParallelLinearFusionCompute>(
-      input_index, std::move(branches), has_activation);
+      input_index, std::move(branches), has_activation, gated_info.has_value(),
+      gated_output_index);
 }

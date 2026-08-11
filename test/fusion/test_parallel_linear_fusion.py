@@ -76,6 +76,57 @@ def _build_model(
     return model.SerializeToString(), {"X": x}
 
 
+def _build_gated_mlp_model(with_bias):
+    rng = np.random.default_rng(2718 + int(with_bias))
+    x = rng.standard_normal((2, 4, 8)).astype(np.float32)
+    gate_weight = rng.standard_normal((8, 5)).astype(np.float32)
+    up_weight = rng.standard_normal((8, 5)).astype(np.float32)
+    initializers = [
+        numpy_helper.from_array(gate_weight, "gate_weight"),
+        numpy_helper.from_array(up_weight, "up_weight"),
+    ]
+    nodes = [
+        helper.make_node("MatMul", ["X", "gate_weight"], ["gate_matmul"]),
+        helper.make_node("MatMul", ["X", "up_weight"], ["up_matmul"]),
+    ]
+    gate = "gate_matmul"
+    up = "up_matmul"
+    if with_bias:
+        gate_bias = rng.standard_normal((5,)).astype(np.float32)
+        up_bias = rng.standard_normal((5,)).astype(np.float32)
+        initializers.extend(
+            [
+                numpy_helper.from_array(gate_bias, "gate_bias"),
+                numpy_helper.from_array(up_bias, "up_bias"),
+            ]
+        )
+        gate = "gate"
+        up = "up"
+        nodes.extend(
+            [
+                helper.make_node("Add", ["gate_matmul", "gate_bias"], [gate]),
+                helper.make_node("Add", ["up_matmul", "up_bias"], [up]),
+            ]
+        )
+    nodes.extend(
+        [
+            helper.make_node("Sigmoid", [gate], ["gate_sigmoid"]),
+            helper.make_node("Mul", [gate, "gate_sigmoid"], ["gate_silu"]),
+            helper.make_node("Mul", ["gate_silu", up], ["Y"]),
+        ]
+    )
+    graph = helper.make_graph(
+        nodes,
+        "parallel_linear_gated_mlp_graph",
+        [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["batch", 4, 8])],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["batch", 4, 5])],
+        initializer=initializers,
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString(), {"X": x}
+
+
 def _profile_node_names(model, feeds):
     devices = musa_devices()
     if not devices:
@@ -133,6 +184,35 @@ def test_parallel_linear_fusion_mixed_bias():
     assert len(fused) == 1
     assert not any(
         name.startswith(("MatMul_", "Add_", "Relu_")) for name in node_names
+    )
+
+
+@pytest.mark.parametrize("branch_count", [2, 3])
+def test_parallel_linear_fusion_direct_pointer_post(branch_count):
+    model, feeds = _build_model(
+        branch_count=branch_count,
+        with_relu=True,
+        bias_mask=[i % 2 == 0 for i in range(branch_count)],
+    )
+    run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
+    node_names = _profile_node_names(model, feeds)
+    fused = [name for name in node_names if name.startswith("MUSAExecutionProvider_")]
+    assert len(fused) == 1
+    assert not any(
+        name.startswith(("MatMul_", "Add_", "Relu_")) for name in node_names
+    )
+
+
+@pytest.mark.parametrize("with_bias", [False, True])
+def test_parallel_linear_gated_mlp_fusion(with_bias):
+    model, feeds = _build_gated_mlp_model(with_bias)
+    run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
+    node_names = _profile_node_names(model, feeds)
+    fused = [name for name in node_names if name.startswith("MUSAExecutionProvider_")]
+    assert len(fused) == 1
+    assert not any(
+        name.startswith(("MatMul_", "Add_", "Sigmoid_", "Mul_"))
+        for name in node_names
     )
 
 

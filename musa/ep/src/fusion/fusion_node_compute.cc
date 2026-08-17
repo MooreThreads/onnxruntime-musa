@@ -301,6 +301,9 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute =
             CreateParallelEinsumActivationFusion(graph, fused_node);
         finder_name = "FindParallelEinsumActivationFusions";
+      } else if (IsCastRmsNormFusionGraph(graph)) {
+        fusion_compute = CreateCastRmsNormFusion(graph, fused_node);
+        finder_name = "FindCastRmsNormFusions";
       } else if (IsRmsNormFusionGraph(graph)) {
         fusion_compute = CreateRmsNormFusion(graph, fused_node);
         finder_name = "FindRmsNormFusions";

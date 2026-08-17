@@ -54,6 +54,13 @@ constexpr FusionDTypeContract kRmsNormDTypeContract = {
     "dtype",
     "Cast nodes are not part of this fusion", FusionFloatPolicy::kAnyFloat};
 
+constexpr FusionDTypeContract kCastRmsNormDTypeContract = {
+    "bfloat16 input/gamma/output with float32 normalization intermediates",
+    "float32 internal reduction",
+    "preserve graph output dtype after explicit fp32->bfloat16 rounding",
+    "explicit bfloat16->float32 entry Cast and float32->bfloat16 exit Cast",
+    FusionFloatPolicy::kFp32Fp16Bf16};
+
 constexpr FusionDTypeContract kFloatReduceDTypeContract = {
     "float32", "float32 reduction", "preserve graph output dtype",
     "Cast nodes are not part of this fusion", FusionFloatPolicy::kFp32Only};
@@ -122,6 +129,9 @@ const FusionDTypeContract& FusionDTypeContractForFinder(const char* finder) {
   }
   if (name == "FindRmsNormFusions") {
     return kRmsNormDTypeContract;
+  }
+  if (name == "FindCastRmsNormFusions") {
+    return kCastRmsNormDTypeContract;
   }
   if (name == "FindCenteredReduceFusions" || name == "FindSplitReduceFusions" ||
       name == "FindSegmentMaxBroadcastFusions") {

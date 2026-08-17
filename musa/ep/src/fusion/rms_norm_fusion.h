@@ -22,6 +22,9 @@
 #include "fusion/fusion_node_compute.h"
 
 bool IsRmsNormFusionGraph(Ort::ConstGraph graph);
+bool IsCastRmsNormFusionGraph(Ort::ConstGraph graph);
 
 std::unique_ptr<FusionNodeCompute> CreateRmsNormFusion(
+    Ort::ConstGraph graph, Ort::ConstNode fused_node);
+std::unique_ptr<FusionNodeCompute> CreateCastRmsNormFusion(
     Ort::ConstGraph graph, Ort::ConstNode fused_node);

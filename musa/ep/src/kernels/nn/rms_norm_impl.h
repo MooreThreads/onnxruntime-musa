@@ -9,3 +9,8 @@ musaError_t LaunchMusaRmsNormKernel(const void* input, const void* gamma,
                                     int64_t norm_size, float epsilon,
                                     MusaElementType elem_type,
                                     musaStream_t stream);
+
+musaError_t LaunchMusaCastRmsNormBf16Kernel(const void* input,
+                                            const void* gamma, void* output,
+                                            int64_t rows, int64_t norm_size,
+                                            float epsilon, musaStream_t stream);

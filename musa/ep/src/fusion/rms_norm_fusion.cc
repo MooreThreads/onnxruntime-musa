@@ -187,6 +187,84 @@ struct RmsNormFusionCompute : FusionNodeCompute {
   float epsilon;
 };
 
+struct CastRmsNormFusionCompute : FusionNodeCompute {
+  CastRmsNormFusionCompute(size_t input_index, size_t gamma_index,
+                           size_t output_index, float epsilon)
+      : input_index(input_index),
+        gamma_index(gamma_index),
+        output_index(output_index),
+        epsilon(epsilon) {}
+
+  OrtStatus* Compute(OrtKernelContext* kernel_context) const override {
+    try {
+      Ort::KernelContext ctx(kernel_context);
+      Ort::ConstValue input = ctx.GetInput(input_index);
+      Ort::ConstValue gamma = ctx.GetInput(gamma_index);
+      auto input_info = input.GetTensorTypeAndShapeInfo();
+      auto gamma_info = gamma.GetTensorTypeAndShapeInfo();
+      if (input_info.GetElementType() !=
+              ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+          gamma_info.GetElementType() !=
+              ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+          !IsGpuMemory(input.GetTensorMemoryInfo())) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "CastRmsNorm requires MUSA bfloat16 input and gamma");
+      }
+
+      std::vector<int64_t> input_shape = input_info.GetShape();
+      std::vector<int64_t> gamma_shape = gamma_info.GetShape();
+      if (input_shape.size() < 2 || input_shape.back() <= 0 ||
+          gamma_shape.size() != 1 || gamma_shape[0] != input_shape.back()) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "CastRmsNorm requires rank >= 2 input and 1-D gamma matching last "
+            "dim");
+      }
+
+      int64_t rows = 1;
+      for (size_t i = 0; i + 1 < input_shape.size(); ++i) {
+        if (input_shape[i] < 0) {
+          return Ort::GetApi().CreateStatus(
+              ORT_NOT_IMPLEMENTED, "CastRmsNorm requires concrete dimensions");
+        }
+        rows *= input_shape[i];
+      }
+      const int64_t norm_size = input_shape.back();
+      if (rows > INT_MAX || norm_size > INT_MAX) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "CastRmsNorm shape exceeds MUSA kernel limits");
+      }
+
+      Ort::UnownedValue output = ctx.GetOutput(output_index, input_shape);
+      if (!IsGpuMemory(output.GetTensorMemoryInfo()) ||
+          output.GetTensorTypeAndShapeInfo().GetElementType() !=
+              ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED, "CastRmsNorm requires MUSA bfloat16 output");
+      }
+
+      const musaStream_t stream = GetComputeStream(ctx);
+      DeviceInputBuffer gamma_buffer;
+      RETURN_IF_ERROR(gamma_buffer.Bind(gamma, stream));
+      return LaunchStatus(LaunchMusaCastRmsNormBf16Kernel(
+          input.GetTensorRawData(), gamma_buffer.data(),
+          output.GetTensorMutableRawData(), rows, norm_size, epsilon, stream));
+    } catch (const Ort::Exception& ex) {
+      Ort::Status status(ex);
+      return status.release();
+    } catch (const std::exception& ex) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, ex.what());
+    }
+  }
+
+  size_t input_index;
+  size_t gamma_index;
+  size_t output_index;
+  float epsilon;
+};
+
 bool IsRmsNormFusionGraph(Ort::ConstGraph graph) {
   int mul_count = 0;
   int reduce_mean_count = 0;
@@ -213,6 +291,39 @@ bool IsRmsNormFusionGraph(Ort::ConstGraph graph) {
   }
   return reduce_mean_count == 1 && add_count == 1 && sqrt_count == 1 &&
          div_count == 1 &&
+         ((mul_count == 2 && pow_count == 0) ||
+          (mul_count == 1 && pow_count == 1));
+}
+
+bool IsCastRmsNormFusionGraph(Ort::ConstGraph graph) {
+  int cast_count = 0;
+  int mul_count = 0;
+  int reduce_mean_count = 0;
+  int add_count = 0;
+  int sqrt_count = 0;
+  int div_count = 0;
+  int pow_count = 0;
+  for (Ort::ConstNode node : graph.GetNodes()) {
+    if (IsOnnxOp(node, "Cast")) {
+      ++cast_count;
+    } else if (IsOnnxOp(node, "Mul")) {
+      ++mul_count;
+    } else if (IsOnnxOp(node, "ReduceMean")) {
+      ++reduce_mean_count;
+    } else if (IsOnnxOp(node, "Add")) {
+      ++add_count;
+    } else if (IsOnnxOp(node, "Sqrt")) {
+      ++sqrt_count;
+    } else if (IsOnnxOp(node, "Div")) {
+      ++div_count;
+    } else if (IsOnnxOp(node, "Pow")) {
+      ++pow_count;
+    } else {
+      return false;
+    }
+  }
+  return cast_count == 2 && reduce_mean_count == 1 && add_count == 1 &&
+         sqrt_count == 1 && div_count == 1 &&
          ((mul_count == 2 && pow_count == 0) ||
           (mul_count == 1 && pow_count == 1));
 }
@@ -321,6 +432,132 @@ std::unique_ptr<FusionNodeCompute> CreateRmsNormFusion(
   auto fused_input_indices = FusedInputIndices(fused_node);
   return std::make_unique<RmsNormFusionCompute>(
       GetMappedIndex(fused_input_indices, Name(input), "input"),
+      GetMappedIndex(fused_input_indices, Name(gamma_input), "gamma"),
+      GetMappedIndex(fused_output_indices, Name(output_mul_outputs[0]),
+                     "output"),
+      *epsilon);
+}
+
+std::unique_ptr<FusionNodeCompute> CreateCastRmsNormFusion(
+    Ort::ConstGraph graph, Ort::ConstNode fused_node) {
+  auto producers = ProducersInGraph(graph);
+  auto fused_output_indices = FusedOutputIndices(fused_node);
+  Ort::ConstNode output_mul_node{nullptr};
+  for (Ort::ConstNode node : graph.GetNodes()) {
+    if (IsOnnxOp(node, "Mul")) {
+      std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+      if (outputs.size() == 1 &&
+          fused_output_indices.count(Name(outputs[0])) != 0) {
+        output_mul_node = node;
+      }
+    }
+  }
+  if (!output_mul_node) {
+    throw std::runtime_error("CastRmsNorm requires final Mul");
+  }
+
+  std::vector<Ort::ConstValueInfo> output_mul_inputs =
+      output_mul_node.GetInputs();
+  std::vector<Ort::ConstValueInfo> output_mul_outputs =
+      output_mul_node.GetOutputs();
+  if (output_mul_inputs.size() != 2 || output_mul_outputs.size() != 1) {
+    throw std::runtime_error("CastRmsNorm final Mul is invalid");
+  }
+
+  Ort::ConstNode output_cast_node =
+      ProducerInGraph(producers, output_mul_inputs[0]);
+  Ort::ConstValueInfo gamma_input = output_mul_inputs[1];
+  if (!IsOnnxOp(output_cast_node, "Cast")) {
+    output_cast_node = ProducerInGraph(producers, output_mul_inputs[1]);
+    gamma_input = output_mul_inputs[0];
+  }
+  if (!IsOnnxOp(output_cast_node, "Cast")) {
+    throw std::runtime_error("CastRmsNorm requires output Cast before Mul");
+  }
+
+  std::vector<Ort::ConstValueInfo> output_cast_inputs =
+      output_cast_node.GetInputs();
+  if (output_cast_inputs.size() != 1) {
+    throw std::runtime_error("CastRmsNorm output Cast is invalid");
+  }
+  Ort::ConstNode div_node = ProducerInGraph(producers, output_cast_inputs[0]);
+  if (!IsOnnxOp(div_node, "Div")) {
+    throw std::runtime_error("CastRmsNorm requires Div before output Cast");
+  }
+
+  std::vector<Ort::ConstValueInfo> div_inputs = div_node.GetInputs();
+  if (div_inputs.size() != 2) {
+    throw std::runtime_error("CastRmsNorm requires binary Div");
+  }
+  Ort::ConstNode input_cast_node = ProducerInGraph(producers, div_inputs[0]);
+  if (!IsOnnxOp(input_cast_node, "Cast")) {
+    throw std::runtime_error("CastRmsNorm requires input Cast before Div");
+  }
+  std::vector<Ort::ConstValueInfo> input_cast_inputs =
+      input_cast_node.GetInputs();
+  if (input_cast_inputs.size() != 1) {
+    throw std::runtime_error("CastRmsNorm input Cast is invalid");
+  }
+
+  Ort::ConstNode sqrt_node = ProducerInGraph(producers, div_inputs[1]);
+  if (!IsOnnxOp(sqrt_node, "Sqrt")) {
+    throw std::runtime_error("CastRmsNorm requires Sqrt denominator");
+  }
+  std::vector<Ort::ConstValueInfo> sqrt_inputs = sqrt_node.GetInputs();
+  if (sqrt_inputs.size() != 1) {
+    throw std::runtime_error("CastRmsNorm Sqrt is invalid");
+  }
+
+  Ort::ConstNode add_node = ProducerInGraph(producers, sqrt_inputs[0]);
+  if (!IsOnnxOp(add_node, "Add")) {
+    throw std::runtime_error("CastRmsNorm requires Add before Sqrt");
+  }
+  std::vector<Ort::ConstValueInfo> add_inputs = add_node.GetInputs();
+  if (add_inputs.size() != 2) {
+    throw std::runtime_error("CastRmsNorm Add is invalid");
+  }
+
+  Ort::ConstNode reduce_node = ProducerInGraph(producers, add_inputs[0]);
+  Ort::ConstValueInfo epsilon_input = add_inputs[1];
+  if (!IsOnnxOp(reduce_node, "ReduceMean")) {
+    reduce_node = ProducerInGraph(producers, add_inputs[1]);
+    epsilon_input = add_inputs[0];
+  }
+  if (!IsOnnxOp(reduce_node, "ReduceMean")) {
+    throw std::runtime_error("CastRmsNorm requires ReduceMean before Add");
+  }
+  auto epsilon = musa_ep::ReadScalarFloatInitializer(epsilon_input);
+  auto epsilon_elem_type = musa_ep::GetTensorElementType(epsilon_input);
+  if (!epsilon.has_value() || !epsilon_elem_type.has_value() ||
+      *epsilon_elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    throw std::runtime_error(
+        "CastRmsNorm epsilon must be a float scalar initializer");
+  }
+
+  std::vector<Ort::ConstValueInfo> reduce_inputs = reduce_node.GetInputs();
+  if (reduce_inputs.empty()) {
+    throw std::runtime_error("CastRmsNorm ReduceMean is invalid");
+  }
+  Ort::ConstNode square_node = ProducerInGraph(producers, reduce_inputs[0]);
+  if (!IsOnnxOp(square_node, "Mul") && !IsOnnxOp(square_node, "Pow")) {
+    throw std::runtime_error("CastRmsNorm requires square before ReduceMean");
+  }
+
+  auto input_elem_type = musa_ep::GetTensorElementType(input_cast_inputs[0]);
+  auto gamma_elem_type = musa_ep::GetTensorElementType(gamma_input);
+  auto output_elem_type = musa_ep::GetTensorElementType(output_mul_outputs[0]);
+  if (!input_elem_type.has_value() || !gamma_elem_type.has_value() ||
+      !output_elem_type.has_value() ||
+      *input_elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+      *gamma_elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+      *output_elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
+    throw std::runtime_error(
+        "CastRmsNorm requires bfloat16 input, gamma, and output");
+  }
+
+  auto fused_input_indices = FusedInputIndices(fused_node);
+  return std::make_unique<CastRmsNormFusionCompute>(
+      GetMappedIndex(fused_input_indices, Name(input_cast_inputs[0]), "input"),
       GetMappedIndex(fused_input_indices, Name(gamma_input), "gamma"),
       GetMappedIndex(fused_output_indices, Name(output_mul_outputs[0]),
                      "output"),

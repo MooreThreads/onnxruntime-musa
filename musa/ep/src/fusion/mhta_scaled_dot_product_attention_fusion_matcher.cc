@@ -484,6 +484,58 @@ bool TryAppendRawInt32MaskPreprocessing(
   return true;
 }
 
+bool ResolvePostWhereProbabilityInput(
+    Ort::ConstValueInfo post_probability_input,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& accepted_node_ids,
+    Ort::ConstNode& softmax, std::vector<Ort::ConstNode>& post_softmax_casts) {
+  Ort::ConstNode producer{nullptr};
+  if (!GetProducer(post_probability_input, producer)) return false;
+  if (IsOnnxOp(producer, "Softmax")) {
+    softmax = producer;
+    return accepted_node_ids.count(softmax.GetId()) == 0;
+  }
+  if (!IsOnnxOp(producer, "Cast") ||
+      accepted_node_ids.count(producer.GetId()) != 0) {
+    return false;
+  }
+  Ort::ConstNode cast_to_storage = producer;
+  const auto cast_to_storage_inputs = cast_to_storage.GetInputs();
+  const auto cast_to_storage_outputs = cast_to_storage.GetOutputs();
+  if (cast_to_storage_inputs.size() != 1 ||
+      cast_to_storage_outputs.size() != 1 ||
+      !HasSingleConsumer(cast_to_storage_outputs[0], graph_output_names)) {
+    return false;
+  }
+  const ONNXTensorElementDataType storage_type =
+      post_probability_input.TypeInfo()
+          .GetTensorTypeAndShapeInfo()
+          .GetElementType();
+  if (!IsCastTo(cast_to_storage, storage_type)) return false;
+
+  Ort::ConstNode cast_to_float{nullptr};
+  if (!GetProducer(cast_to_storage_inputs[0], cast_to_float) ||
+      !IsOnnxOp(cast_to_float, "Cast") ||
+      accepted_node_ids.count(cast_to_float.GetId()) != 0 ||
+      !IsCastTo(cast_to_float, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)) {
+    return false;
+  }
+  const auto cast_to_float_inputs = cast_to_float.GetInputs();
+  const auto cast_to_float_outputs = cast_to_float.GetOutputs();
+  if (cast_to_float_inputs.size() != 1 || cast_to_float_outputs.size() != 1 ||
+      Name(cast_to_float_outputs[0]) != Name(cast_to_storage_inputs[0]) ||
+      !HasSingleConsumer(cast_to_float_outputs[0], graph_output_names)) {
+    return false;
+  }
+  if (!GetProducer(cast_to_float_inputs[0], softmax) ||
+      !IsOnnxOp(softmax, "Softmax") ||
+      accepted_node_ids.count(softmax.GetId()) != 0) {
+    return false;
+  }
+  post_softmax_casts = {cast_to_float, cast_to_storage};
+  return true;
+}
+
 bool CanFuseBooleanMhtaScaledDotProductAttention(
     Ort::ConstNode value_matmul,
     const std::unordered_set<std::string>& graph_output_names,
@@ -511,13 +563,14 @@ bool CanFuseBooleanMhtaScaledDotProductAttention(
     return false;
 
   Ort::ConstNode softmax{nullptr};
-  if (!GetProducer(post_inputs[1], softmax) || !IsOnnxOp(softmax, "Softmax") ||
-      accepted_node_ids.count(softmax.GetId()) != 0)
+  std::vector<Ort::ConstNode> post_softmax_casts;
+  if (!ResolvePostWhereProbabilityInput(post_inputs[1], graph_output_names,
+                                        accepted_node_ids, softmax,
+                                        post_softmax_casts))
     return false;
   const auto softmax_inputs = softmax.GetInputs();
   const auto softmax_outputs = softmax.GetOutputs();
   if (softmax_inputs.size() != 1 || softmax_outputs.size() != 1 ||
-      Name(softmax_outputs[0]) != Name(post_inputs[1]) ||
       !HasSingleConsumer(softmax_outputs[0], graph_output_names) ||
       !IsLastAxisSoftmax(softmax, softmax_inputs[0]))
     return false;
@@ -562,17 +615,20 @@ bool CanFuseBooleanMhtaScaledDotProductAttention(
   if (score_inputs.size() != 2 || score_outputs.size() != 1 ||
       Name(score_outputs[0]) != Name(scale_inputs[0]) ||
       !HasSingleConsumer(score_outputs[0], graph_output_names) ||
-      !IsFloatTensorValueInfo(score_inputs[0]) ||
-      !IsFloatTensorValueInfo(score_inputs[1]) ||
-      !IsFloatTensorValueInfo(value_inputs[1]) ||
-      !IsFloatTensorValueInfo(value_outputs[0]) ||
       !ShapesAreSupported(score_inputs[0], score_inputs[1], value_inputs[1],
                           value_outputs[0]))
     return false;
 
   std::unordered_set<size_t> selected;
-  for (Ort::ConstNode node : {score_matmul, scale_mul, pre_where, softmax,
-                              post_where, value_matmul}) {
+  for (Ort::ConstNode node : {score_matmul, scale_mul, pre_where, softmax}) {
+    if (!AddFusionNode(node, accepted_node_ids, selected, fusion_nodes))
+      return false;
+  }
+  for (Ort::ConstNode node : post_softmax_casts) {
+    if (!AddFusionNode(node, accepted_node_ids, selected, fusion_nodes))
+      return false;
+  }
+  for (Ort::ConstNode node : {post_where, value_matmul}) {
     if (!AddFusionNode(node, accepted_node_ids, selected, fusion_nodes))
       return false;
   }

@@ -48,6 +48,11 @@ bool IsOnnxOp(Ort::ConstNode node, const char* op_type) {
   return node.GetOperatorType() == op_type && IsOnnxDomain(node.GetDomain());
 }
 
+bool IsCastTo(Ort::ConstNode node, ONNXTensorElementDataType elem_type) {
+  return IsOnnxOp(node, "Cast") &&
+         musa_ep::GetIntAttribute(node, "to").value_or(-1) == elem_type;
+}
+
 std::vector<int64_t> Shape(Ort::ConstValue value) {
   return value.GetTensorTypeAndShapeInfo().GetShape();
 }
@@ -78,6 +83,36 @@ size_t InputIndex(const std::unordered_map<std::string, size_t>& indices,
     throw std::runtime_error("unable to map MHTA SDPA fused input");
   }
   return it->second;
+}
+
+bool ValueComesFromSoftmaxThroughOptionalCasts(
+    Ort::ConstValueInfo value, Ort::ConstNode softmax_node,
+    const std::unordered_map<std::string, Ort::ConstNode>& producers) {
+  const auto softmax_outputs = softmax_node.GetOutputs();
+  if (softmax_outputs.size() != 1) return false;
+  if (Name(value) == Name(softmax_outputs[0])) return true;
+
+  auto cast_to_storage_it = producers.find(Name(value));
+  if (cast_to_storage_it == producers.end() ||
+      !IsOnnxOp(cast_to_storage_it->second, "Cast")) {
+    return false;
+  }
+  Ort::ConstNode cast_to_storage = cast_to_storage_it->second;
+  const auto cast_to_storage_inputs = cast_to_storage.GetInputs();
+  if (cast_to_storage_inputs.size() != 1) return false;
+  const ONNXTensorElementDataType storage_type =
+      value.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
+  if (!IsCastTo(cast_to_storage, storage_type)) return false;
+
+  auto cast_to_float_it = producers.find(Name(cast_to_storage_inputs[0]));
+  if (cast_to_float_it == producers.end() ||
+      !IsCastTo(cast_to_float_it->second,
+                ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)) {
+    return false;
+  }
+  const auto cast_to_float_inputs = cast_to_float_it->second.GetInputs();
+  return cast_to_float_inputs.size() == 1 &&
+         Name(cast_to_float_inputs[0]) == Name(softmax_outputs[0]);
 }
 
 enum class MhtaSdpaLayout {
@@ -214,6 +249,16 @@ void WriteMhtaSdpaScalar(void* dst, float value,
   }
 }
 
+MusaElementType MhtaSdpaMusaElementType(ONNXTensorElementDataType elem_type) {
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
+    return MusaElementType::Float16;
+  }
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
+    return MusaElementType::BFloat16;
+  }
+  throw std::runtime_error("unsupported MHTA SDPA mask materialization dtype");
+}
+
 bool SetupMhtaSdpaMaskParams(const std::vector<int64_t>& mask_shape,
                              int64_t batch, int64_t heads, int64_t seqlen_q,
                              int64_t seqlen_k, bool allow_key_prefix,
@@ -274,10 +319,12 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
           "MHTA SDPA requires matching Q/K/V/mask types or a BOOL/INT32 "
           "keep-mask");
     }
-    if (boolean_mask_ && elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    if (boolean_mask_ && elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+        elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
+        elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
       return Ort::GetApi().CreateStatus(
           ORT_NOT_IMPLEMENTED,
-          "MHTA boolean-mask SDPA currently supports FP32 Q/K/V only");
+          "MHTA boolean-mask SDPA supports FP32/FP16/BF16 Q/K/V only");
     }
 
     std::vector<int64_t> q_shape = Shape(q);
@@ -360,35 +407,34 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     RETURN_IF_ERROR(v_buffer.Bind(v, stream));
     RETURN_IF_ERROR(mask_buffer.Bind(mask, stream));
     const std::vector<int64_t> mask_shape = Shape(mask);
+    MusaMhtaSdpaFp32Params mask_params{batch,
+                                       heads,
+                                       seqlen_q,
+                                       seqlen_k,
+                                       head_dim,
+                                       scale_,
+                                       mask_scale_,
+                                       0,
+                                       0,
+                                       0,
+                                       0,
+                                       !sim_rank3,
+                                       sim_rank3,
+                                       boolean_mask_,
+                                       boolean_mask_int32_};
+    if (!SetupMhtaSdpaMaskParams(mask_shape, batch, heads, seqlen_q, seqlen_k,
+                                 boolean_mask_int32_, &mask_params)) {
+      return Ort::GetApi().CreateStatus(
+          ORT_NOT_IMPLEMENTED,
+          "MHTA SDPA requires a broadcastable rank-1 to rank-4 mask");
+    }
 
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      MusaMhtaSdpaFp32Params params{batch,
-                                    heads,
-                                    seqlen_q,
-                                    seqlen_k,
-                                    head_dim,
-                                    scale_,
-                                    mask_scale_,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    !sim_rank3,
-                                    sim_rank3,
-                                    boolean_mask_,
-                                    boolean_mask_int32_};
-      if (!SetupMhtaSdpaMaskParams(mask_shape, batch, heads, seqlen_q, seqlen_k,
-                                   boolean_mask_int32_, &params)) {
-        return Ort::GetApi().CreateStatus(
-            ORT_NOT_IMPLEMENTED,
-            "MHTA SDPA FP32 kernel requires a broadcastable rank-1 to rank-4 "
-            "mask");
-      }
       musaError_t launch_status = LaunchMusaMhtaSdpaFp32Kernel(
           static_cast<const float*>(q_buffer.data()),
           static_cast<const float*>(k_buffer.data()),
           static_cast<const float*>(v_buffer.data()), mask_buffer.data(),
-          output.GetTensorMutableData<float>(), params, stream);
+          output.GetTensorMutableData<float>(), mask_params, stream);
       if (launch_status != musaSuccess) {
         throw std::runtime_error(std::string("MHTA SDPA FP32 kernel failed: ") +
                                  MusaErrorString(launch_status));
@@ -458,7 +504,26 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     ::musa::dnn::Handle* handle = nullptr;
     RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
     const void* mask_data = mask_buffer.data();
-    if (mask_scale_ != 1.0f) {
+    std::vector<int64_t> active_mask_shape = mask_shape;
+    if (boolean_mask_) {
+      active_mask_shape = {mask_params.mask_b, mask_params.mask_h,
+                           mask_params.mask_q,
+                           boolean_mask_int32_ ? seqlen_k : mask_params.mask_k};
+      const size_t mask_bytes =
+          static_cast<size_t>(NumElements(active_mask_shape)) *
+          MhtaSdpaElementSize(elem_type);
+      mask_scaled.Resize(mask_bytes);
+      const musaError_t launch_status =
+          LaunchMusaMhtaSdpaKeepMaskToAdditiveKernel(
+              mask_data, mask_scaled.data(), mask_params,
+              MhtaSdpaMusaElementType(elem_type), stream);
+      if (launch_status != musaSuccess) {
+        throw std::runtime_error(
+            std::string("MHTA SDPA keep-mask materialization failed: ") +
+            MusaErrorString(launch_status));
+      }
+      mask_data = mask_scaled.data();
+    } else if (mask_scale_ != 1.0f) {
       const size_t mask_bytes = static_cast<size_t>(NumElements(mask_shape)) *
                                 MhtaSdpaElementSize(elem_type);
       mask_scaled.Resize(mask_bytes);
@@ -488,7 +553,7 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     SetupTensor(q_tensor, q_data, sdpa_q_shape, elem_type, "Q");
     SetupTensor(k_tensor, k_data, sdpa_k_shape, elem_type, "K");
     SetupTensor(v_tensor, v_buffer.data(), v_shape, elem_type, "V");
-    SetupTensor(mask_tensor, mask_data, mask_shape, elem_type, "mask");
+    SetupTensor(mask_tensor, mask_data, active_mask_shape, elem_type, "mask");
     SetupTensor(out_tensor, output.GetTensorMutableData<void>(),
                 sim_rank3 ? sdpa_q_shape : output_shape, elem_type, "output");
     DeviceBuffer lse;
@@ -605,9 +670,10 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
                            mul_count == 1 && add_count == 1 && div_count == 1 &&
                            softmax_count == 1 && unsqueeze_count == 0 &&
                            reshape_count == 0 && where_count == 0;
-  const bool boolean_mask_nodes =
-      (slice_count == 0 && cast_count == 0 && equal_count == 0) ||
-      (slice_count == 1 && cast_count == 1 && equal_count == 1);
+  const bool boolean_mask_nodes = (slice_count == 0 && equal_count == 0 &&
+                                   (cast_count == 0 || cast_count == 2)) ||
+                                  (slice_count == 1 && equal_count == 1 &&
+                                   (cast_count == 1 || cast_count == 3));
   const bool boolean_bhsd = matmul_count == 2 && einsum_count == 0 &&
                             mul_count == 1 && add_count == 0 &&
                             div_count == 0 && softmax_count == 1 &&
@@ -684,7 +750,8 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
     const auto post_inputs = post_where.GetInputs();
     const auto softmax_inputs = softmax_node.GetInputs();
     if (post_inputs.size() != 3 || softmax_inputs.size() != 1 ||
-        Name(post_inputs[1]) != Name(softmax_node.GetOutputs()[0])) {
+        !ValueComesFromSoftmaxThroughOptionalCasts(post_inputs[1], softmax_node,
+                                                   producers)) {
       throw std::runtime_error("invalid MHTA boolean-mask Softmax topology");
     }
     auto pre_where_it = producers.find(Name(softmax_inputs[0]));

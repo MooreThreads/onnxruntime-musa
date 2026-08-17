@@ -48,6 +48,43 @@ def _profile_musa_session(model: bytes, feeds: dict[str, np.ndarray], tmp_path, 
     return outputs, events
 
 
+def _profile_musa_session_iobinding(
+    model: bytes,
+    feeds: dict[str, np.ndarray],
+    feed_types: dict[str, int],
+    outputs: list[tuple[str, int, tuple[int, ...]]],
+    tmp_path,
+    prefix: str,
+):
+    so = ort.SessionOptions()
+    so.enable_profiling = True
+    so.profile_file_prefix = str(tmp_path / prefix)
+    so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    so.add_provider_for_devices(musa_devices(), {})
+    session = ort.InferenceSession(model, sess_options=so)
+    io_binding = session.io_binding()
+    for name, arr in feeds.items():
+        elem_type = feed_types.get(name, helper.np_dtype_to_tensor_dtype(arr.dtype))
+        io_binding.bind_input(name, "cpu", 0, elem_type, arr.shape, arr.ctypes.data)
+
+    output_buffers = []
+    for name, elem_type, shape in outputs:
+        dtype = np.uint16 if elem_type == TensorProto.BFLOAT16 else np.float16
+        output = np.empty(shape, dtype=dtype)
+        io_binding.bind_output(name, "cpu", 0, elem_type, output.shape, output.ctypes.data)
+        output_buffers.append(output)
+
+    session.run_with_iobinding(io_binding)
+    profile_path = session.end_profiling()
+    try:
+        with open(profile_path, "r", encoding="utf-8") as f:
+            events = json.load(f)
+    finally:
+        if os.path.exists(profile_path):
+            os.remove(profile_path)
+    return output_buffers, events
+
+
 def _ops_by_provider(events):
     ops = {}
     for event in events:
@@ -69,16 +106,18 @@ def _mhta_bhsd_nodes():
     ]
 
 
-def _build_bfloat16_mhta_model(feeds, scale, temperature, zero_mask):
-    def bf16_initializer(name, values):
-        return helper.make_tensor(
-            name,
-            TensorProto.BFLOAT16,
-            values.shape,
-            values.astype(np.uint16).tobytes(),
-            raw=True,
-        )
+def _bf16_initializer(name, values):
+    values = np.asarray(values, dtype=np.uint16)
+    return helper.make_tensor(
+        name,
+        TensorProto.BFLOAT16,
+        values.shape,
+        values.tobytes(),
+        raw=True,
+    )
 
+
+def _build_bfloat16_mhta_model(feeds, scale, temperature, zero_mask):
     input_vis = [
         helper.make_tensor_value_info(name, TensorProto.BFLOAT16, value.shape)
         for name, value in feeds.items()
@@ -89,9 +128,9 @@ def _build_bfloat16_mhta_model(feeds, scale, temperature, zero_mask):
         input_vis,
         [helper.make_tensor_value_info("Y", TensorProto.BFLOAT16, None)],
         initializer=[
-            bf16_initializer("scale", scale),
-            bf16_initializer("temperature", temperature),
-            bf16_initializer("zero_mask", zero_mask),
+            _bf16_initializer("scale", scale),
+            _bf16_initializer("temperature", temperature),
+            _bf16_initializer("zero_mask", zero_mask),
         ],
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
@@ -104,6 +143,18 @@ def _reference_sdpa(q, k, v, scale, temperature):
     score = score - np.max(score, axis=-1, keepdims=True)
     prob = np.exp(score)
     prob /= np.sum(prob, axis=-1, keepdims=True)
+    return np.matmul(prob, v)
+
+
+def _reference_boolean_sdpa(q, k, v, mask, scale):
+    score = np.matmul(q, k) * scale
+    masked_score = np.where(mask, score, -np.inf)
+    keep_any = np.any(mask, axis=-1, keepdims=True)
+    safe_score = np.where(keep_any, masked_score, 0.0)
+    masked_score = safe_score - np.max(safe_score, axis=-1, keepdims=True)
+    prob = np.exp(masked_score)
+    prob /= np.sum(prob, axis=-1, keepdims=True)
+    prob = np.where(mask, prob, 0.0)
     return np.matmul(prob, v)
 
 
@@ -253,6 +304,105 @@ def test_mhta_absorbs_ranking_gr_int32_mask_preprocessing(tmp_path):
     assert not {"Slice", "Cast", "Equal", "Where", "Softmax", "Mul"} & musa_ops
 
 
+def test_mhta_bfloat16_raw_int32_mask_runflash(tmp_path):
+    """BF16 ranking-gr keep-mask topology should fuse and run via RunFlash."""
+    rng = np.random.default_rng(55)
+    batch, heads, seqlen, head_dim = 1, 2, 4, 8
+    q_f32 = rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float32)
+    k_f32 = rng.standard_normal((batch, heads, head_dim, seqlen)).astype(np.float32)
+    v_f32 = rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float32)
+    raw_mask = rng.integers(0, 3, (batch, 1, seqlen, seqlen + 1), dtype=np.int32)
+    raw_mask[:, :, :, 0] = 1
+    raw_mask[:, :, -1, :seqlen] = 0
+    feeds = {
+        "Q": float32_to_bfloat16_bits(q_f32),
+        "K": float32_to_bfloat16_bits(k_f32),
+        "V": float32_to_bfloat16_bits(v_f32),
+        "RawMask": raw_mask,
+    }
+    scale = float32_to_bfloat16_bits(
+        np.array(1.0 / np.sqrt(head_dim), dtype=np.float32)
+    )
+    neg_inf = float32_to_bfloat16_bits(np.array(-np.inf, dtype=np.float32))
+    zero = float32_to_bfloat16_bits(np.array(0.0, dtype=np.float32))
+    graph = helper.make_graph(
+        [
+            helper.make_node(
+                "Slice", ["RawMask", "starts", "ends", "axes", "steps"], ["MaskSlice"]
+            ),
+            helper.make_node("Cast", ["MaskSlice"], ["MaskInt64"], to=TensorProto.INT64),
+            helper.make_node("Equal", ["MaskInt64", "one"], ["Mask"]),
+            helper.make_node("MatMul", ["Q", "K"], ["Score"]),
+            helper.make_node("Mul", ["Score", "scale"], ["Scaled"]),
+            helper.make_node("Where", ["Mask", "Scaled", "neg_inf"], ["MaskedScore"]),
+            helper.make_node("Softmax", ["MaskedScore"], ["Prob"], axis=-1),
+            helper.make_node("Cast", ["Prob"], ["ProbF32"], to=TensorProto.FLOAT),
+            helper.make_node("Cast", ["ProbF32"], ["ProbTyped"], to=TensorProto.BFLOAT16),
+            helper.make_node("Where", ["Mask", "ProbTyped", "zero"], ["MaskedProb"]),
+            helper.make_node("MatMul", ["MaskedProb", "V"], ["Y"]),
+        ],
+        "mhta_bfloat16_raw_int32_mask_fusion_match_graph",
+        [
+            helper.make_tensor_value_info(
+                "Q", TensorProto.BFLOAT16, list(feeds["Q"].shape)
+            ),
+            helper.make_tensor_value_info(
+                "K", TensorProto.BFLOAT16, list(feeds["K"].shape)
+            ),
+            helper.make_tensor_value_info(
+                "V", TensorProto.BFLOAT16, list(feeds["V"].shape)
+            ),
+            helper.make_tensor_value_info(
+                "RawMask", TensorProto.INT32, list(feeds["RawMask"].shape)
+            ),
+        ],
+        [
+            helper.make_tensor_value_info(
+                "Y", TensorProto.BFLOAT16, [batch, heads, seqlen, head_dim]
+            )
+        ],
+        initializer=[
+            _bf16_initializer("scale", scale),
+            _bf16_initializer("neg_inf", neg_inf),
+            _bf16_initializer("zero", zero),
+            numpy_helper.from_array(np.array([0], dtype=np.int64), name="starts"),
+            numpy_helper.from_array(np.array([seqlen], dtype=np.int64), name="ends"),
+            numpy_helper.from_array(np.array([3], dtype=np.int64), name="axes"),
+            numpy_helper.from_array(np.array([1], dtype=np.int64), name="steps"),
+            numpy_helper.from_array(np.array(1, dtype=np.int64), name="one"),
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+
+    outputs, events = _profile_musa_session_iobinding(
+        model.SerializeToString(),
+        feeds,
+        {
+            "Q": TensorProto.BFLOAT16,
+            "K": TensorProto.BFLOAT16,
+            "V": TensorProto.BFLOAT16,
+        },
+        [("Y", TensorProto.BFLOAT16, (batch, heads, seqlen, head_dim))],
+        tmp_path,
+        "mhta_bfloat16_raw_int32_mask",
+    )
+    expected = _reference_boolean_sdpa(
+        bfloat16_bits_to_float32(feeds["Q"]),
+        bfloat16_bits_to_float32(feeds["K"]),
+        bfloat16_bits_to_float32(feeds["V"]),
+        raw_mask[:, :, :, :seqlen] == 1,
+        float(bfloat16_bits_to_float32(scale)),
+    )
+    np.testing.assert_allclose(
+        bfloat16_bits_to_float32(outputs[0]), expected, rtol=6e-2, atol=6e-2
+    )
+    np.testing.assert_array_equal(bfloat16_bits_to_float32(outputs[0])[:, :, -1, :], 0.0)
+    musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+    assert not {"Slice", "Cast", "Equal", "Where", "Softmax", "Mul"} & musa_ops
+
+
 def test_mhta_scaled_dot_product_attention_fp16_runflash(tmp_path):
     """FP16 must take the muDNN RunFlash branch and remain fused."""
     rng = np.random.default_rng(45)
@@ -282,6 +432,50 @@ def test_mhta_scaled_dot_product_attention_fp16_runflash(tmp_path):
     musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
     assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
     assert "Softmax" not in musa_ops
+
+
+def test_mhta_boolean_mask_scaled_dot_product_attention_fp16_runflash(tmp_path):
+    rng = np.random.default_rng(56)
+    batch, heads, seqlen, head_dim = 1, 2, 4, 8
+    feeds = {
+        "Q": rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float16),
+        "K": rng.standard_normal((batch, heads, head_dim, seqlen)).astype(np.float16),
+        "V": rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float16),
+        "Mask": rng.random((batch, 1, seqlen, seqlen)) > 0.35,
+    }
+    feeds["Mask"][:, :, :, 0] = True
+    feeds["Mask"][:, :, -1, :] = False
+    scale = np.array(1.0 / np.sqrt(head_dim), dtype=np.float16)
+    neg_inf = np.array(-np.inf, dtype=np.float16)
+    zero = np.array(0.0, dtype=np.float16)
+    model = build_graph_model(
+        [
+            helper.make_node("MatMul", ["Q", "K"], ["Score"]),
+            helper.make_node("Mul", ["Score", "scale"], ["Scaled"]),
+            helper.make_node("Where", ["Mask", "Scaled", "neg_inf"], ["MaskedScore"]),
+            helper.make_node("Softmax", ["MaskedScore"], ["Prob"], axis=-1),
+            helper.make_node("Cast", ["Prob"], ["ProbF32"], to=TensorProto.FLOAT),
+            helper.make_node("Cast", ["ProbF32"], ["ProbTyped"], to=TensorProto.FLOAT16),
+            helper.make_node("Where", ["Mask", "ProbTyped", "zero"], ["MaskedProb"]),
+            helper.make_node("MatMul", ["MaskedProb", "V"], ["Y"]),
+        ],
+        inputs=feeds,
+        outputs=[("Y", TensorProto.FLOAT16)],
+        initializers=[
+            numpy_helper.from_array(scale, name="scale"),
+            numpy_helper.from_array(neg_inf, name="neg_inf"),
+            numpy_helper.from_array(zero, name="zero"),
+        ],
+        name="mhta_boolean_mask_scaled_dot_product_attention_fp16_graph",
+    )
+
+    run_model_and_compare(model, feeds, rtol=3e-2, atol=3e-2)
+    outputs, _ = _profile_musa_session(model, feeds, tmp_path, "mhta_sdpa_bool_fp16")
+    np.testing.assert_array_equal(outputs[0][:, :, -1, :], 0.0)
+    _, events = _profile_musa_session(model, feeds, tmp_path, "mhta_sdpa_bool_fp16_profile")
+    musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+    assert not {"Where", "Softmax", "Mul"} & musa_ops
 
 
 def test_mhta_scaled_dot_product_attention_bfloat16_runflash():

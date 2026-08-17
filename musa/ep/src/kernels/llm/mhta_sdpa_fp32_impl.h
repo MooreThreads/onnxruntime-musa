@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+#include "shared_inc/device_kernel_types.h"
+
 // The MatMul graph uses Q/V BHSD and K BHDS. The SIM Einsum graph preserves
 // its Q[B,1,H,D] and K[B,S,H,D] inputs. Mask dimensions are padded on the left
 // to B/H/Q/K and therefore describe ordinary ONNX broadcasting.
@@ -35,3 +37,7 @@ musaError_t LaunchMusaMhtaSdpaFp32Kernel(const float* q, const float* k,
                                          float* output,
                                          MusaMhtaSdpaFp32Params params,
                                          musaStream_t stream);
+
+musaError_t LaunchMusaMhtaSdpaKeepMaskToAdditiveKernel(
+    const void* mask, void* additive_mask, MusaMhtaSdpaFp32Params params,
+    MusaElementType output_elem_type, musaStream_t stream);

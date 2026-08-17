@@ -192,6 +192,11 @@ std::vector<FusionMatch> FindFusionMatches(
                  std::move(parallel_einsum_activation_fusions),
                  accepted_node_ids);
 
+  auto cast_rms_norm_fusions =
+      FindCastRmsNormFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindCastRmsNormFusions", false,
+                 std::move(cast_rms_norm_fusions), accepted_node_ids);
+
   auto rms_norm_fusions =
       FindRmsNormFusions(all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindRmsNormFusions", false,

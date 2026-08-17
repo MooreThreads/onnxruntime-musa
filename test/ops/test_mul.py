@@ -14,7 +14,14 @@
 
 import numpy as np
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import (
+    TensorProto,
+    bfloat16_bits_to_float32,
+    build_model_with_input_types,
+    float32_to_bfloat16_bits,
+    run_and_compare,
+    run_with_iobinding,
+)
 
 
 def test_mul_float():
@@ -45,3 +52,29 @@ def test_mul_int64_multidirectional_broadcast():
     a = np.arange(2 * 3 * 1, dtype=np.int64).reshape(2, 3, 1)
     b = np.array([-1, 2, -3, 4], dtype=np.int64).reshape(1, 1, 4)
     run_and_compare("Mul", inputs={"A": a, "B": b}, outputs=[("Y", TensorProto.INT64)])
+
+
+def test_mul_bfloat16_broadcast():
+    a = float32_to_bfloat16_bits(
+        np.random.default_rng(6).standard_normal((2, 3, 4)).astype(np.float32)
+    )
+    b = float32_to_bfloat16_bits(
+        np.random.default_rng(7).standard_normal((1, 3, 1)).astype(np.float32)
+    )
+    expected = bfloat16_bits_to_float32(a) * bfloat16_bits_to_float32(b)
+    model = build_model_with_input_types(
+        "Mul",
+        inputs={"A": a, "B": b},
+        input_types={"A": TensorProto.BFLOAT16, "B": TensorProto.BFLOAT16},
+        outputs=[("Y", TensorProto.BFLOAT16)],
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        {"A": a, "B": b},
+        {"A": TensorProto.BFLOAT16, "B": TensorProto.BFLOAT16},
+        [("Y", TensorProto.BFLOAT16, expected.shape)],
+        use_musa=True,
+    )
+    np.testing.assert_allclose(
+        bfloat16_bits_to_float32(actual), expected, rtol=1e-2, atol=1e-2
+    )

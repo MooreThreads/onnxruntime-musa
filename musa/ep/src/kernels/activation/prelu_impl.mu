@@ -74,6 +74,10 @@ musaError_t LaunchMusaPReluKernel(const void* input, const void* slope,
   constexpr int32_t kFloat16 = 10;
   constexpr int32_t kDouble = 11;
   constexpr int32_t kBFloat16 = 16;
+  constexpr int32_t kUint32 = 12;
+  constexpr int32_t kUint64 = 13;
+  constexpr int32_t kInt32 = 6;
+  constexpr int32_t kInt64 = 7;
   switch (elem_type) {
     case kFloat:
       return LaunchTypedPRelu<float>(input, slope, output, params, stream);
@@ -85,6 +89,14 @@ musaError_t LaunchMusaPReluKernel(const void* input, const void* slope,
     case kBFloat16:
       return LaunchFloatLikePRelu<__mt_bfloat16>(input, slope, output, params,
                                                  stream);
+    case kUint32:
+      return LaunchTypedPRelu<uint32_t>(input, slope, output, params, stream);
+    case kUint64:
+      return LaunchTypedPRelu<uint64_t>(input, slope, output, params, stream);
+    case kInt32:
+      return LaunchTypedPRelu<int32_t>(input, slope, output, params, stream);
+    case kInt64:
+      return LaunchTypedPRelu<int64_t>(input, slope, output, params, stream);
     default:
       return musaErrorNotSupported;
   }

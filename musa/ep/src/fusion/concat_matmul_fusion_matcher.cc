@@ -26,12 +26,31 @@
 #include <utility>
 #include <vector>
 
+#include "fusion/fusion_dtype.h"
 #include "fusion/fusion_matcher.h"
 #include "fusion/fusion_matcher_utils.h"
 #include "graph/graph_utils.h"
 #include "plugin_ep_utils.h"
 
 namespace musa_ep {
+namespace {
+
+bool IsConcatMatMulStorageType(ONNXTensorElementDataType elem_type) {
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+}
+
+bool RequireSameConcatMatMulStorageType(
+    const std::vector<Ort::ConstValueInfo>& value_infos) {
+  ONNXTensorElementDataType elem_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  if (!RequireSameElementType(value_infos, elem_type)) {
+    return false;
+  }
+  return IsConcatMatMulStorageType(elem_type);
+}
+
+}  // namespace
 
 bool CanFuseConcatMatMul(Ort::ConstNode concat_node, Ort::ConstNode matmul_node,
                          int64_t concat_input_idx) {
@@ -51,16 +70,13 @@ bool CanFuseConcatMatMul(Ort::ConstNode concat_node, Ort::ConstNode matmul_node,
     return false;
   }
 
-  if (!IsFloatTensorValueInfo(matmul_outputs[0]) ||
-      !IsFloatTensorValueInfo(
-          matmul_inputs[static_cast<size_t>(1 - concat_input_idx)])) {
+  std::vector<Ort::ConstValueInfo> dtype_value_infos = concat_inputs;
+  dtype_value_infos.push_back(concat_outputs[0]);
+  dtype_value_infos.push_back(
+      matmul_inputs[static_cast<size_t>(1 - concat_input_idx)]);
+  dtype_value_infos.push_back(matmul_outputs[0]);
+  if (!RequireSameConcatMatMulStorageType(dtype_value_infos)) {
     return false;
-  }
-
-  for (Ort::ConstValueInfo input : concat_inputs) {
-    if (!IsFloatTensorValueInfo(input)) {
-      return false;
-    }
   }
 
   auto axis_attr = GetIntAttribute(concat_node, "axis");

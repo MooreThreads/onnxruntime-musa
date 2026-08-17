@@ -26,6 +26,12 @@ from op_test_utils import TensorProto, build_model, run, run_and_compare
         (np.float64, TensorProto.DOUBLE, 1e-9, 1e-10),
         (np.int32, TensorProto.INT32, 0, 0),
         (np.int64, TensorProto.INT64, 0, 0),
+        (np.uint8, TensorProto.UINT8, 0, 0),
+        (np.uint16, TensorProto.UINT16, 0, 0),
+        (np.uint32, TensorProto.UINT32, 0, 0),
+        (np.uint64, TensorProto.UINT64, 0, 0),
+        (np.int8, TensorProto.INT8, 0, 0),
+        (np.int16, TensorProto.INT16, 0, 0),
     ],
 )
 def test_topk_largest_axis_last_opset13(np_dtype, tensor_type, rtol, atol):
@@ -34,6 +40,27 @@ def test_topk_largest_axis_last_opset13(np_dtype, tensor_type, rtol, atol):
         dtype=np_dtype,
     )
     k = np.array([2], dtype=np.int64)
+    if np_dtype in (np.uint16, np.uint32, np.uint64):
+        # ORT CPU EP has no TopK kernel for these schema-valid unsigned dtypes.
+        # Run the MUSA kernel directly and compare with an exact, stable Python
+        # reference so device coverage is not mistaken for CPU fallback.
+        model = build_model(
+            "TopK",
+            inputs={"X": x, "K": k},
+            outputs=[("Values", tensor_type), ("Indices", TensorProto.INT64)],
+            attrs={"axis": -1, "largest": 1, "sorted": 1},
+            opset=13,
+        )
+        values, indices = run(model, {"X": x, "K": k}, use_musa=True)
+        expected_indices = np.empty(x.shape[:-1] + (2,), dtype=np.int64)
+        for prefix in np.ndindex(x.shape[:-1]):
+            expected_indices[prefix] = sorted(
+                range(x.shape[-1]), key=lambda i: (-int(x[prefix + (i,)]), i)
+            )[:2]
+        expected_values = np.take_along_axis(x, expected_indices, axis=-1)
+        np.testing.assert_array_equal(values, expected_values)
+        np.testing.assert_array_equal(indices, expected_indices)
+        return
     run_and_compare(
         "TopK",
         inputs={"X": x, "K": k},

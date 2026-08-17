@@ -30,6 +30,28 @@ bool CastTo(Ort::ConstNode cast_node, int64_t expected_to) {
   return GetIntAttribute(cast_node, "to").value_or(-1) == expected_to;
 }
 
+bool IsGatherPayloadTensorValueInfo(Ort::ConstValueInfo value_info) {
+  if (value_info == nullptr ||
+      value_info.TypeInfo().GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+  ONNXTensorElementDataType elem_type =
+      value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+}
+
+bool HasSameGatherPayloadType(Ort::ConstValueInfo lhs,
+                              Ort::ConstValueInfo rhs) {
+  if (!IsGatherPayloadTensorValueInfo(lhs) ||
+      !IsGatherPayloadTensorValueInfo(rhs)) {
+    return false;
+  }
+  return lhs.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
+         rhs.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
+}
+
 bool CanFuseBucketizeGather(
     Ort::ConstNode squeeze_node,
     const std::unordered_map<std::string, Ort::ConstNode>& producers,
@@ -44,7 +66,7 @@ bool CanFuseBucketizeGather(
   std::vector<Ort::ConstValueInfo> squeeze_inputs = squeeze_node.GetInputs();
   std::vector<Ort::ConstValueInfo> squeeze_outputs = squeeze_node.GetOutputs();
   if (squeeze_inputs.size() != 2 || squeeze_outputs.size() != 1 ||
-      !IsFloatTensorValueInfo(squeeze_outputs[0])) {
+      !IsGatherPayloadTensorValueInfo(squeeze_outputs[0])) {
     return false;
   }
   auto squeeze_axes = ReadSmallIntInitializer(squeeze_inputs[1]);
@@ -66,8 +88,8 @@ bool CanFuseBucketizeGather(
   if (gather_inputs.size() != 2 || gather_outputs.size() != 1 ||
       graph_output_names.count(Name(gather_outputs[0])) != 0 ||
       !HasOnlyConsumer(gather_outputs[0], squeeze_node, 0) ||
-      !IsFloatTensorValueInfo(gather_inputs[0]) ||
-      !IsFloatTensorValueInfo(gather_outputs[0])) {
+      !HasSameGatherPayloadType(gather_inputs[0], gather_outputs[0]) ||
+      !HasSameGatherPayloadType(gather_outputs[0], squeeze_outputs[0])) {
     return false;
   }
 

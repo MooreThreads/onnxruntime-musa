@@ -19,7 +19,15 @@ import numpy as np
 import onnxruntime as ort
 from onnx import helper
 
-from op_test_utils import TensorProto, build_graph_model, musa_devices, run_model_and_compare
+from op_test_utils import (
+    TensorProto,
+    bfloat16_bits_to_float32,
+    build_graph_model,
+    float32_to_bfloat16_bits,
+    musa_devices,
+    run_model_and_compare,
+    run_with_iobinding,
+)
 
 
 def _profile_musa_ops(model, feeds, tmp_path, prefix):
@@ -46,6 +54,52 @@ def _profile_musa_ops(model, feeds, tmp_path, prefix):
         if args.get("provider") == "MUSAExecutionProvider":
             ops.add(args.get("op_name"))
     return ops
+
+
+def _profile_musa_ops_iobinding(
+    model, feeds, feed_types, outputs, tmp_path, prefix
+):
+    so = ort.SessionOptions()
+    so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    so.enable_profiling = True
+    so.profile_file_prefix = str(tmp_path / prefix)
+    so.add_provider_for_devices(musa_devices(), {})
+    session = ort.InferenceSession(model, sess_options=so)
+    io_binding = session.io_binding()
+    for name, value in feeds.items():
+        io_binding.bind_input(
+            name,
+            "cpu",
+            0,
+            feed_types[name],
+            value.shape,
+            value.ctypes.data,
+        )
+    output_buffers = []
+    for name, elem_type, shape in outputs:
+        dtype = np.uint16 if elem_type == TensorProto.BFLOAT16 else np.float16
+        output = np.empty(tuple(shape), dtype=dtype)
+        io_binding.bind_output(
+            name, "cpu", 0, elem_type, output.shape, output.ctypes.data
+        )
+        output_buffers.append(output)
+    session.run_with_iobinding(io_binding)
+    profile_path = session.end_profiling()
+    try:
+        with open(profile_path, "r", encoding="utf-8") as f:
+            events = json.load(f)
+    finally:
+        if os.path.exists(profile_path):
+            os.remove(profile_path)
+
+    ops = set()
+    for event in events:
+        if event.get("cat") != "Node" or not event.get("name", "").endswith("_kernel_time"):
+            continue
+        args = event.get("args", {})
+        if args.get("provider") == "MUSAExecutionProvider":
+            ops.add(args.get("op_name"))
+    return ops, output_buffers
 
 
 def test_concat_matmul_fusion_concat_on_lhs():
@@ -206,3 +260,87 @@ def test_concat_matmul_fusion_zero_k_non_empty_output(tmp_path):
     np.testing.assert_array_equal(outputs[0], np.zeros((1, 5, 4), dtype=np.float32))
     musa_ops = _profile_musa_ops(model, feeds, tmp_path, "concat_matmul_zero_k")
     assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+
+
+def test_concat_matmul_fusion_float16_profiles_fused(tmp_path):
+    rng = np.random.default_rng(4)
+    x0 = rng.standard_normal((2, 3, 4, 5)).astype(np.float16)
+    x1 = rng.standard_normal((2, 3, 4, 7)).astype(np.float16)
+    b = rng.standard_normal((2, 3, 12, 6)).astype(np.float16)
+
+    nodes = [
+        helper.make_node("Concat", ["X0", "X1"], ["C"], axis=-1),
+        helper.make_node("MatMul", ["C", "B"], ["Y"]),
+    ]
+    feeds = {"X0": x0, "X1": x1, "B": b}
+    model = build_graph_model(
+        nodes,
+        feeds,
+        [("Y", TensorProto.FLOAT16)],
+        name="concat_matmul_float16_fusion_graph",
+    )
+
+    run_model_and_compare(model, feeds, rtol=3e-2, atol=3e-2)
+    musa_ops = _profile_musa_ops(model, feeds, tmp_path, "concat_matmul_float16")
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+    assert "Concat" not in musa_ops
+    assert "MatMul" not in musa_ops
+
+
+def test_concat_matmul_fusion_bfloat16_profiles_fused(tmp_path):
+    rng = np.random.default_rng(5)
+    x0_f32 = rng.standard_normal((2, 3, 4, 5)).astype(np.float32)
+    x1_f32 = rng.standard_normal((2, 3, 4, 7)).astype(np.float32)
+    b_f32 = rng.standard_normal((2, 3, 12, 6)).astype(np.float32)
+    feeds = {
+        "X0": float32_to_bfloat16_bits(x0_f32),
+        "X1": float32_to_bfloat16_bits(x1_f32),
+        "B": float32_to_bfloat16_bits(b_f32),
+    }
+    nodes = [
+        helper.make_node("Concat", ["X0", "X1"], ["C"], axis=-1),
+        helper.make_node("MatMul", ["C", "B"], ["Y"]),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "concat_matmul_bfloat16_fusion_graph",
+        [
+            helper.make_tensor_value_info("X0", TensorProto.BFLOAT16, list(x0_f32.shape)),
+            helper.make_tensor_value_info("X1", TensorProto.BFLOAT16, list(x1_f32.shape)),
+            helper.make_tensor_value_info("B", TensorProto.BFLOAT16, list(b_f32.shape)),
+        ],
+        [helper.make_tensor_value_info("Y", TensorProto.BFLOAT16, [2, 3, 4, 6])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    model_bytes = model.SerializeToString()
+
+    outputs = run_with_iobinding(
+        model_bytes,
+        feeds,
+        {name: TensorProto.BFLOAT16 for name in feeds},
+        [("Y", TensorProto.BFLOAT16, (2, 3, 4, 6))],
+        use_musa=True,
+    )
+    expected = np.concatenate(
+        [
+            bfloat16_bits_to_float32(feeds["X0"]),
+            bfloat16_bits_to_float32(feeds["X1"]),
+        ],
+        axis=-1,
+    ) @ bfloat16_bits_to_float32(feeds["B"])
+    np.testing.assert_allclose(
+        bfloat16_bits_to_float32(outputs[0]), expected, rtol=7e-2, atol=7e-2
+    )
+
+    musa_ops, _ = _profile_musa_ops_iobinding(
+        model_bytes,
+        feeds,
+        {name: TensorProto.BFLOAT16 for name in feeds},
+        [("Y", TensorProto.BFLOAT16, (2, 3, 4, 6))],
+        tmp_path,
+        "concat_matmul_bfloat16",
+    )
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+    assert "Concat" not in musa_ops
+    assert "MatMul" not in musa_ops

@@ -13,7 +13,6 @@
 
 #include "runtime_graph_dump.h"
 
-#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <cstdlib>
@@ -125,6 +124,21 @@ std::string JoinUnique(const std::vector<std::string>& values,
   return joined;
 }
 
+std::string JoinDTypes(const std::vector<std::string>& dtypes,
+                       const char* separator) {
+  std::string joined;
+  for (const std::string& dtype : dtypes) {
+    if (dtype.empty()) {
+      continue;
+    }
+    if (!joined.empty()) {
+      joined += separator;
+    }
+    joined += dtype;
+  }
+  return joined;
+}
+
 std::string NodeLabel(const RuntimeExecNode& node) {
   std::string label = node.metadata.display_type.empty()
                           ? "MUSA execution node"
@@ -146,23 +160,74 @@ std::string NodeLabel(const RuntimeExecNode& node) {
     label += "<br/>source: ";
     label += source_ops;
   }
+  const std::string input_dtypes = JoinDTypes(node.metadata.input_dtypes, ", ");
+  if (!input_dtypes.empty()) {
+    label += "<br/>inputs: ";
+    label += input_dtypes;
+  }
+  const std::string output_dtypes =
+      JoinDTypes(node.metadata.output_dtypes, ", ");
+  if (!output_dtypes.empty()) {
+    label += "<br/>outputs: ";
+    label += output_dtypes;
+  }
+  if (!node.metadata.dtype_storage_types.empty()) {
+    label += "<br/>storage: ";
+    label += node.metadata.dtype_storage_types;
+  }
+  if (!node.metadata.dtype_accumulator_type.empty()) {
+    label += "<br/>accumulator: ";
+    label += node.metadata.dtype_accumulator_type;
+  }
+  if (!node.metadata.dtype_output_policy.empty()) {
+    label += "<br/>output: ";
+    label += node.metadata.dtype_output_policy;
+  }
+  if (!node.metadata.dtype_cast_policy.empty()) {
+    label += "<br/>cast: ";
+    label += node.metadata.dtype_cast_policy;
+  }
   label += "<br/>runs=" + std::to_string(node.run_count);
   return label;
 }
 
 void WriteEdge(std::ostream& out, std::unordered_set<std::string>& seen_edges,
                const std::string& from, const std::string& to,
-               const std::string& value_name) {
-  const std::string key = from + "\n" + to + "\n" + value_name;
+               const std::string& value_label) {
+  const std::string key = from + "\n" + to + "\n" + value_label;
   if (!seen_edges.insert(key).second) {
     return;
   }
 
   out << "  " << from << " -->";
-  if (!value_name.empty()) {
-    out << "|\"" << EscapeLabel(value_name) << "\"|";
+  if (!value_label.empty()) {
+    out << "|\"" << EscapeLabel(value_label) << "\"|";
   }
   out << " " << to << "\n";
+}
+
+void RecordValueDTypes(const std::vector<std::string>& names,
+                       const std::vector<std::string>& dtypes,
+                       std::unordered_map<std::string, std::string>& by_name) {
+  for (size_t i = 0; i < names.size(); ++i) {
+    if (names[i].empty() || i >= dtypes.size() || dtypes[i].empty()) {
+      continue;
+    }
+    by_name.emplace(names[i], dtypes[i]);
+  }
+}
+
+std::string ValueLabel(
+    const std::string& value_name,
+    const std::unordered_map<std::string, std::string>& dtypes_by_value) {
+  if (value_name.empty()) {
+    return "";
+  }
+  auto dtype_it = dtypes_by_value.find(value_name);
+  if (dtype_it == dtypes_by_value.end() || dtype_it->second.empty()) {
+    return "";
+  }
+  return dtype_it->second;
 }
 
 uint64_t FindProducerForInput(
@@ -224,9 +289,14 @@ void DumpRuntimeGraphAtExit() {
 
   std::unordered_map<std::string, std::vector<uint64_t>> producers_by_value;
   std::unordered_set<std::string> consumed_values;
+  std::unordered_map<std::string, std::string> dtypes_by_value;
   std::unordered_map<uint64_t, const RuntimeExecNode*> nodes_by_id;
   for (const RuntimeExecNode& node : nodes) {
     nodes_by_id.emplace(node.id, &node);
+    RecordValueDTypes(node.metadata.inputs, node.metadata.input_dtypes,
+                      dtypes_by_value);
+    RecordValueDTypes(node.metadata.outputs, node.metadata.output_dtypes,
+                      dtypes_by_value);
     for (const std::string& output : node.metadata.outputs) {
       if (!output.empty()) {
         producers_by_value[output].push_back(node.id);
@@ -257,7 +327,7 @@ void DumpRuntimeGraphAtExit() {
 
   for (const auto& [value_name, value_index] : external_values) {
     out << "  " << ValueMermaidId(value_index) << "[\""
-        << EscapeLabel(value_name) << "\"]\n";
+        << EscapeLabel(ValueLabel(value_name, dtypes_by_value)) << "\"]\n";
   }
 
   for (const RuntimeExecNode& node : nodes) {
@@ -275,14 +345,15 @@ void DumpRuntimeGraphAtExit() {
       const uint64_t producer_id =
           FindProducerForInput(producers_by_value, nodes_by_id, node, input);
       if (producer_id != 0) {
-        WriteEdge(out, seen_edges, NodeMermaidId(producer_id), to, input);
+        WriteEdge(out, seen_edges, NodeMermaidId(producer_id), to,
+                  ValueLabel(input, dtypes_by_value));
         continue;
       }
 
       auto external_it = external_values.find(input);
       if (external_it != external_values.end()) {
         WriteEdge(out, seen_edges, ValueMermaidId(external_it->second), to,
-                  input);
+                  ValueLabel(input, dtypes_by_value));
       }
     }
 
@@ -293,7 +364,7 @@ void DumpRuntimeGraphAtExit() {
       auto external_it = external_values.find(output);
       if (external_it != external_values.end()) {
         WriteEdge(out, seen_edges, to, ValueMermaidId(external_it->second),
-                  output);
+                  ValueLabel(output, dtypes_by_value));
       }
     }
   }

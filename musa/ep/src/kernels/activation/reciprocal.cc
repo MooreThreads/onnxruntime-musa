@@ -79,5 +79,5 @@ OrtStatus* Reciprocal::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Reciprocal, kOnnxDomain, 13, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
     Reciprocal)

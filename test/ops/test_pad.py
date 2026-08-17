@@ -88,3 +88,40 @@ def test_pad_bfloat16():
         use_musa=True,
     )
     np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    ("np_dtype", "tensor_type"),
+    [
+        (np.uint8, TensorProto.UINT8), (np.uint16, TensorProto.UINT16),
+        (np.uint32, TensorProto.UINT32), (np.uint64, TensorProto.UINT64),
+        (np.int8, TensorProto.INT8), (np.int16, TensorProto.INT16),
+        (np.float64, TensorProto.DOUBLE),
+    ],
+)
+def test_pad_remaining_fixed_dtypes(np_dtype, tensor_type):
+    pads = np.array([0, 1, 1, 0], dtype=np.int64)
+    data = np.array([[1, 2], [3, 4]], dtype=np_dtype)
+    fill = np.array(5, dtype=np_dtype)
+    # CPUExecutionProvider lacks Pad(13) for some fixed-width integer types;
+    # compare the MUSA result directly with NumPy so this test validates the
+    # advertised device dtype rather than the CPU reference implementation.
+    if np_dtype in (np.uint16, np.int16):
+        expected = np.pad(data, ((0, 1), (1, 0)), constant_values=5)
+        model = build_model_with_input_types(
+            "Pad",
+            inputs={"data": data, "pads": pads, "constant_value": fill},
+            input_types={"data": tensor_type, "constant_value": tensor_type},
+            outputs=[("output", tensor_type)], attrs={"mode": "constant"},
+        )
+        (actual,) = run_with_iobinding(
+            model,
+            {"data": data, "pads": pads, "constant_value": fill},
+            {"data": tensor_type, "constant_value": tensor_type},
+            [("output", tensor_type, expected.shape)], use_musa=True,
+        )
+        np.testing.assert_array_equal(actual, expected)
+    else:
+        run_and_compare("Pad", inputs={"data": data, "pads": pads,
+                                        "constant_value": fill},
+                        outputs=[("output", tensor_type)], attrs={"mode": "constant"})

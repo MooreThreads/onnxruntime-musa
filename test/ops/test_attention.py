@@ -39,8 +39,15 @@ def _attention_reference(x, weights, bias, mask, num_heads, scale, qkv_hidden_si
                     [np.dot(q[b, i, h], k[b, j, h]) * scale for j in range(sequence)],
                     dtype=np.float32,
                 )
-                row_mask = mask[0 if mask.shape[0] == 1 else b, 0, i]
-                scores = np.where(row_mask != 0, scores, -np.inf)
+                if mask is not None:
+                    row_mask = mask[
+                        0 if mask.shape[0] == 1 else b,
+                        0 if mask.shape[1] == 1 else h,
+                        i,
+                    ]
+                    scores = np.where(row_mask != 0, scores, -np.inf)
+                if np.all(np.isneginf(scores)):
+                    continue
                 weights_row = np.exp(scores - np.max(scores))
                 weights_row = weights_row / np.sum(weights_row)
                 values = weights_row @ v[b, :, h]
@@ -82,4 +89,69 @@ def test_ms_attention_float_4d_int32_mask():
         use_musa=True,
     )
     expected = _attention_reference(x, weights, bias, mask, 2, 0.5, [4, 4, 4])
+    np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-4)
+
+
+def test_ms_attention_fp32_without_mask_and_unequal_value_head_size():
+    rng = np.random.default_rng(20260812)
+    batch, sequence, input_hidden, heads = 2, 4, 5, 2
+    q_hidden, k_hidden, v_hidden = 6, 6, 8
+    qkv_hidden_sizes = [q_hidden, k_hidden, v_hidden]
+    x = (rng.standard_normal((batch, sequence, input_hidden)) * 0.2).astype(
+        np.float32
+    )
+    weights = (
+        rng.standard_normal((input_hidden, sum(qkv_hidden_sizes))) * 0.15
+    ).astype(np.float32)
+    bias = (rng.standard_normal(sum(qkv_hidden_sizes)) * 0.05).astype(np.float32)
+    scale = 0.37
+    inputs = {"input": x, "weights": weights, "bias": bias}
+    model = build_model(
+        "Attention",
+        inputs=inputs,
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={
+            "num_heads": heads,
+            "qkv_hidden_sizes": qkv_hidden_sizes,
+            "scale": scale,
+        },
+        domain="com.microsoft",
+        opset=17,
+    )
+
+    (actual,) = run(model, inputs, use_musa=True)
+    expected = _attention_reference(
+        x, weights, bias, None, heads, scale, qkv_hidden_sizes
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-4)
+
+
+def test_ms_attention_fp32_batch_and_head_specific_int32_mask():
+    rng = np.random.default_rng(812)
+    batch, sequence, hidden, heads = 2, 3, 4, 2
+    x = (rng.standard_normal((batch, sequence, hidden)) * 0.2).astype(np.float32)
+    weights = (rng.standard_normal((hidden, 3 * hidden)) * 0.1).astype(np.float32)
+    bias = (rng.standard_normal(3 * hidden) * 0.03).astype(np.float32)
+    mask = np.ones((batch, heads, sequence, sequence), dtype=np.int32)
+    mask[0, 0, :, -1] = 0
+    mask[0, 1, :, 0] = 0
+    mask[1, 0, 1, :] = 0
+    mask[1, 1, :, 1] = 0
+    attrs = {
+        "num_heads": heads,
+        "qkv_hidden_sizes": [hidden] * 3,
+        "scale": 0.5,
+    }
+    inputs = {"input": x, "weights": weights, "bias": bias, "mask": mask}
+    model = build_model(
+        "Attention",
+        inputs=inputs,
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs=attrs,
+        domain="com.microsoft",
+        opset=17,
+    )
+
+    (actual,) = run(model, inputs, use_musa=True)
+    expected = _attention_reference(x, weights, bias, mask, heads, 0.5, [hidden] * 3)
     np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-4)

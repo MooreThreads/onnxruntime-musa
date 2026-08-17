@@ -1,0 +1,1345 @@
+{
+  "schema_version": 1,
+  "contracts": [
+    {
+      "op": "Cast",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "all fixed-size numeric pairs",
+      "output": "attribute to",
+      "compute": "conversion",
+      "accumulation": "none",
+      "path": "device cast kernel",
+      "verified_dtypes": "float32,float16,bfloat16,float64,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
+      "tests": [
+        "test/ops/test_cast.py"
+      ]
+    },
+    {
+      "op": "Identity",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,integer,bool",
+      "output": "same as input",
+      "compute": "copy/alias",
+      "accumulation": "none",
+      "path": "device copy or alias",
+      "verified_dtypes": "float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
+      "tests": [
+        "test/ops/test_identity.py"
+      ]
+    },
+    {
+      "op": "Reshape",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,integer,bool",
+      "output": "same as data input",
+      "compute": "alias/copy",
+      "accumulation": "none",
+      "path": "device alias/copy",
+      "verified_dtypes": "float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
+      "tests": [
+        "test/ops/test_reshape.py"
+      ]
+    },
+    {
+      "op": "Transpose",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,integer,bool",
+      "output": "same as input",
+      "compute": "copy",
+      "accumulation": "none",
+      "path": "muDNN transpose or device kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
+      "tests": [
+        "test/ops/test_transpose.py"
+      ]
+    },
+    {
+      "op": "Add",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,integer",
+      "output": "same as inputs",
+      "compute": "storage dtype",
+      "accumulation": "none",
+      "path": "muDNN binary or device kernel",
+      "verified_dtypes": "float16,float32,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64",
+      "tests": [
+        "test/ops/test_add.py",
+        "test/ops/test_elementwise_dtypes.py"
+      ]
+    },
+    {
+      "op": "Mul",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,integer",
+      "output": "same as inputs",
+      "compute": "storage dtype",
+      "accumulation": "none",
+      "path": "muDNN binary or device kernel",
+      "verified_dtypes": "float16,float32,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64",
+      "tests": [
+        "test/ops/test_mul.py",
+        "test/ops/test_elementwise_dtypes.py"
+      ]
+    },
+    {
+      "op": "Div",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,integer",
+      "output": "same as inputs",
+      "compute": "storage dtype",
+      "accumulation": "none",
+      "path": "muDNN binary or device kernel",
+      "verified_dtypes": "float16,float32,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64",
+      "tests": [
+        "test/ops/test_div.py",
+        "test/ops/test_elementwise_dtypes.py"
+      ]
+    },
+    {
+      "op": "Pow",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,int32,int64",
+      "output": "same as base input",
+      "compute": "device pow dispatch",
+      "accumulation": "none",
+      "path": "muDNN binary or device kernel",
+      "verified_dtypes": "float16,float32,float64,bfloat16,int32,int64",
+      "tests": [
+        "test/ops/test_pow.py",
+        "test/ops/test_elementwise_dtypes.py"
+      ]
+    },
+    {
+      "op": "Where",
+      "domain": "ai.onnx",
+      "opset": "16-19",
+      "storage": "bool condition; bfloat16,float16,float32,float64,integer,bool data",
+      "output": "same as data inputs",
+      "compute": "selection/copy",
+      "accumulation": "none",
+      "path": "device where kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
+      "tests": [
+        "test/ops/test_where.py"
+      ]
+    },
+    {
+      "op": "MatMul",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32",
+      "output": "same as inputs",
+      "compute": "library tensor mode",
+      "accumulation": "FP32 for BF16/FP16 library path",
+      "path": "muDNN MatMul/BatchMatMul or muBLAS",
+      "verified_dtypes": "float32,float16,bfloat16",
+      "tests": [
+        "test/ops/test_matmul.py"
+      ]
+    },
+    {
+      "op": "Gemm",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as inputs",
+      "compute": "library tensor mode",
+      "accumulation": "FP32 for BF16/FP16 library path",
+      "path": "muDNN MatMul+bias or muBLAS+device post kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_gemm.py"
+      ]
+    },
+    {
+      "op": "ReduceMean",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,int32",
+      "output": "same as input",
+      "compute": "device reduction",
+      "accumulation": "FP32 for BF16/FP16",
+      "path": "device reduction kernel",
+      "verified_dtypes": "float32,float16,float64,int32,bfloat16",
+      "tests": [
+        "test/ops/test_reduce_mean.py"
+      ]
+    },
+    {
+      "op": "Sqrt",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "storage dispatch",
+      "accumulation": "none",
+      "path": "muDNN unary or device kernel",
+      "verified_dtypes": "float16,float32,float64,bfloat16",
+      "tests": [
+        "test/ops/test_sqrt.py"
+      ]
+    },
+    {
+      "op": "Softmax",
+      "domain": "ai.onnx",
+      "opset": "13-17",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 intermediates for BF16/FP16 device path",
+      "accumulation": "FP32 for BF16/FP16 device path",
+      "path": "muDNN softmax or stable device kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_softmax.py"
+      ]
+    },
+    {
+      "op": "Concat",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "all fixed-size numeric and bool",
+      "output": "same as inputs",
+      "compute": "copy",
+      "accumulation": "none",
+      "path": "device byte-copy kernel; muDNN float fast path",
+      "verified_dtypes": "float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
+      "tests": [
+        "test/ops/test_concat.py"
+      ]
+    },
+    {
+      "op": "Abs",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,signed and unsigned integer",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; storage dtype otherwise",
+      "accumulation": "none",
+      "path": "muDNN unary when available; device unary kernel fallback",
+      "verified_dtypes": "float32,float16,float64,bfloat16,int8,int16,int32,int64,uint8,uint16,uint32,uint64",
+      "tests": [
+        "test/ops/test_abs.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "bool,string,complex are excluded by the ONNX Abs type constraint"
+    },
+    {
+      "op": "Relu",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; storage dtype otherwise",
+      "accumulation": "none",
+      "path": "muDNN unary when available; device unary kernel fallback",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_relu.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Relu type constraint"
+    },
+    {
+      "op": "Sigmoid",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; storage dtype otherwise",
+      "accumulation": "none",
+      "path": "muDNN unary when available; device unary kernel fallback",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_sigmoid.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Sigmoid type constraint"
+    },
+    {
+      "op": "Tanh",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; storage dtype otherwise",
+      "accumulation": "none",
+      "path": "muDNN unary when available; device unary kernel fallback",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_tanh.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Tanh type constraint"
+    },
+    {
+      "op": "Neg",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,signed integer",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; storage dtype otherwise",
+      "accumulation": "none",
+      "path": "device unary kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16,int8,int16,int32,int64",
+      "tests": [
+        "test/ops/test_neg.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "unsigned integer,bool,string,complex are excluded by the ONNX Neg type constraint"
+    },
+    {
+      "op": "Sign",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,signed and unsigned integer",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; storage dtype otherwise",
+      "accumulation": "none",
+      "path": "device unary kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16,int8,int16,int32,int64,uint8,uint16,uint32,uint64",
+      "tests": [
+        "test/ops/test_sign.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "bool,string,complex are excluded by the ONNX Sign type constraint"
+    },
+    {
+      "op": "Equal",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "uint32,uint64,int32,int64,float16,float32,float64,bfloat16,bool",
+      "output": "bool",
+      "compute": "device elementwise comparison",
+      "accumulation": "none",
+      "path": "muDNN rank<=5 fast path or MUSA compare kernel",
+      "verified_dtypes": "float32,float16,float64,int32,int64,uint32,uint64,bfloat16,bool",
+      "tests": [
+        "test/ops/test_elementwise_dtypes.py",
+        "test/ops/test_greater.py"
+      ]
+    },
+    {
+      "op": "Greater",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "uint32,uint64,int32,int64,float16,float32,float64,bfloat16",
+      "output": "bool",
+      "compute": "device elementwise comparison",
+      "accumulation": "none",
+      "path": "muDNN rank<=5 fast path or MUSA compare kernel",
+      "verified_dtypes": "float32,float16,float64,int32,int64,uint32,uint64,bfloat16",
+      "tests": [
+        "test/ops/test_elementwise_dtypes.py",
+        "test/ops/test_greater.py"
+      ]
+    },
+    {
+      "op": "GreaterOrEqual",
+      "domain": "ai.onnx",
+      "opset": "13-15: no bfloat16; 16-19: bfloat16",
+      "storage": "uint32,uint64,int32,int64,float16,float32,float64,bfloat16",
+      "output": "bool",
+      "compute": "device elementwise comparison",
+      "accumulation": "none",
+      "path": "MUSA compare kernel",
+      "verified_dtypes": "float32,float16,float64,int32,int64,uint32,uint64,bfloat16",
+      "tests": [
+        "test/ops/test_greater_or_equal.py"
+      ]
+    },
+    {
+      "op": "Less",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "uint32,uint64,int32,int64,float16,float32,float64,bfloat16",
+      "output": "bool",
+      "compute": "device elementwise comparison",
+      "accumulation": "none",
+      "path": "MUSA compare kernel",
+      "verified_dtypes": "float32,float16,float64,int32,int64,uint32,uint64,bfloat16",
+      "tests": [
+        "test/ops/test_less.py"
+      ]
+    },
+    {
+      "op": "LessOrEqual",
+      "domain": "ai.onnx",
+      "opset": "12-15: no bfloat16; 16-19: bfloat16",
+      "storage": "uint32,uint64,int32,int64,float16,float32,float64,bfloat16",
+      "output": "bool",
+      "compute": "device elementwise comparison",
+      "accumulation": "none",
+      "path": "MUSA compare kernel",
+      "verified_dtypes": "float32,float16,float64,int32,int64,uint32,uint64,bfloat16",
+      "tests": [
+        "test/ops/test_less_or_equal.py"
+      ]
+    },
+    {
+      "op": "IsNaN",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "float16,float32,float64,bfloat16",
+      "output": "bool",
+      "compute": "device isnan comparison",
+      "accumulation": "none",
+      "path": "MUSA IsNaN kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_is_nan.py"
+      ]
+    },
+    {
+      "op": "ReduceSum",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "float16,float32,float64,bfloat16,int32,int64",
+      "output": "same as input",
+      "compute": "device reduction; empty axes follow schema default reduction",
+      "accumulation": "FP32 for BF16/FP16; storage width for integer and FP32/FP64",
+      "path": "MUSA reduction kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16,int32,int64",
+      "tests": [
+        "test/ops/test_reduce_sum.py",
+        "test/ops/test_opset19_reduction.py"
+      ]
+    },
+    {
+      "op": "ReduceProd",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "float16,float32,float64,bfloat16,int32,int64",
+      "output": "same as input",
+      "compute": "device reduction",
+      "accumulation": "FP32 for BF16/FP16; storage width for integer and FP32/FP64",
+      "path": "MUSA reduction kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16,int32,int64",
+      "tests": [
+        "test/ops/test_reduce_prod.py",
+        "test/ops/test_opset19_reduction.py"
+      ]
+    },
+    {
+      "op": "ReduceMax",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "uint8,int8,float16,float32,float64,bfloat16,int32,int64",
+      "output": "same as input",
+      "compute": "device reduction",
+      "accumulation": "FP32 for BF16/FP16; storage-compatible accumulator otherwise",
+      "path": "MUSA reduction kernel",
+      "verified_dtypes": "uint8,int8,float32,float16,float64,bfloat16,int32,int64",
+      "tests": [
+        "test/ops/test_reduce_max.py"
+      ]
+    },
+    {
+      "op": "ReduceSumSquare",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "float16,float32,float64,bfloat16",
+      "output": "same as input",
+      "compute": "square and device reduction",
+      "accumulation": "FP32 for BF16/FP16; FP32/FP64 storage otherwise",
+      "path": "MUSA reduction kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_reduce_sum_square.py",
+        "test/ops/test_opset19_reduction.py"
+      ]
+    },
+    {
+      "op": "Sum",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "float16,float32,float64,bfloat16",
+      "output": "same as inputs",
+      "compute": "variadic device add with multidirectional broadcasting",
+      "accumulation": "none; pairwise addition in storage dtype",
+      "path": "muDNN binary add or MUSA broadcast add kernel; device copy for one input",
+      "verified_dtypes": "float16,float32,float64,bfloat16",
+      "tests": [
+        "test/ops/test_sum.py",
+        "test/ops/test_elementwise_dtypes.py",
+        "test/ops/test_empty_tensor_fastpaths.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Sum type constraint"
+    },
+    {
+      "op": "Gather",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "data: all fixed-size numeric and bool; indices: int32,int64",
+      "output": "same as data input",
+      "compute": "bytewise indexed copy; int64 index arithmetic",
+      "accumulation": "none",
+      "path": "MUSA gather kernel; small CPU shape-metadata exception",
+      "verified_dtypes": "data float32,float16,float64,bfloat16,int8,int16,int32,int64,uint8,uint16,uint32,uint64,bool; indices int32,int64",
+      "tests": [
+        "test/ops/test_gather.py"
+      ],
+      "unsupported_reasons": "string and complex data are not registered; indices outside [-axis_dim,axis_dim) are invalid ONNX input; device data rank is limited by kMusaMaxBroadcastRank"
+    },
+    {
+      "op": "Slice",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "data: all fixed-size numeric and bool; starts,ends,axes,steps: int32,int64 CPU metadata",
+      "output": "same as data input",
+      "compute": "bytewise strided copy",
+      "accumulation": "none",
+      "path": "MUSA slice kernel, device 2D copy, or device raw copy",
+      "verified_dtypes": "data uint8,uint16,uint32,uint64,int8,int16,int32,int64,float16,float32,float64,bfloat16,bool; metadata int32,int64",
+      "tests": [
+        "test/ops/test_slice.py"
+      ],
+      "unsupported_reasons": "negative or zero steps are explicitly rejected; generic device path rank is limited by kMusaMaxBroadcastRank; string and complex data are not registered"
+    },
+    {
+      "op": "Split",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "data: all fixed-size numeric and bool; split sizes: int64 CPU metadata",
+      "output": "each output same as data input",
+      "compute": "bytewise partition copy",
+      "accumulation": "none",
+      "path": "MUSA split copy kernels; host-built device copy descriptors for irregular partitions",
+      "verified_dtypes": "data float32,float16,float64,bfloat16,int8,int16,int32,int64,uint8,uint16,uint32,uint64,bool; split sizes int64",
+      "tests": [
+        "test/ops/test_split.py"
+      ],
+      "unsupported_reasons": "split sizes must be non-negative and sum to the selected axis extent; string and complex data are not registered"
+    },
+    {
+      "op": "Expand",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "data: all fixed-size numeric and bool; shape: int64 CPU metadata",
+      "output": "same as data input",
+      "compute": "bytewise broadcast copy",
+      "accumulation": "none",
+      "path": "MUSA broadcast kernel",
+      "verified_dtypes": "data uint8,uint16,uint32,uint64,int8,int16,int32,int64,float16,float32,float64,bfloat16,bool; shape int64",
+      "tests": [
+        "test/ops/test_expand.py"
+      ],
+      "unsupported_reasons": "device broadcast rank is limited by kMusaMaxBroadcastRank; string and complex data are not registered"
+    },
+    {
+      "op": "Pad",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "data and constant_value: same all fixed-size numeric or bool dtype; pads,axes: int64 CPU metadata",
+      "output": "same as data input",
+      "compute": "bytewise constant fill or copy",
+      "accumulation": "none",
+      "path": "MUSA constant-pad kernel",
+      "verified_dtypes": "data uint8,uint16,uint32,uint64,int8,int16,int32,int64,float16,float32,float64,bfloat16,bool; pads,axes int64",
+      "tests": [
+        "test/ops/test_pad.py"
+      ],
+      "unsupported_reasons": "only constant mode and non-negative pads are supported; rank is limited by kMusaMaxBroadcastRank; string and complex data are not registered"
+    },
+    {
+      "op": "Tile",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "data: all fixed-size numeric and bool; repeats: int64 CPU metadata",
+      "output": "same as data input",
+      "compute": "bytewise repeated copy",
+      "accumulation": "none",
+      "path": "MUSA tile kernel or device raw copy for identity repeats",
+      "verified_dtypes": "data float32,float16,float64,bfloat16,int8,int16,int32,int64,uint8,uint16,uint32,uint64,bool; repeats int64",
+      "tests": [
+        "test/ops/test_tile.py"
+      ],
+      "unsupported_reasons": "repeats must be non-negative and rank is limited by kMusaMaxBroadcastRank; string and complex data are not registered"
+    },
+    {
+      "op": "Ceil",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; FP64 for float64",
+      "accumulation": "none",
+      "path": "muDNN unary when available; device unary kernel fallback",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_ceil.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Ceil type constraint"
+    },
+    {
+      "op": "Erf",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; FP64 for float64",
+      "accumulation": "none",
+      "path": "muDNN unary when available; device unary kernel fallback",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_erf.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Erf type constraint"
+    },
+    {
+      "op": "Exp",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; FP64 for float64",
+      "accumulation": "none",
+      "path": "muDNN unary when available; device unary kernel fallback",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_exp.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Exp type constraint"
+    },
+    {
+      "op": "Floor",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; FP64 for float64",
+      "accumulation": "none",
+      "path": "device unary kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_floor.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Floor type constraint"
+    },
+    {
+      "op": "Log",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; FP64 for float64",
+      "accumulation": "none",
+      "path": "muDNN unary when available; device unary kernel fallback",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_log.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Log type constraint"
+    },
+    {
+      "op": "Reciprocal",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; FP64 for float64",
+      "accumulation": "none",
+      "path": "muDNN unary when available; device unary kernel fallback",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_reciprocal.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Reciprocal type constraint"
+    },
+    {
+      "op": "LeakyRelu",
+      "domain": "ai.onnx",
+      "opset": "6-15: no bfloat16; 16-19: bfloat16",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; FP64 for float64",
+      "accumulation": "none",
+      "path": "muDNN unary when available; device unary kernel fallback",
+      "verified_dtypes": "float32,float16,float64,bfloat16",
+      "tests": [
+        "test/ops/test_leaky_relu.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX LeakyRelu type constraint"
+    },
+    {
+      "op": "PRelu",
+      "domain": "ai.onnx",
+      "opset": "7-15: float only; 16-19: float and 32/64-bit integer",
+      "storage": "bfloat16,float16,float32,float64,uint32,uint64,int32,int64",
+      "output": "broadcast shape; same as inputs",
+      "compute": "FP32 for BF16/FP16; storage dtype otherwise",
+      "accumulation": "none",
+      "path": "MUSA broadcast PRelu kernel",
+      "verified_dtypes": "float32,float16,float64,bfloat16,uint32,uint64,int32,int64",
+      "tests": [
+        "test/ops/test_prelu.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "opset 7-15 excludes BF16/integer; opset 16-19 excludes 8/16-bit integer,bool,string,complex"
+    },
+    {
+      "op": "Softplus",
+      "domain": "ai.onnx",
+      "opset": "1-19",
+      "storage": "float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for FP16; FP64 for float64; stable log1p formulation",
+      "accumulation": "none",
+      "path": "stable MUSA device unary kernel",
+      "verified_dtypes": "float32,float16,float64",
+      "tests": [
+        "test/ops/test_softplus.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "BF16 is not in the ONNX Softplus schema through opset 19; integer,bool,string,complex are excluded"
+    },
+    {
+      "op": "Clip",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "bfloat16,float16,float32,float64,uint8,uint16,uint32,uint64,int8,int16,int32,int64",
+      "output": "same as input",
+      "compute": "FP32 for BF16/FP16; storage dtype otherwise",
+      "accumulation": "none",
+      "path": "MUSA Clip device kernel; optional scalar bounds are staged to device",
+      "verified_dtypes": "float32,float16,float64,bfloat16,int8,int16,int32,int64,uint8,uint16,uint32,uint64",
+      "tests": [
+        "test/ops/test_clip.py",
+        "test/ops/test_unary_dtype_matrix.py"
+      ],
+      "unsupported_reasons": "bounds must be scalar and match input dtype; bool,string,complex are excluded by ONNX Clip"
+    },
+    {
+      "op": "BatchNormalization",
+      "domain": "ai.onnx",
+      "opset": "9-19",
+      "storage": "float16,float32,float64 (all five tensors same dtype)",
+      "output": "same as X",
+      "compute": "per-channel inference normalization",
+      "accumulation": "FP64 in custom kernel; muDNN native accumulation",
+      "path": "muDNN BatchNorm RunPure or MUSA device kernel",
+      "verified_dtypes": "float32,float16,float64",
+      "tests": [
+        "test/ops/test_batch_normalization.py"
+      ],
+      "unsupported_reasons": "inference output Y only (training_mode=0); rank >= 2; parameter tensors are 1-D and channel-sized; BF16/integer/bool are not registered"
+    },
+    {
+      "op": "GlobalAveragePool",
+      "domain": "ai.onnx",
+      "opset": "1-19",
+      "storage": "float16,float32,float64",
+      "output": "same as input with spatial dimensions set to 1",
+      "compute": "global spatial average",
+      "accumulation": "FP32 for float16; FP64 for float32/float64 custom path",
+      "path": "muDNN Pooling GLOBAL_AVGPOOL or MUSA device reduction kernel",
+      "verified_dtypes": "float32,float16,float64",
+      "tests": [
+        "test/ops/test_global_average_pool.py"
+      ],
+      "unsupported_reasons": "rank >= 3, concrete non-empty spatial dimensions, float-only registration"
+    },
+    {
+      "op": "GlobalMaxPool",
+      "domain": "ai.onnx",
+      "opset": "1-19",
+      "storage": "float16,float32,float64",
+      "output": "same as input with spatial dimensions set to 1",
+      "compute": "global spatial maximum",
+      "accumulation": "none",
+      "path": "MUSA device max-pool kernel",
+      "verified_dtypes": "float32,float16,float64",
+      "tests": [
+        "test/ops/test_pool.py"
+      ],
+      "unsupported_reasons": "rank >= 3, concrete shapes, float-only registration"
+    },
+    {
+      "op": "MaxPool",
+      "domain": "ai.onnx",
+      "opset": "1-19",
+      "storage": "opset 1-11: float16,float32,float64; opset 12-19: float16,float32,float64,int8,uint8",
+      "output": "Y same as input; optional int64 indices",
+      "compute": "sliding-window maximum",
+      "accumulation": "none",
+      "path": "muDNN Pooling MAXPOOL for float without indices or MUSA device kernel otherwise",
+      "verified_dtypes": "float32,float16,float64,int8,uint8",
+      "tests": [
+        "test/ops/test_pool.py"
+      ],
+      "unsupported_reasons": "auto_pad, ceil_mode and storage_order are restricted; rank <= 5, concrete shapes; indices require MUSA output tensor"
+    },
+    {
+      "op": "Conv",
+      "domain": "ai.onnx",
+      "opset": "11-19",
+      "storage": "float32 (X, W, optional B)",
+      "output": "float32",
+      "compute": "2-D NCHW convolution, group=1",
+      "accumulation": "muDNN/library-defined float accumulation; custom device kernel float",
+      "path": "muDNN Convolution IMPLICIT_GEMM or MUSA Conv2D float kernel",
+      "verified_dtypes": "float32",
+      "tests": [
+        "test/ops/test_conv.py"
+      ],
+      "unsupported_reasons": "only rank-4 NCHW, group=1, symmetric pads and float bias; float16/BF16/double and grouped/depthwise/1-D generic forms are rejected"
+    },
+    {
+      "op": "LayerNormalization",
+      "domain": "ai.onnx",
+      "opset": "17-19",
+      "storage": "float32 X/output; float32 Scale/B (B optional)",
+      "output": "same shape as X; optional float32 mean and inv_std",
+      "compute": "row-wise normalization over axis suffix",
+      "accumulation": "FP32",
+      "path": "muDNN LayerNorm or MUSA FP32 device kernel",
+      "verified_dtypes": "float32",
+      "tests": [
+        "test/ops/test_layer_normalization.py"
+      ],
+      "unsupported_reasons": "stash_type=1 only; Scale/B must be float and match normalized suffix; registration currently exposes float32 only"
+    },
+    {
+      "op": "Flatten",
+      "domain": "ai.onnx",
+      "opset": "1-8: float16,float32,float64; 9-12: fixed-size except bfloat16; 13-19: all fixed-size numeric and bool",
+      "storage": "registered fixed-size numeric and bool by opset",
+      "output": "same storage as input; shape [product(dims before axis), product(dims from axis)]",
+      "compute": "alias or device byte copy",
+      "accumulation": "none",
+      "path": "MUSA device alias/copy",
+      "verified_dtypes": "float16,float32,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
+      "tests": [
+        "test/ops/test_flatten.py"
+      ],
+      "unsupported_reasons": "string and complex are not registered; axis must be in [-rank,rank]"
+    },
+    {
+      "op": "Squeeze",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "all fixed-size numeric and bool; axes int64 CPU metadata",
+      "output": "same storage as data input",
+      "compute": "alias or device byte copy",
+      "accumulation": "none",
+      "path": "MUSA device alias/copy",
+      "verified_dtypes": "float32,int64,uint8,bool,float16,float64,int8,int16,uint16,uint32,uint64,bfloat16",
+      "tests": [
+        "test/ops/test_squeeze.py"
+      ],
+      "unsupported_reasons": "string and complex data are not registered; axes input must be int64 and selected dimensions must be singleton"
+    },
+    {
+      "op": "Unsqueeze",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "all fixed-size numeric and bool; axes int64 CPU metadata",
+      "output": "same storage as data input",
+      "compute": "alias or device byte copy",
+      "accumulation": "none",
+      "path": "MUSA device alias/copy",
+      "verified_dtypes": "float32,float16,int32,bool,float64,int8,int16,int64,uint8,uint16,uint32,uint64,bfloat16",
+      "tests": [
+        "test/ops/test_unsqueeze.py"
+      ],
+      "unsupported_reasons": "string and complex data are not registered; axes input must be int64 and axes must be unique/in range"
+    },
+    {
+      "op": "Shape",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "input all fixed-size numeric and bool; output int64",
+      "output": "int64 rank-length vector",
+      "compute": "host shape metadata materialization",
+      "accumulation": "none",
+      "path": "CPU metadata output by explicit KernelDef memory contract",
+      "verified_dtypes": "input float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool; output int64",
+      "tests": [
+        "test/ops/test_shape.py"
+      ],
+      "unsupported_reasons": "Shape consumes tensor metadata only; string and complex inputs are not registered"
+    },
+    {
+      "op": "GatherElements",
+      "domain": "ai.onnx",
+      "opset": "11-19",
+      "storage": "data all fixed-size numeric and bool; indices int32 or int64",
+      "output": "same as data input",
+      "compute": "device indexed byte copy with int64 coordinate arithmetic",
+      "accumulation": "none",
+      "path": "MUSA GatherElements .mu kernel",
+      "verified_dtypes": "data float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool; indices int32,int64",
+      "tests": [
+        "test/ops/test_gather_elements.py"
+      ],
+      "unsupported_reasons": "scalar/rank-over-limit and non-concrete shapes are rejected; out-of-range indices are zeroed by device guard because device kernels cannot return per-element status"
+    },
+    {
+      "op": "GatherND",
+      "domain": "ai.onnx",
+      "opset": "11-19",
+      "storage": "data float32,float64,float16,bfloat16,int64,bool; indices int64",
+      "output": "same as data input",
+      "compute": "device indexed slice copy; negative indices normalized",
+      "accumulation": "none",
+      "path": "MUSA GatherND .mu kernel",
+      "verified_dtypes": "data float32,float16,float64,bfloat16,int64,bool; indices int64",
+      "tests": [
+        "test/ops/test_gathernd.py"
+      ],
+      "unsupported_reasons": "only int64 indices and registered data dtypes; concrete shapes/rank and batch_dims are required; invalid device indices are zeroed"
+    },
+    {
+      "op": "ScatterElements",
+      "domain": "ai.onnx",
+      "opset": "11-19",
+      "storage": "data/updates all fixed-size numeric and bool with identical dtype; indices int32 or int64",
+      "output": "same as data input",
+      "compute": "device copy with optional atomic add",
+      "accumulation": "storage dtype for reduction=add (float/double/int32/int64 only)",
+      "path": "MUSA ScatterElements .mu kernel after device output copy",
+      "verified_dtypes": "data/updates float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool; indices int32,int64; reduction add float32,float64,int32,int64",
+      "tests": [
+        "test/ops/test_scatter_elements.py"
+      ],
+      "unsupported_reasons": "reduction supports only none/add; rank and concrete equal-shape constraints enforced; invalid indices are ignored by device guard"
+    },
+    {
+      "op": "ScatterND",
+      "domain": "ai.onnx",
+      "opset": "11-19",
+      "storage": "data/updates all fixed-size numeric and bool with identical dtype; indices int64",
+      "output": "same as data input",
+      "compute": "device copy with optional atomic add over indexed slices",
+      "accumulation": "storage dtype for reduction=add (float/double/int32/int64 only)",
+      "path": "MUSA ScatterND .mu kernel after device output copy",
+      "verified_dtypes": "data/updates float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool; indices int64; reduction add float32,float64,int32,int64",
+      "tests": [
+        "test/ops/test_scatter_nd.py"
+      ],
+      "unsupported_reasons": "reduction supports only none/add; updates shape/rank and concrete shape constraints enforced; invalid or negative indices are guarded on device"
+    },
+    {
+      "op": "OneHot",
+      "domain": "ai.onnx",
+      "opset": "11-19",
+      "storage": "indices int32 or int64; depth int32 or int64 CPU metadata; values two-element fixed-size non-BF16 tensor",
+      "output": "values dtype with inserted depth axis",
+      "compute": "device one-hot fill/compare; values staged as CPU metadata",
+      "accumulation": "none",
+      "path": "MUSA OneHot .mu kernel",
+      "verified_dtypes": "indices int32,int64; depth int32,int64; values/output float16,float32,float64,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
+      "tests": [
+        "test/ops/test_onehot.py"
+      ],
+      "unsupported_reasons": "depth must be positive scalar, values exactly two elements and output dtype must match; bfloat16 is excluded by registration"
+    },
+    {
+      "op": "NonZero",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "input bool,uint8,int32,int64,float16,float32; output int64",
+      "output": "int64 matrix [rank, count]",
+      "compute": "device nonzero count/output kernels; host prefix scan only for metadata",
+      "accumulation": "integer block counts",
+      "path": "MUSA NonZero .mu count + output kernels",
+      "verified_dtypes": "input bool,uint8,int32,int64,float16,float32; output int64",
+      "tests": [
+        "test/ops/test_nonzero.py"
+      ],
+      "unsupported_reasons": "registered dtype set is intentionally narrow; rank is limited by kMusaMaxBroadcastRank and empty/all-zero outputs are explicit"
+    },
+    {
+      "op": "ConstantOfShape",
+      "domain": "ai.onnx",
+      "opset": "9-19",
+      "storage": "shape int64 CPU metadata; value/output float16,float32,float64,signed and unsigned integer,bool",
+      "output": "dtype of scalar value attribute; float32 when omitted",
+      "compute": "bytewise scalar fill",
+      "accumulation": "none",
+      "path": "MUSA constant-fill kernel",
+      "verified_dtypes": "float16,float32,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
+      "tests": [
+        "test/ops/test_constant_of_shape.py"
+      ],
+      "unsupported_reasons": "BF16 is excluded by the ONNX schema through opset 19; string and complex are not registered"
+    },
+    {
+      "op": "Range",
+      "domain": "ai.onnx",
+      "opset": "11-19",
+      "storage": "int16,int32,int64,float32,float64 scalar CPU metadata",
+      "output": "same as inputs",
+      "compute": "device start plus index times delta",
+      "accumulation": "none",
+      "path": "CPU scalar shape calculation plus MUSA range kernel",
+      "verified_dtypes": "int16,int32,int64,float32,float64",
+      "tests": [
+        "test/ops/test_range.py"
+      ],
+      "unsupported_reasons": "input dtypes must match, inputs must be scalars, and delta must be nonzero"
+    },
+    {
+      "op": "RandomUniform",
+      "domain": "ai.onnx",
+      "opset": "1-19",
+      "storage": "float16,float32,float64",
+      "output": "dtype attribute; float32 default",
+      "compute": "counter-hash uniform generation on device",
+      "accumulation": "none",
+      "path": "MUSA random kernel with per-kernel invocation counter",
+      "verified_dtypes": "float16,float32,float64; seeded sequence reproducibility and progression",
+      "tests": [
+        "test/ops/test_random_uniform.py"
+      ],
+      "unsupported_reasons": "BF16 and non-floating outputs are excluded by ONNX through opset 19; explicit seed reproduces a sequence across sessions and omitted seed uses host entropy"
+    },
+    {
+      "op": "RandomUniformLike",
+      "domain": "ai.onnx",
+      "opset": "1-19",
+      "storage": "input shape carrier all registered fixed-size types; output float16,float32,float64",
+      "output": "dtype attribute or floating input dtype",
+      "compute": "counter-hash uniform generation on device",
+      "accumulation": "none",
+      "path": "input shape inspection plus MUSA random kernel; input data is not read",
+      "verified_dtypes": "float16,float32,float64 output; uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool input carrier; seeded sequence progression",
+      "tests": [
+        "test/ops/test_random_uniform.py"
+      ],
+      "unsupported_reasons": "without dtype a non-floating input is invalid; string and complex carriers and BF16 output are not registered"
+    },
+    {
+      "op": "Unique",
+      "domain": "ai.onnx",
+      "opset": "11-19",
+      "storage": "uint8,uint16,uint32,uint64,int8,int16,int32,int64,float16,float32,float64,bool",
+      "output": "values same as input; indices,inverse_indices,counts int64",
+      "compute": "exact equality and storage-dtype ordering on device",
+      "accumulation": "int64 occurrence counts and positions",
+      "path": "MUSA first-occurrence/count/output kernels; per-block counts copied to host only to allocate dynamic outputs",
+      "verified_dtypes": "uint8,uint16,uint32,uint64,int8,int16,int32,int64,float16,float32,float64,bool; optional outputs int64",
+      "tests": [
+        "test/ops/test_unique.py"
+      ],
+      "unsupported_reasons": "axis only supports axis 0 of a 1D tensor; flattened mode is supported; string and complex are not registered"
+    },
+    {
+      "op": "TopK",
+      "domain": "ai.onnx",
+      "opset": "10-19",
+      "storage": "uint8,uint16,uint32,uint64,int8,int16,int32,int64,float16,float32,float64; K int64 CPU metadata",
+      "output": "values same as input; indices int64",
+      "compute": "exact storage-dtype ordering with lower-index tie break",
+      "accumulation": "none",
+      "path": "MUSA pair reduction, muDNN with stable postprocess, block sort, or segmented radix sort",
+      "verified_dtypes": "uint8,uint16,uint32,uint64,int8,int16,int32,int64,float16,float32,float64; K and indices int64; sorted and unsorted",
+      "tests": [
+        "test/ops/test_topk.py"
+      ],
+      "unsupported_reasons": "rank at least 1; scalar int64 K in range; largest and sorted must be 0 or 1; BF16 enters ONNX TopK after this repo opset range"
+    },
+    {
+      "op": "If",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "condition bool CPU metadata; branch tensor values fixed-size numeric and bool, BF16 from opset 16",
+      "output": "selected branch dtype and shape",
+      "compute": "ORT control-flow container; branch nodes follow their own contracts",
+      "accumulation": "none",
+      "path": "Plugin EP If kernel with MUSA-assigned branch subgraphs",
+      "verified_dtypes": "float32,int64,float16,float64,int8,int16,int32,uint8,uint16,uint32,uint64,bool,bfloat16",
+      "tests": [
+        "test/ops/test_if.py"
+      ],
+      "unsupported_reasons": "sequence, optional, string, complex, and float8 types are not registered; If support does not imply every branch op is MUSA-supported"
+    },
+    {
+      "op": "Loop",
+      "domain": "ai.onnx",
+      "opset": "1-19",
+      "storage": "trip count int64 and condition bool CPU metadata; loop tensor values fixed-size numeric and bool; BF16 excluded through opset 19",
+      "output": "final loop-carried values and scan tensors",
+      "compute": "ORT control-flow container; body nodes follow their own contracts",
+      "accumulation": "none",
+      "path": "Plugin EP Loop kernel plus MUSA D2D scan concatenation",
+      "verified_dtypes": "float32,float16,float64,int8,int16,int32,int64,uint8,uint16,uint32,uint64",
+      "tests": [
+        "test/ops/test_loop.py"
+      ],
+      "unsupported_reasons": "BF16, sequence, optional, string, complex, and float8 types are not registered; scan tensors must be on MUSA; Loop support does not imply every body op is MUSA-supported"
+    },
+    {
+      "op": "Attention",
+      "domain": "com.microsoft",
+      "opset": "1",
+      "storage": "float32 input, weights, bias and output; optional int32 mask",
+      "output": "float32 [B,S,V_hidden]",
+      "compute": "FP32 QKV projection, score, stable softmax and value accumulation",
+      "accumulation": "FP32",
+      "path": "muBLAS/muDNN-backed FP32 MatMul plus MUSA attention score/value kernels",
+      "verified_dtypes": "T float32; M int32; without mask and broadcastable [B|1,H|1,S,S] masks",
+      "tests": [
+        "test/ops/test_attention.py"
+      ],
+      "unsupported_reasons": "rank-3 self-attention only; weights rank 2 and bias rank 1; concrete shapes; Q and K head sizes must match; no unidirectional mode, KV cache, past/present outputs, float16, BF16, float64, bool or int64 mask"
+    },
+    {
+      "op": "MultiHeadAttention",
+      "domain": "com.microsoft",
+      "opset": "1",
+      "storage": "float32 query, key, value, bias and output; optional int32 mask",
+      "output": "float32 [B,S,D]",
+      "compute": "FP32 packed QKV bias, score, online stable softmax and value accumulation",
+      "accumulation": "FP32",
+      "path": "MUSA FP32 QKV pack plus reduced-MHA online-softmax kernel",
+      "verified_dtypes": "T/QK float32; M int32; with [B,S,S] mask and without mask",
+      "tests": [
+        "test/ops/test_multihead_attention.py"
+      ],
+      "unsupported_reasons": "separate rank-3 Q/K/V with equal [B,S,D] self-attention shapes and bias [3D] only; D divisible by num_heads; sequence <= 8192; output only; no unidirectional mode, packed QKV, attention bias, KV cache, qk output, float16, BF16, float64, bool or int64 mask"
+    },
+    {
+      "op": "Einsum",
+      "domain": "ai.onnx",
+      "opset": "12-19",
+      "storage": "float32",
+      "output": "float32",
+      "compute": "equation-specific device contraction or diagonal copy",
+      "accumulation": "FP32 for contractions; none for aa->a",
+      "path": "muDNN MatMul for ij,bjk->bik; MUSA equation-specific kernels otherwise",
+      "verified_dtypes": "float32 across all seven supported equations",
+      "tests": [
+        "test/ops/test_einsum.py"
+      ],
+      "unsupported_reasons": "only aa->a, bhij,hk->bkij, ij,bjk->bik, blhw,bjhw->bhl, ilhw,bjhw->bhl, nik,bnk->bni, and bnk,nkd->bnd are implemented; all other equations and non-float32 storage are rejected"
+    },
+    {
+      "op": "FusedGemm",
+      "domain": "com.microsoft",
+      "opset": "1",
+      "storage": "float16,float32,float64; A/B/C dtypes must match",
+      "output": "same as inputs",
+      "compute": "rank-2 GEMM plus optional broadcast bias and supported activation",
+      "accumulation": "FP32 for FP16; FP32/FP64 for float32/float64",
+      "path": "muDNN MatMul+bias when supported, else muBLAS GEMM plus MUSA post kernel",
+      "verified_dtypes": "float16,float32,float64",
+      "tests": [
+        "test/ops/test_fused_gemm.py"
+      ],
+      "unsupported_reasons": "BF16 is rejected by the com.microsoft FusedGemm schema; A/B must be rank 2; bias must broadcast to [M,N]; activation is limited to Relu, LeakyRelu, Tanh, and Sigmoid"
+    },
+    {
+      "op": "FusedMatMul",
+      "domain": "com.microsoft",
+      "opset": "1",
+      "storage": "bfloat16,float16,float32; A/B dtypes must match",
+      "output": "same as inputs",
+      "compute": "muDNN MatMul or BatchMatMul with alpha and optional matrix transpose",
+      "accumulation": "FP32 for BF16/FP16 library tensor mode",
+      "path": "muDNN MatMul or BatchMatMul",
+      "verified_dtypes": "float16,float32,bfloat16",
+      "tests": [
+        "test/ops/test_fused_matmul.py"
+      ],
+      "unsupported_reasons": "float64 is not registered; vector operands, transBatchA/transBatchB, rank over the MUSA limit, and non-linear batch broadcasting are rejected"
+    },
+    {
+      "op": "And",
+      "domain": "ai.onnx",
+      "opset": "7-19",
+      "storage": "bool",
+      "output": "bool broadcast shape",
+      "compute": "logical AND",
+      "accumulation": "none",
+      "path": "muDNN rank <= 5; MUSA bool broadcast fallback",
+      "verified_dtypes": "bool including empty and rank-6 broadcast",
+      "tests": [
+        "test/ops/test_and.py"
+      ],
+      "unsupported_reasons": "bool only; fallback rank limited by kMusaMaxBroadcastRank"
+    },
+    {
+      "op": "Or",
+      "domain": "ai.onnx",
+      "opset": "7-19",
+      "storage": "bool",
+      "output": "bool broadcast shape",
+      "compute": "logical OR",
+      "accumulation": "none",
+      "path": "muDNN rank <= 5; MUSA bool broadcast fallback",
+      "verified_dtypes": "bool including empty and rank-6 broadcast",
+      "tests": [
+        "test/ops/test_or.py"
+      ],
+      "unsupported_reasons": "bool only; fallback rank limited by kMusaMaxBroadcastRank"
+    },
+    {
+      "op": "Not",
+      "domain": "ai.onnx",
+      "opset": "1-19",
+      "storage": "bool",
+      "output": "bool same shape",
+      "compute": "logical NOT",
+      "accumulation": "none",
+      "path": "MUSA bool kernel",
+      "verified_dtypes": "bool",
+      "tests": [
+        "test/ops/test_not.py"
+      ],
+      "unsupported_reasons": "bool only"
+    },
+    {
+      "op": "BitwiseAnd",
+      "domain": "ai.onnx",
+      "opset": "18-19",
+      "storage": "uint8,uint16,uint32,uint64,int8,int16,int32,int64",
+      "output": "same dtype; broadcast shape",
+      "compute": "storage-dtype bitwise AND",
+      "accumulation": "none",
+      "path": "MUSA integer broadcast kernel",
+      "verified_dtypes": "uint8,uint16,uint32,uint64,int8,int16,int32,int64",
+      "tests": [
+        "test/ops/test_bitwise_and.py"
+      ],
+      "unsupported_reasons": "non-integer types are excluded by schema; rank limited by kMusaMaxBroadcastRank"
+    },
+    {
+      "op": "Max",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "uint32,uint64,int32,int64,float16,float32,float64,bfloat16",
+      "output": "same dtype; broadcast shape",
+      "compute": "variadic maximum",
+      "accumulation": "none",
+      "path": "muDNN binary chain or MUSA broadcast fallback",
+      "verified_dtypes": "uint32,uint64,int32,int64,float16,float32,float64,bfloat16",
+      "tests": [
+        "test/ops/test_max.py",
+        "test/ops/test_elementwise_dtypes.py"
+      ],
+      "unsupported_reasons": "8/16-bit integer schema types are not registered; device rank limited"
+    },
+    {
+      "op": "Min",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "uint32,uint64,int32,int64,float16,float32,float64,bfloat16",
+      "output": "same dtype; broadcast shape",
+      "compute": "variadic minimum",
+      "accumulation": "none",
+      "path": "muDNN binary chain or MUSA broadcast fallback",
+      "verified_dtypes": "uint32,uint64,int32,int64,float16,float32,float64,bfloat16",
+      "tests": [
+        "test/ops/test_min.py",
+        "test/ops/test_elementwise_dtypes.py"
+      ],
+      "unsupported_reasons": "8/16-bit integer schema types are not registered; device rank limited"
+    },
+    {
+      "op": "Sub",
+      "domain": "ai.onnx",
+      "opset": "13-19",
+      "storage": "opset 13: 32/64-bit integer and float types; 14-19: all integer and float types",
+      "output": "same dtype; broadcast shape",
+      "compute": "storage dtype; FP32 for FP16/BF16 fallback",
+      "accumulation": "none",
+      "path": "muDNN or MUSA broadcast kernel; CPU metadata staging",
+      "verified_dtypes": "uint8,uint16,uint32,uint64,int8,int16,int32,int64,float16,float32,float64,bfloat16",
+      "tests": [
+        "test/ops/test_sub.py",
+        "test/ops/test_elementwise_dtypes.py"
+      ],
+      "unsupported_reasons": "bool,string,complex excluded; device rank limited"
+    },
+    {
+      "op": "Mod",
+      "domain": "ai.onnx",
+      "opset": "10-19",
+      "storage": "int32,int64",
+      "output": "same dtype; broadcast shape",
+      "compute": "floor modulo with divisor-sign remainder",
+      "accumulation": "none",
+      "path": "MUSA integer broadcast kernel",
+      "verified_dtypes": "int32,int64 including signed values",
+      "tests": [
+        "test/ops/test_mod.py"
+      ],
+      "unsupported_reasons": "fmod=1 and other schema dtypes are not registered; divisor zero is invalid input"
+    },
+    {
+      "op": "Round",
+      "domain": "ai.onnx",
+      "opset": "11-19",
+      "storage": "float16,float32,float64",
+      "output": "same dtype and shape",
+      "compute": "round to nearest even",
+      "accumulation": "none",
+      "path": "muDNN or MUSA unary fallback",
+      "verified_dtypes": "float16,float32,float64",
+      "tests": [
+        "test/ops/test_round.py"
+      ],
+      "unsupported_reasons": "schema excludes BF16 and non-floating types through opset 19"
+    },
+    {
+      "op": "ReduceL2",
+      "domain": "ai.onnx",
+      "opset": "13-17: float16,float32,float64,int32; 18-19: plus bfloat16",
+      "storage": "registered input/output dtype",
+      "output": "same dtype; reduced shape",
+      "compute": "sqrt of sum of squares",
+      "accumulation": "FP32 for float16/bfloat16; storage dtype for float32,float64,int32",
+      "path": "MUSA reduction kernel",
+      "verified_dtypes": "float16,float32,float64,int32,bfloat16",
+      "tests": [
+        "test/ops/test_reduce_l2.py"
+      ],
+      "unsupported_reasons": "other schema integer types are not registered; device rank limited"
+    },
+    {
+      "op": "CumSum",
+      "domain": "ai.onnx",
+      "opset": "11-13: int32,int64,uint32,uint64,float32,float64; 14-19: plus float16,bfloat16",
+      "storage": "registered dtype; axis int32/int64",
+      "output": "same dtype and shape",
+      "compute": "inclusive/exclusive/reverse cumulative sum",
+      "accumulation": "storage dtype except BF16 uses FP32",
+      "path": "MUSA cumulative-sum kernel",
+      "verified_dtypes": "int32,int64,uint32,uint64,float32,float64,float16,bfloat16; negative axis; exclusive/reverse",
+      "tests": [
+        "test/ops/test_cumsum.py"
+      ],
+      "unsupported_reasons": "scalar input and non-concrete shapes rejected"
+    },
+    {
+      "op": "ReverseSequence",
+      "domain": "ai.onnx",
+      "opset": "10-19",
+      "storage": "all fixed-size non-complex numeric types and bool; sequence_lens int64",
+      "output": "same data dtype and shape",
+      "compute": "bytewise sequence reversal",
+      "accumulation": "none",
+      "path": "MUSA byte-copy kernel",
+      "verified_dtypes": "float32,int64,bool,float16,float64,int8,int16,int32,uint8,uint16,uint32,uint64",
+      "tests": [
+        "test/ops/test_reverse_sequence.py"
+      ],
+      "unsupported_reasons": "schema excludes BF16 through opset 19; string/complex unregistered; axes restricted to 0/1"
+    }
+  ]
+}

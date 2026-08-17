@@ -99,12 +99,12 @@ OrtStatus* ScatterElements::Compute(Ort::KernelContext& ctx) const {
         ORT_INVALID_ARGUMENT, "ScatterElements input dtypes must match");
   }
   const auto index_type = indices_info.GetElementType();
-  const size_t index_elem_size = ElementSize(index_type);
-  if (index_elem_size != sizeof(int32_t) &&
-      index_elem_size != sizeof(int64_t)) {
+  if (index_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 &&
+      index_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED, "ScatterElements unsupported index dtype");
   }
+  const size_t index_elem_size = ElementSize(index_type);
   const size_t elem_size = ElementSize(elem_type);
   if (elem_size == 0) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,

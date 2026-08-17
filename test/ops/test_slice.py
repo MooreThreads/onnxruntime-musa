@@ -13,8 +13,40 @@
 """End-to-end CPU-vs-MUSA test for the Slice operator."""
 
 import numpy as np
+import pytest
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import TensorProto, build_model_with_input_types, float32_to_bfloat16_bits, run_and_compare, run_with_iobinding
+
+
+@pytest.mark.parametrize(
+    ("np_dtype", "tensor_type"),
+    [
+        (np.uint8, TensorProto.UINT8), (np.uint32, TensorProto.UINT32),
+        (np.uint64, TensorProto.UINT64), (np.int8, TensorProto.INT8),
+        (np.int16, TensorProto.INT16), (np.float64, TensorProto.DOUBLE),
+    ],
+)
+def test_slice_remaining_fixed_dtypes(np_dtype, tensor_type):
+    data = np.arange(24, dtype=np_dtype).reshape(4, 6)
+    starts = np.array([1], dtype=np.int64)
+    ends = np.array([5], dtype=np.int64)
+    axes = np.array([1], dtype=np.int64)
+    run_and_compare("Slice", inputs={"data": data, "starts": starts, "ends": ends, "axes": axes},
+                    outputs=[("Y", tensor_type)])
+
+
+def test_slice_bfloat16():
+    data = float32_to_bfloat16_bits(np.arange(24, dtype=np.float32).reshape(4, 6))
+    starts = np.array([1], dtype=np.int64); ends = np.array([5], dtype=np.int64); axes = np.array([1], dtype=np.int64)
+    expected = data[:, 1:5]
+    model = build_model_with_input_types(
+        "Slice", {"data": data, "starts": starts, "ends": ends, "axes": axes},
+        {"data": TensorProto.BFLOAT16, "starts": TensorProto.INT64, "ends": TensorProto.INT64, "axes": TensorProto.INT64},
+        [("Y", TensorProto.BFLOAT16)], opset=19)
+    (actual,) = run_with_iobinding(model, {"data": data, "starts": starts, "ends": ends, "axes": axes},
+                                   {"data": TensorProto.BFLOAT16, "starts": TensorProto.INT64, "ends": TensorProto.INT64, "axes": TensorProto.INT64},
+                                   [("Y", TensorProto.BFLOAT16, expected.shape)], use_musa=True)
+    np.testing.assert_array_equal(actual, expected)
 
 
 def test_slice_2d():

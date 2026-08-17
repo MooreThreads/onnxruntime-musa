@@ -17,10 +17,10 @@ import pytest
 
 from op_test_utils import (
     TensorProto,
-    bfloat16_bits_to_float32,
     build_model,
     run,
     run_with_iobinding,
+    _make_session,
 )
 
 
@@ -87,17 +87,14 @@ def test_random_uniform_bfloat16():
         },
         opset=1,
     )
-    (actual,) = run_with_iobinding(
-        model,
-        {},
-        {},
-        [("Y", TensorProto.BFLOAT16, (2, 3))],
-        use_musa=True,
-    )
-    actual_f32 = bfloat16_bits_to_float32(actual)
-    assert actual.shape == (2, 3)
-    assert np.all(actual_f32 >= -1.0)
-    assert np.all(actual_f32 <= 2.0)
+    with pytest.raises(Exception):
+        run_with_iobinding(
+            model,
+            {},
+            {},
+            [("Y", TensorProto.BFLOAT16, (2, 3))],
+            use_musa=True,
+        )
 
 
 def test_random_uniform_like_float_opset1_runs_on_musa_without_cpu_fallback():
@@ -108,6 +105,24 @@ def test_random_uniform_like_float_opset1_runs_on_musa_without_cpu_fallback():
         outputs=[("Y", TensorProto.FLOAT)],
         attrs={"low": -1.0, "high": 2.0, "seed": 3.0},
         opset=1,
+    )
+    (actual,) = run(model, {"X": x}, use_musa=True)
+    assert actual.shape == x.shape
+    assert actual.dtype == np.float32
+    assert np.all(actual >= -1.0)
+    assert np.all(actual <= 2.0)
+
+
+@pytest.mark.parametrize("np_dtype", [
+    np.uint8, np.uint16, np.uint32, np.uint64,
+    np.int8, np.int16, np.int32, np.int64, np.bool_,
+])
+def test_random_uniform_like_registered_integer_and_bool_carriers(np_dtype):
+    x = np.zeros((2, 3), dtype=np_dtype)
+    model = build_model(
+        "RandomUniformLike", inputs={"X": x},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"dtype": TensorProto.FLOAT, "low": -1.0, "high": 2.0, "seed": 3.0}, opset=1,
     )
     (actual,) = run(model, {"X": x}, use_musa=True)
     assert actual.shape == x.shape
@@ -176,14 +191,30 @@ def test_random_uniform_like_bfloat16_dtype_attr_path():
         },
         opset=1,
     )
-    (actual,) = run_with_iobinding(
-        model,
-        {"X": x},
-        {},
-        [("Y", TensorProto.BFLOAT16, x.shape)],
-        use_musa=True,
+    with pytest.raises(Exception):
+        run_with_iobinding(
+            model,
+            {"X": x},
+            {},
+            [("Y", TensorProto.BFLOAT16, x.shape)],
+            use_musa=True,
+        )
+
+
+def test_random_uniform_seed_reproduces_sequence_but_advances_each_run():
+    model = build_model(
+        "RandomUniform",
+        inputs={},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"shape": [32], "dtype": TensorProto.FLOAT, "seed": 17.0},
+        opset=1,
     )
-    actual_f32 = bfloat16_bits_to_float32(actual)
-    assert actual.shape == x.shape
-    assert np.all(actual_f32 >= -1.0)
-    assert np.all(actual_f32 <= 2.0)
+    session_a = _make_session(model, use_musa=True)
+    session_b = _make_session(model, use_musa=True)
+    a0 = session_a.run(None, {})[0]
+    a1 = session_a.run(None, {})[0]
+    b0 = session_b.run(None, {})[0]
+    b1 = session_b.run(None, {})[0]
+    np.testing.assert_array_equal(a0, b0)
+    np.testing.assert_array_equal(a1, b1)
+    assert not np.array_equal(a0, a1)

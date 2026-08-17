@@ -181,9 +181,22 @@ struct MusaTileParams {
   int64_t output_dims[kMusaMaxBroadcastRank];
 };
 
+struct MusaFastDivmod {
+  uint32_t divisor;
+  uint32_t multiplier;
+  uint32_t shift;
+};
+
 struct MusaWhereParams {
   int32_t rank;
   int64_t total_elements;
+  // 0: input is laid out exactly like output, 1: one scalar element,
+  // 2: broadcast index calculation is required.
+  int32_t condition_mode;
+  int32_t x_mode;
+  int32_t y_mode;
+  int32_t use_fast_divmod;
+  MusaFastDivmod output_divmod[kMusaMaxBroadcastRank];
   int64_t output_strides[kMusaMaxBroadcastRank];
   int64_t condition_strides[kMusaMaxBroadcastRank];
   int64_t x_strides[kMusaMaxBroadcastRank];

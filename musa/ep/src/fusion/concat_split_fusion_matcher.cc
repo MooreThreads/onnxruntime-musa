@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "fusion/fusion_dtype.h"
 #include "fusion/fusion_matcher.h"
 #include "fusion/fusion_matcher_utils.h"
 #include "graph/graph_utils.h"
@@ -71,15 +72,15 @@ bool CanFuseConcatSplit(
 
   std::vector<int64_t> concat_widths;
   concat_widths.reserve(concat_inputs.size());
+  std::vector<Ort::ConstValueInfo> payload_values;
+  payload_values.reserve(concat_inputs.size() + split_outputs.size());
   int64_t total_width = 0;
   for (Ort::ConstValueInfo input : concat_inputs) {
-    if (!IsFloatTensorValueInfo(input)) {
-      return false;
-    }
     auto shape = GetTensorShape(input);
     if (!shape.has_value() || shape->size() != 2 || (*shape)[1] <= 0) {
       return false;
     }
+    payload_values.push_back(input);
     concat_widths.push_back((*shape)[1]);
     total_width += (*shape)[1];
   }
@@ -100,6 +101,13 @@ bool CanFuseConcatSplit(
   for (size_t i = 0; i < split_outputs.size(); ++i) {
     split_output_names.insert(Name(split_outputs[i]));
     split_widths.emplace(Name(split_outputs[i]), (*split_sizes)[i]);
+    payload_values.push_back(split_outputs[i]);
+  }
+
+  ONNXTensorElementDataType payload_type =
+      ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  if (!RequireSameElementType(payload_values, payload_type)) {
+    return false;
   }
 
   int64_t split_offset = 0;
@@ -131,9 +139,15 @@ bool CanFuseConcatSplit(
         continue;
       }
       if (IsOnnxOp(downstream_node, "Concat")) {
+        std::vector<Ort::ConstValueInfo> downstream_outputs =
+            downstream_node.GetOutputs();
         auto axis_attr = GetIntAttribute(downstream_node, "axis");
         int64_t downstream_axis = 0;
-        if (!axis_attr.has_value() ||
+        if (downstream_outputs.size() != 1 ||
+            GetTensorElementType(downstream_outputs[0])
+                    .value_or(ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED) !=
+                payload_type ||
+            !axis_attr.has_value() ||
             !NormalizeAxis(*axis_attr, 2, downstream_axis) ||
             downstream_axis != 1) {
           continue;
@@ -154,6 +168,7 @@ bool CanFuseConcatSplit(
         std::vector<Ort::ConstValueInfo> sum_outputs =
             downstream_node.GetOutputs();
         if (sum_inputs.size() < 2 || sum_outputs.size() != 1 ||
+            payload_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
             !IsFloatTensorValueInfo(sum_outputs[0])) {
           continue;
         }

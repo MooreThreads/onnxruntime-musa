@@ -250,4 +250,37 @@ std::optional<int64_t> ReadScalarIntInitializer(
   return (*values)[0];
 }
 
+bool HasCastBoundary(const std::vector<Ort::ConstNode>& fusion_nodes) {
+  std::unordered_set<size_t> selected_node_ids;
+  selected_node_ids.reserve(fusion_nodes.size());
+  for (Ort::ConstNode node : fusion_nodes) {
+    if (node) {
+      selected_node_ids.insert(node.GetId());
+    }
+  }
+
+  for (Ort::ConstNode node : fusion_nodes) {
+    if (!node) {
+      continue;
+    }
+    for (Ort::ConstValueInfo input : node.GetInputs()) {
+      Ort::ConstNode producer{nullptr};
+      if (GetProducer(input, producer) &&
+          selected_node_ids.count(producer.GetId()) == 0 &&
+          IsOnnxOp(producer, "Cast")) {
+        return true;
+      }
+    }
+    for (Ort::ConstValueInfo output : node.GetOutputs()) {
+      for (const auto& consumer : output.GetConsumers()) {
+        if (selected_node_ids.count(consumer.node.GetId()) == 0 &&
+            IsOnnxOp(consumer.node, "Cast")) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 }  // namespace musa_ep

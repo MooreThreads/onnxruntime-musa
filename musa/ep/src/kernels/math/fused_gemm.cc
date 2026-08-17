@@ -45,5 +45,5 @@ OrtStatus* FusedGemm::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     FusedGemm, kMSDomain, 1, 1,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())),
     FusedGemm)

@@ -46,7 +46,11 @@ OrtStatus* PRelu::Compute(Ort::KernelContext& ctx) const {
       !(elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE ||
-        elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16)) {
+        elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+        elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32 ||
+        elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64 ||
+        elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
+        elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64)) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "PRelu unsupported dtype");
   }
@@ -83,5 +87,5 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     PRelu, kOnnxDomain, 16, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", PReluOpset16TensorTypes())),
     PRelu)

@@ -26,12 +26,30 @@
 #include <utility>
 #include <vector>
 
+#include "fusion/fusion_dtype.h"
 #include "fusion/fusion_matcher.h"
 #include "fusion/fusion_matcher_utils.h"
 #include "graph/graph_utils.h"
 #include "plugin_ep_utils.h"
 
 namespace musa_ep {
+namespace {
+
+bool IsRmsNormStorageType(ONNXTensorElementDataType elem_type) {
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE;
+}
+
+bool RequireSameRmsNormStorageType(
+    const std::vector<Ort::ConstValueInfo>& value_infos,
+    ONNXTensorElementDataType& elem_type) {
+  return RequireSameElementType(value_infos, elem_type) &&
+         IsRmsNormStorageType(elem_type);
+}
+
+}  // namespace
 
 bool CanFuseRmsNorm(
     Ort::ConstNode output_mul_node,
@@ -49,7 +67,7 @@ bool CanFuseRmsNorm(
   std::vector<Ort::ConstValueInfo> output_mul_outputs =
       output_mul_node.GetOutputs();
   if (output_mul_inputs.size() != 2 || output_mul_outputs.size() != 1 ||
-      !IsFloatTensorValueInfo(output_mul_outputs[0])) {
+      GetTensorElementType(output_mul_outputs[0]) == std::nullopt) {
     return false;
   }
 
@@ -68,7 +86,13 @@ bool CanFuseRmsNorm(
     }
   }
   if (!div_node || accepted_node_ids.count(div_node.GetId()) != 0 ||
-      !IsFloatTensorValueInfo(gamma_input)) {
+      GetTensorElementType(gamma_input) == std::nullopt) {
+    return false;
+  }
+
+  ONNXTensorElementDataType elem_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  if (!RequireSameRmsNormStorageType({output_mul_outputs[0], gamma_input},
+                                     elem_type)) {
     return false;
   }
 
@@ -82,8 +106,9 @@ bool CanFuseRmsNorm(
   std::vector<Ort::ConstValueInfo> div_outputs = div_node.GetOutputs();
   if (div_inputs.size() != 2 || div_outputs.size() != 1 ||
       graph_output_names.count(Name(div_outputs[0])) != 0 ||
-      !IsFloatTensorValueInfo(div_inputs[0]) ||
-      !IsFloatTensorValueInfo(div_outputs[0]) ||
+      !RequireSameRmsNormStorageType(
+          {div_inputs[0], div_outputs[0], output_mul_outputs[0], gamma_input},
+          elem_type) ||
       !ValueHasOnlyConsumers(div_outputs[0], output_mul_node)) {
     return false;
   }
@@ -111,7 +136,8 @@ bool CanFuseRmsNorm(
   if (accepted_node_ids.count(sqrt_node.GetId()) != 0 ||
       sqrt_inputs.size() != 1 || sqrt_outputs.size() != 1 ||
       graph_output_names.count(Name(sqrt_outputs[0])) != 0 ||
-      !IsFloatTensorValueInfo(sqrt_outputs[0]) ||
+      !RequireSameRmsNormStorageType(
+          {sqrt_outputs[0], output_mul_outputs[0], gamma_input}, elem_type) ||
       !HasOnlyConsumer(sqrt_outputs[0], div_node, 1)) {
     return false;
   }
@@ -126,7 +152,8 @@ bool CanFuseRmsNorm(
   if (accepted_node_ids.count(add_node.GetId()) != 0 ||
       add_inputs.size() != 2 || add_outputs.size() != 1 ||
       graph_output_names.count(Name(add_outputs[0])) != 0 ||
-      !IsFloatTensorValueInfo(add_outputs[0]) ||
+      !RequireSameRmsNormStorageType(
+          {add_outputs[0], output_mul_outputs[0], gamma_input}, elem_type) ||
       !HasOnlyConsumer(add_outputs[0], sqrt_node, 0)) {
     return false;
   }
@@ -147,7 +174,8 @@ bool CanFuseRmsNorm(
     }
   }
   if (!reduce_node || accepted_node_ids.count(reduce_node.GetId()) != 0 ||
-      !IsFloatTensorValueInfo(epsilon_input) ||
+      !RequireSameRmsNormStorageType(
+          {epsilon_input, output_mul_outputs[0], gamma_input}, elem_type) ||
       !ReadScalarFloatInitializer(epsilon_input).has_value()) {
     return false;
   }
@@ -157,7 +185,8 @@ bool CanFuseRmsNorm(
   if (reduce_inputs.empty() || reduce_outputs.size() != 1 ||
       GetIntAttribute(reduce_node, "keepdims").value_or(1) != 1 ||
       graph_output_names.count(Name(reduce_outputs[0])) != 0 ||
-      !IsFloatTensorValueInfo(reduce_outputs[0]) ||
+      !RequireSameRmsNormStorageType(
+          {reduce_outputs[0], output_mul_outputs[0], gamma_input}, elem_type) ||
       !ReduceOutputKeepsLastDim(reduce_outputs[0], *input_shape) ||
       !ValueHasOnlyConsumers(reduce_outputs[0], add_node)) {
     return false;
@@ -190,7 +219,8 @@ bool CanFuseRmsNorm(
   if (accepted_node_ids.count(square_node.GetId()) != 0 ||
       square_inputs.size() != 2 || square_outputs.size() != 1 ||
       graph_output_names.count(Name(square_outputs[0])) != 0 ||
-      !IsFloatTensorValueInfo(square_outputs[0]) ||
+      !RequireSameRmsNormStorageType(
+          {square_outputs[0], output_mul_outputs[0], gamma_input}, elem_type) ||
       !HasOnlyConsumer(square_outputs[0], reduce_node, 0)) {
     return false;
   }

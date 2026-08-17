@@ -16,12 +16,14 @@ OrtStatus* StridedViewFusionCompute::Compute(
     Ort::ConstValue input = ctx.GetInput(input_index);
     auto info = input.GetTensorTypeAndShapeInfo();
     auto shape = info.GetShape();
-    if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-        shape.size() != 3 || shape[0] < 0 || shape[1] < 0 || shape[2] < 0 ||
-        segment_count <= 0 || shape[0] % segment_count != 0)
+    const size_t element_size = ElementSize(info.GetElementType());
+    if (element_size == 0 || shape.size() != 3 || shape[0] < 0 ||
+        shape[1] < 0 || shape[2] < 0 || segment_count <= 0 ||
+        shape[0] % segment_count != 0)
       return Ort::GetApi().CreateStatus(
           ORT_INVALID_ARGUMENT,
-          "StridedView requires float [segments*sequence, batch, width] input");
+          "StridedView requires fixed-size [segments*sequence, batch, width] "
+          "input");
     const int64_t sequence = shape[0] / segment_count;
     Ort::UnownedValue output =
         ctx.GetOutput(0, {sequence, shape[1], shape[2] * segment_count});
@@ -47,7 +49,7 @@ OrtStatus* StridedViewFusionCompute::Compute(
     params.perm[3] = 3;
     return LaunchStatus(LaunchMusaTransposeKernel(
         input.GetTensorRawData(), output.GetTensorMutableRawData(),
-        sizeof(float), params, GetComputeStream(ctx)));
+        static_cast<int32_t>(element_size), params, GetComputeStream(ctx)));
   } catch (const Ort::Exception& ex) {
     Ort::Status status(ex);
     return status.release();

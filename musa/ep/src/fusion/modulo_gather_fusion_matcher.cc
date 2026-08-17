@@ -33,6 +33,32 @@
 
 namespace musa_ep {
 
+namespace {
+
+bool IsGatherPayloadTensorValueInfo(Ort::ConstValueInfo value_info) {
+  if (value_info == nullptr ||
+      value_info.TypeInfo().GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+  ONNXTensorElementDataType elem_type =
+      value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+}
+
+bool HasSameGatherPayloadType(Ort::ConstValueInfo lhs,
+                              Ort::ConstValueInfo rhs) {
+  if (!IsGatherPayloadTensorValueInfo(lhs) ||
+      !IsGatherPayloadTensorValueInfo(rhs)) {
+    return false;
+  }
+  return lhs.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
+         rhs.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
+}
+
+}  // namespace
+
 bool CanFuseModuloGather(
     Ort::ConstNode gather_node,
     const std::unordered_map<std::string, Ort::ConstNode>& producers,
@@ -48,7 +74,7 @@ bool CanFuseModuloGather(
   std::vector<Ort::ConstValueInfo> gather_inputs = gather_node.GetInputs();
   std::vector<Ort::ConstValueInfo> gather_outputs = gather_node.GetOutputs();
   if (gather_inputs.size() != 2 || gather_outputs.size() != 1 ||
-      !IsFloatTensorValueInfo(gather_outputs[0])) {
+      !HasSameGatherPayloadType(gather_inputs[0], gather_outputs[0])) {
     return false;
   }
 

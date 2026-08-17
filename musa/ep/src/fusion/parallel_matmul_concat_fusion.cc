@@ -90,6 +90,8 @@ class DeviceBuffer {
     return reinterpret_cast<T*>(ptr_);
   }
 
+  void* get() const { return ptr_; }
+
  private:
   void* ptr_ = nullptr;
   size_t bytes_ = 0;
@@ -136,13 +138,23 @@ std::vector<int64_t> TensorShape(Ort::ConstValue value) {
   return value.GetTensorTypeAndShapeInfo().GetShape();
 }
 
-void ValidateFloatTensor(Ort::ConstValue value, const char* name) {
+bool IsParallelMatMulConcatElementType(ONNXTensorElementDataType elem_type) {
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+}
+
+ONNXTensorElementDataType ValidateParallelMatMulConcatTensor(
+    Ort::ConstValue value, const char* name) {
   auto info = value.GetTensorTypeAndShapeInfo();
-  if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    throw std::runtime_error(std::string("ParallelMatMulConcat only supports "
-                                         "float tensors for ") +
-                             name);
+  const ONNXTensorElementDataType elem_type = info.GetElementType();
+  if (!IsParallelMatMulConcatElementType(elem_type)) {
+    throw std::runtime_error(
+        std::string("ParallelMatMulConcat only supports "
+                    "float32/float16/bfloat16 tensors for ") +
+        name);
   }
+  return elem_type;
 }
 
 bool IsGpuValue(Ort::ConstValue value) {
@@ -168,9 +180,15 @@ void CheckMudnnStatus(::musa::dnn::Status status, const char* message) {
   }
 }
 
-void SetupMudnn2DTensor(::musa::dnn::Tensor& tensor, const float* data,
-                        const std::vector<int64_t>& shape) {
-  CheckMudnnStatus(tensor.SetType(::musa::dnn::Tensor::Type::FLOAT),
+void SetupMudnn2DTensor(::musa::dnn::Tensor& tensor, const void* data,
+                        const std::vector<int64_t>& shape,
+                        ONNXTensorElementDataType elem_type) {
+  ::musa::dnn::Tensor::Type mudnn_type;
+  if (!MudnnTensorType(elem_type, mudnn_type)) {
+    throw std::runtime_error(
+        "ParallelMatMulConcat unsupported muDNN tensor type");
+  }
+  CheckMudnnStatus(tensor.SetType(mudnn_type),
                    "Failed to set ParallelMatMulConcat tensor type");
   if (data != nullptr) {
     CheckMudnnStatus(tensor.SetAddr(data),
@@ -189,7 +207,9 @@ void SetupMudnn2DTensor(::musa::dnn::Tensor& tensor, const float* data,
 
 void RunMudnnWeightConcat(const std::vector<Ort::ConstValue>& weights,
                           const std::vector<int64_t>& merged_shape,
-                          float* merged_data, musaStream_t stream) {
+                          void* merged_data,
+                          ONNXTensorElementDataType elem_type,
+                          musaStream_t stream) {
   ::musa::dnn::Handle* handle = nullptr;
   OrtStatus* status = EnsureMudnnHandle(&handle, stream);
   if (status != nullptr) {
@@ -199,12 +219,12 @@ void RunMudnnWeightConcat(const std::vector<Ort::ConstValue>& weights,
 
   std::vector<::musa::dnn::Tensor> input_tensors(weights.size());
   for (size_t i = 0; i < weights.size(); ++i) {
-    SetupMudnn2DTensor(input_tensors[i], weights[i].GetTensorData<float>(),
-                       TensorShape(weights[i]));
+    SetupMudnn2DTensor(input_tensors[i], weights[i].GetTensorRawData(),
+                       TensorShape(weights[i]), elem_type);
   }
 
   ::musa::dnn::Tensor output_tensor;
-  SetupMudnn2DTensor(output_tensor, merged_data, merged_shape);
+  SetupMudnn2DTensor(output_tensor, merged_data, merged_shape, elem_type);
 
   ::musa::dnn::Concat concat_op;
   CheckMudnnStatus(concat_op.SetAxis(1),
@@ -246,8 +266,8 @@ std::vector<int64_t> ComputeConcatOutputShape(
 OrtStatus* ComputeDeviceParallelMatMulConcat(
     Ort::UnownedValue y, Ort::ConstValue input,
     const std::vector<Ort::ConstValue>& weights, int64_t concat_axis,
-    bool weights_are_initializers, ParallelMatMulConcatScratch& scratch,
-    musaStream_t stream) {
+    ONNXTensorElementDataType elem_type, bool weights_are_initializers,
+    ParallelMatMulConcatScratch& scratch, musaStream_t stream) {
   if (!IsGpuValue(input)) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED, "ParallelMatMulConcat requires MUSA input");
@@ -257,6 +277,11 @@ OrtStatus* ComputeDeviceParallelMatMulConcat(
         ORT_NOT_IMPLEMENTED, "ParallelMatMulConcat requires MUSA output");
   }
   for (Ort::ConstValue weight : weights) {
+    if (weight.GetTensorTypeAndShapeInfo().GetElementType() != elem_type) {
+      return Ort::GetApi().CreateStatus(
+          ORT_INVALID_ARGUMENT,
+          "ParallelMatMulConcat weight dtypes must match input");
+    }
     if (!IsGpuValue(weight)) {
       return Ort::GetApi().CreateStatus(
           ORT_NOT_IMPLEMENTED,
@@ -291,7 +316,8 @@ OrtStatus* ComputeDeviceParallelMatMulConcat(
       matmul_output_shape, part_count, part_width, concat_axis);
 
   const size_t merged_weight_bytes =
-      static_cast<size_t>(NumElements(merged_weight_shape)) * sizeof(float);
+      static_cast<size_t>(NumElements(merged_weight_shape)) *
+      ElementSize(elem_type);
   if (scratch.merged_weight_bytes != merged_weight_bytes) {
     scratch.merged_initializer_weights_valid = false;
     scratch.merged_weight_bytes = merged_weight_bytes;
@@ -299,14 +325,15 @@ OrtStatus* ComputeDeviceParallelMatMulConcat(
   scratch.weight_buffer.Resize(merged_weight_bytes, stream);
   if (!weights_are_initializers || !scratch.merged_initializer_weights_valid) {
     RunMudnnWeightConcat(weights, merged_weight_shape,
-                         scratch.weight_buffer.data<float>(), stream);
+                         scratch.weight_buffer.get(), elem_type, stream);
     scratch.merged_initializer_weights_valid = weights_are_initializers;
   }
 
-  float* y_data = y.GetTensorMutableData<float>();
+  void* y_data = y.GetTensorMutableRawData();
   return ComputeMusaMatMulDevice(
-      input.GetTensorData<float>(), scratch.weight_buffer.data<float>(), y_data,
-      input_shape, merged_weight_shape, matmul_output_shape, stream);
+      input.GetTensorRawData(), scratch.weight_buffer.get(), y_data, elem_type,
+      input_shape, merged_weight_shape, matmul_output_shape, false, false,
+      false, false, 1.0f, stream);
 }
 
 std::unordered_map<std::string, size_t> FusedInputIndices(
@@ -450,12 +477,17 @@ OrtStatus* ParallelMatMulConcatFusionCompute::Compute(
     musaStream_t stream = GetComputeStream(ctx);
 
     Ort::ConstValue input = ctx.GetInput(input_index);
-    ValidateFloatTensor(input, "input");
+    const ONNXTensorElementDataType elem_type =
+        ValidateParallelMatMulConcatTensor(input, "input");
     std::vector<Ort::ConstValue> weights;
     weights.reserve(weight_indices.size());
     for (size_t index : weight_indices) {
       Ort::ConstValue weight = ctx.GetInput(index);
-      ValidateFloatTensor(weight, "weight");
+      if (ValidateParallelMatMulConcatTensor(weight, "weight") != elem_type) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT,
+            "ParallelMatMulConcat weight dtypes must match input");
+      }
       weights.push_back(weight);
     }
     if (weights.empty()) {
@@ -474,11 +506,16 @@ OrtStatus* ParallelMatMulConcatFusionCompute::Compute(
         matmul_output_shape, part_count, part_width, concat_axis);
 
     Ort::UnownedValue y = ctx.GetOutput(0, concat_output_shape);
+    if (y.GetTensorTypeAndShapeInfo().GetElementType() != elem_type) {
+      return Ort::GetApi().CreateStatus(
+          ORT_INVALID_ARGUMENT,
+          "ParallelMatMulConcat output dtype must match input");
+    }
     ParallelMatMulConcatScratch& scratch =
         ThreadLocalScratchForStream(this, stream);
-    return ComputeDeviceParallelMatMulConcat(y, input, weights, concat_axis,
-                                             weights_are_initializers, scratch,
-                                             stream);
+    return ComputeDeviceParallelMatMulConcat(
+        y, input, weights, concat_axis, elem_type, weights_are_initializers,
+        scratch, stream);
   } catch (const Ort::Exception& ex) {
     Ort::Status status(ex);
     return status.release();

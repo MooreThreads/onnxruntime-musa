@@ -15,11 +15,43 @@
 
 #include <algorithm>
 #include <cassert>
+#include <string>
 #include <unordered_set>
 #include <utility>
 
 namespace musa_ep {
 namespace {
+
+bool CandidateSatisfiesDTypeContract(
+    const std::vector<Ort::ConstNode>& candidate,
+    const FusionDTypeContract& contract, std::string& reason) {
+  if (std::string(contract.storage_types) == "none") {
+    reason = "missing dtype contract";
+    return false;
+  }
+
+  for (Ort::ConstNode node : candidate) {
+    for (Ort::ConstValueInfo value_info : node.GetInputs()) {
+      auto elem_type = GetTensorElementType(value_info);
+      if (elem_type.has_value() && IsFloatingStorageType(*elem_type) &&
+          !IsSupportedStorageType(*elem_type, contract)) {
+        reason = "dtype contract saw unsupported floating input " +
+                 std::string(FusionDTypeName(*elem_type));
+        return false;
+      }
+    }
+    for (Ort::ConstValueInfo value_info : node.GetOutputs()) {
+      auto elem_type = GetTensorElementType(value_info);
+      if (elem_type.has_value() && IsFloatingStorageType(*elem_type) &&
+          !IsSupportedStorageType(*elem_type, contract)) {
+        reason = "dtype contract saw unsupported floating output " +
+                 std::string(FusionDTypeName(*elem_type));
+        return false;
+      }
+    }
+  }
+  return true;
+}
 
 bool NormalizeCandidate(const std::vector<Ort::ConstNode>& candidate,
                         std::vector<size_t>& node_ids) {
@@ -53,7 +85,9 @@ bool CandidateOverlapsAccepted(
 
 std::vector<std::vector<Ort::ConstNode>> AcceptFusionCandidates(
     std::vector<std::vector<Ort::ConstNode>> candidates,
-    std::unordered_set<size_t>& accepted_node_ids) {
+    const FusionDTypeContract& dtype_contract,
+    std::unordered_set<size_t>& accepted_node_ids,
+    std::vector<FusionDTypeRejection>& dtype_rejections) {
   std::vector<std::vector<Ort::ConstNode>> accepted;
   accepted.reserve(candidates.size());
 
@@ -61,6 +95,14 @@ std::vector<std::vector<Ort::ConstNode>> AcceptFusionCandidates(
     std::vector<size_t> node_ids;
     if (!NormalizeCandidate(candidate, node_ids) ||
         CandidateOverlapsAccepted(node_ids, accepted_node_ids)) {
+      continue;
+    }
+    std::string rejection_reason;
+    if (!CandidateSatisfiesDTypeContract(candidate, dtype_contract,
+                                         rejection_reason)) {
+      dtype_rejections.push_back(
+          {candidate, rejection_reason.empty() ? "dtype contract rejected"
+                                               : std::move(rejection_reason)});
       continue;
     }
 
@@ -92,10 +134,14 @@ void AddFusionMatch(std::vector<FusionMatch>& matches, const char* finder,
                     bool drop_constant_initializers,
                     std::vector<std::vector<Ort::ConstNode>> candidates,
                     std::unordered_set<size_t>& accepted_node_ids) {
+  const FusionDTypeContract& dtype_contract =
+      FusionDTypeContractForFinder(finder);
+  std::vector<FusionDTypeRejection> dtype_rejections;
   std::vector<std::vector<Ort::ConstNode>> accepted_fusions =
-      AcceptFusionCandidates(std::move(candidates), accepted_node_ids);
-  matches.push_back(
-      {finder, drop_constant_initializers, std::move(accepted_fusions)});
+      AcceptFusionCandidates(std::move(candidates), dtype_contract,
+                             accepted_node_ids, dtype_rejections);
+  matches.push_back({finder, drop_constant_initializers, dtype_contract,
+                     std::move(accepted_fusions), std::move(dtype_rejections)});
 }
 
 }  // namespace

@@ -55,6 +55,46 @@ __global__ void CumSumKernel(const T* input, T* output, int64_t output_size,
   }
 }
 
+__global__ void CumSumBFloat16Kernel(const __mt_bfloat16* input,
+                                     __mt_bfloat16* output,
+                                     int64_t output_size, int64_t axis_dim,
+                                     int64_t axis_stride, bool exclusive,
+                                     bool reverse) {
+  const int64_t thread_id =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t total_threads =
+      static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t index = thread_id; index < output_size;
+       index += total_threads) {
+    const int64_t axis_coord = (index / axis_stride) % axis_dim;
+    int64_t start = 0;
+    int64_t end = 0;
+    if (!reverse && !exclusive) {
+      end = axis_coord;
+    } else if (reverse && !exclusive) {
+      start = axis_coord;
+      end = axis_dim - 1;
+    } else if (!reverse && exclusive) {
+      end = axis_coord - 1;
+    } else {
+      start = axis_coord + 1;
+      end = axis_dim - 1;
+    }
+
+    if (end < start) {
+      output[index] = __float2bfloat16_rn(0.0f);
+      continue;
+    }
+    float sum = 0.0f;
+    int64_t data_index = index + (start - axis_coord) * axis_stride;
+    for (int64_t i = start; i <= end; ++i) {
+      sum += __bfloat162float(input[data_index]);
+      data_index += axis_stride;
+    }
+    output[index] = __float2bfloat16_rn(sum);
+  }
+}
+
 template <typename T>
 musaError_t LaunchTypedCumSum(const void* input, void* output,
                               int64_t output_size, int64_t axis_dim,
@@ -66,6 +106,21 @@ musaError_t LaunchTypedCumSum(const void* input, void* output,
   CumSumKernel<T><<<BlocksForCount(output_size), kThreadsPerBlock, 0, stream>>>(
       static_cast<const T*>(input), static_cast<T*>(output), output_size,
       axis_dim, axis_stride, exclusive, reverse);
+  return musaGetLastError();
+}
+
+template <>
+musaError_t LaunchTypedCumSum<__mt_bfloat16>(
+    const void* input, void* output, int64_t output_size, int64_t axis_dim,
+    int64_t axis_stride, bool exclusive, bool reverse, musaStream_t stream) {
+  if (output_size == 0) {
+    return musaSuccess;
+  }
+  CumSumBFloat16Kernel<<<BlocksForCount(output_size), kThreadsPerBlock, 0,
+                         stream>>>(static_cast<const __mt_bfloat16*>(input),
+                                   static_cast<__mt_bfloat16*>(output),
+                                   output_size, axis_dim, axis_stride, exclusive,
+                                   reverse);
   return musaGetLastError();
 }
 
@@ -83,6 +138,7 @@ musaError_t LaunchMusaCumSumKernel(const void* input, void* output,
   constexpr int32_t kDouble = 11;
   constexpr int32_t kUint32 = 12;
   constexpr int32_t kUint64 = 13;
+  constexpr int32_t kBFloat16 = 16;
   switch (elem_type) {
     case kInt32:
       return LaunchTypedCumSum<int32_t>(input, output, output_size, axis_dim,
@@ -105,6 +161,10 @@ musaError_t LaunchMusaCumSumKernel(const void* input, void* output,
     case kFloat16:
       return LaunchTypedCumSum<__half>(input, output, output_size, axis_dim,
                                        axis_stride, exclusive, reverse, stream);
+    case kBFloat16:
+      return LaunchTypedCumSum<__mt_bfloat16>(
+          input, output, output_size, axis_dim, axis_stride, exclusive, reverse,
+          stream);
     default:
       return musaErrorInvalidValue;
   }

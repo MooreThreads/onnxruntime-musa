@@ -106,12 +106,23 @@ musaError_t LaunchMusaClipKernel(const void* input, void* output,
       return LaunchClipTyped<int8_t>(input, output, params, stream);
     case MusaElementType::Uint8:
       return LaunchClipTyped<uint8_t>(input, output, params, stream);
+    case MusaElementType::Int16:
+      return LaunchClipTyped<int16_t>(input, output, params, stream);
+    case MusaElementType::Uint16:
+      return LaunchClipTyped<uint16_t>(input, output, params, stream);
+    case MusaElementType::Int32:
+      return LaunchClipTyped<int32_t>(input, output, params, stream);
+    case MusaElementType::Uint32:
+      return LaunchClipTyped<uint32_t>(input, output, params, stream);
     case MusaElementType::Int64:
       return LaunchClipTyped<int64_t>(input, output, params, stream);
     case MusaElementType::Uint64:
       return LaunchClipTyped<uint64_t>(input, output, params, stream);
     case MusaElementType::Float16:
       return LaunchClipFloatLikeTyped<__half>(input, output, params, stream);
+    case MusaElementType::BFloat16:
+      return LaunchClipFloatLikeTyped<__mt_bfloat16>(input, output, params,
+                                                     stream);
     default:
       return musaErrorNotSupported;
   }

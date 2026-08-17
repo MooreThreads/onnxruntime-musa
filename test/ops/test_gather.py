@@ -13,6 +13,7 @@
 """End-to-end CPU-vs-MUSA test for the Gather operator."""
 
 import numpy as np
+import pytest
 from onnx import helper
 
 from op_test_utils import (
@@ -21,6 +22,9 @@ from op_test_utils import (
     run_and_compare,
     run_model_and_compare,
     run_model_and_compare_with_cpu_fallback,
+    build_model_with_input_types,
+    run_with_iobinding,
+    float32_to_bfloat16_bits,
 )
 
 
@@ -117,6 +121,46 @@ def test_gather_uint16_int32_indices():
         outputs=[("Y", TensorProto.UINT16)],
         attrs={"axis": 1},
     )
+
+
+def test_gather_empty_int32_indices():
+    data = np.arange(3 * 4, dtype=np.uint32).reshape(3, 4)
+    indices = np.empty((0, 2), dtype=np.int32)
+    run_and_compare(
+        "Gather",
+        inputs={"data": data, "indices": indices},
+        outputs=[("Y", TensorProto.UINT32)],
+        attrs={"axis": -1},
+    )
+
+@pytest.mark.parametrize(("dtype", "tensor_type"), [
+    (np.uint8, TensorProto.UINT8), (np.int8, TensorProto.INT8),
+    (np.int16, TensorProto.INT16), (np.uint32, TensorProto.UINT32),
+    (np.uint64, TensorProto.UINT64), (np.float64, TensorProto.DOUBLE),
+])
+def test_gather_data_dtype_matrix(dtype, tensor_type):
+    data = np.arange(12, dtype=np.int64).reshape(3, 4).astype(dtype)
+    indices = np.array([2, 0], dtype=np.int64)
+    run_and_compare("Gather", inputs={"data": data, "indices": indices},
+                    outputs=[("Y", tensor_type)], attrs={"axis": 0})
+
+
+def test_gather_bfloat16_data():
+    data = float32_to_bfloat16_bits(
+        np.arange(12, dtype=np.float32).reshape(3, 4)
+    )
+    indices = np.array([2, 0], dtype=np.int64)
+    model = build_model_with_input_types(
+        "Gather", inputs={"data": data, "indices": indices},
+        input_types={"data": TensorProto.BFLOAT16},
+        outputs=[("Y", TensorProto.BFLOAT16)], attrs={"axis": 0},
+    )
+    (actual,) = run_with_iobinding(
+        model, {"data": data, "indices": indices},
+        {"data": TensorProto.BFLOAT16},
+        [("Y", TensorProto.BFLOAT16, (2, 4))], use_musa=True,
+    )
+    np.testing.assert_array_equal(actual, data[[2, 0]])
 
 
 def test_gather_shape_metadata_int64():

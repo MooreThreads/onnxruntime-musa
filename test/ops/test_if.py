@@ -13,6 +13,7 @@
 """End-to-end CPU-vs-MUSA test for the If control-flow operator."""
 
 import numpy as np
+import pytest
 from onnx import helper
 
 from op_test_utils import (
@@ -109,6 +110,19 @@ def test_if_opset13_int64_value():
         "X": np.arange(6, dtype=np.int64).reshape(2, 3),
     }
     run_model_and_compare(model, feeds)
+
+
+@pytest.mark.parametrize("np_dtype,tensor_type", [
+    (np.uint8, TensorProto.UINT8), (np.uint16, TensorProto.UINT16),
+    (np.uint32, TensorProto.UINT32), (np.uint64, TensorProto.UINT64),
+    (np.int8, TensorProto.INT8), (np.int16, TensorProto.INT16),
+    (np.int32, TensorProto.INT32), (np.float16, TensorProto.FLOAT16),
+    (np.float64, TensorProto.DOUBLE), (np.bool_, TensorProto.BOOL),
+])
+def test_if_registered_identity_dtypes(np_dtype, tensor_type):
+    model = _build_if_identity_model(tensor_type, 16)
+    x = np.array([[1, 0, 3], [0, 5, 6]], dtype=np_dtype)
+    run_model_and_compare(model, {"cond": np.array([True]), "X": x})
 
 
 def test_if_opset16_bfloat16_value():

@@ -1,6 +1,8 @@
 #include "math/mod_impl.h"
 #include "shared_inc/musa_kernel_common.mu.h"
 
+#include <type_traits>
+
 namespace {
 
 template <typename T>
@@ -15,9 +17,25 @@ __global__ void ModKernel(const T* lhs, const T* rhs, T* output,
     int64_t rhs_index = 0;
     ResolveBroadcastIndices(index, params, lhs_index, rhs_index);
     const T divisor = rhs[rhs_index];
-    output[index] = divisor == static_cast<T>(0)
-                        ? static_cast<T>(0)
-                        : lhs[lhs_index] % divisor;
+    if (divisor == static_cast<T>(0)) {
+      output[index] = static_cast<T>(0);
+      continue;
+    }
+    if constexpr (std::is_signed<T>::value) {
+      // Avoid the signed MIN % -1 overflow while preserving a zero remainder.
+      if (divisor == static_cast<T>(-1)) {
+        output[index] = static_cast<T>(0);
+        continue;
+      }
+    }
+    T remainder = lhs[lhs_index] % divisor;
+    // ONNX Mod with fmod=0 uses floor-modulo semantics: a non-zero remainder
+    // has the sign of the divisor, unlike the C++ truncating remainder.
+    if ((remainder > static_cast<T>(0) && divisor < static_cast<T>(0)) ||
+        (remainder < static_cast<T>(0) && divisor > static_cast<T>(0))) {
+      remainder += divisor;
+    }
+    output[index] = remainder;
   }
 }
 

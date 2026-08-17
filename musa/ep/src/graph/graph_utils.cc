@@ -58,6 +58,16 @@ bool IsIntTensorValueInfo(Ort::ConstValueInfo value_info) {
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
 }
 
+bool IsInt32TensorValueInfo(Ort::ConstValueInfo value_info) {
+  auto type_info = value_info.TypeInfo();
+  if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+
+  return type_info.GetTensorTypeAndShapeInfo().GetElementType() ==
+         ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32;
+}
+
 bool IsSmallInitializer(Ort::ConstValueInfo input) {
   if (!input.IsConstantInitializer()) {
     return false;

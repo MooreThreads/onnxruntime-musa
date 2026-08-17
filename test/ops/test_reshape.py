@@ -13,9 +13,19 @@
 """End-to-end CPU-vs-MUSA test for the Reshape operator."""
 
 import numpy as np
+import pytest
 from onnx import helper
 
-from op_test_utils import TensorProto, build_graph_model, run, run_and_compare, run_model_and_compare
+from op_test_utils import (
+    TensorProto,
+    build_graph_model,
+    build_model_with_input_types,
+    float32_to_bfloat16_bits,
+    run,
+    run_and_compare,
+    run_model_and_compare,
+    run_with_iobinding,
+)
 
 
 def test_reshape_float():
@@ -89,6 +99,38 @@ def test_reshape_float16():
         rtol=2e-2,
         atol=2e-2,
     )
+
+
+@pytest.mark.parametrize("dtype", [np.float64, np.int8, np.int16, np.uint8, np.uint16, np.uint32, np.uint64])
+def test_reshape_dtype_matrix(dtype):
+    x = np.arange(12, dtype=dtype).reshape(3, 4)
+    run_and_compare("Reshape", inputs={"X": x, "shape": np.array([2, 6], dtype=np.int64)},
+                    outputs=[("Y", TensorProto.DOUBLE if dtype == np.float64 else {
+                        np.int8: TensorProto.INT8, np.int16: TensorProto.INT16,
+                        np.uint8: TensorProto.UINT8, np.uint16: TensorProto.UINT16,
+                        np.uint32: TensorProto.UINT32, np.uint64: TensorProto.UINT64,
+                    }[dtype])])
+
+
+def test_reshape_bfloat16_preserves_bits():
+    x = float32_to_bfloat16_bits(
+        np.random.default_rng(4).standard_normal((2, 3, 4)).astype(np.float32)
+    )
+    shape = np.array([4, 6], dtype=np.int64)
+    model = build_model_with_input_types(
+        "Reshape",
+        inputs={"X": x, "shape": shape},
+        input_types={"X": TensorProto.BFLOAT16, "shape": TensorProto.INT64},
+        outputs=[("Y", TensorProto.BFLOAT16)],
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        {"X": x, "shape": shape},
+        {"X": TensorProto.BFLOAT16, "shape": TensorProto.INT64},
+        [("Y", TensorProto.BFLOAT16, (4, 6))],
+        use_musa=True,
+    )
+    np.testing.assert_array_equal(actual, x.reshape(4, 6))
 
 
 def test_reshape_alias_preserves_shared_input_consumers():

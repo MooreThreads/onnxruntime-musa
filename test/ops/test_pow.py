@@ -14,7 +14,14 @@
 
 import numpy as np
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import (
+    TensorProto,
+    bfloat16_bits_to_float32,
+    build_model_with_input_types,
+    float32_to_bfloat16_bits,
+    run_and_compare,
+    run_with_iobinding,
+)
 
 
 def test_pow_float():
@@ -33,3 +40,32 @@ def test_pow_integer_exponents():
     base = np.array([[2.0, 3.0, 4.0], [0.5, 1.5, 2.5]], dtype=np.float32)
     exp = np.array([0.0, 1.0, 3.0], dtype=np.float32)
     run_and_compare("Pow", inputs={"X": base, "Y": exp}, outputs=[("Z", TensorProto.FLOAT)])
+
+
+def test_pow_bfloat16_scalar_exponent():
+    base = float32_to_bfloat16_bits(
+        np.random.default_rng(3).uniform(0.25, 3.0, (4, 8)).astype(np.float32)
+    )
+    exponent = np.asarray(
+        float32_to_bfloat16_bits(np.array(2.0, dtype=np.float32)),
+        dtype=np.uint16,
+    )
+    expected = np.power(
+        bfloat16_bits_to_float32(base), bfloat16_bits_to_float32(exponent)
+    )
+    model = build_model_with_input_types(
+        "Pow",
+        inputs={"X": base, "Y": exponent},
+        input_types={"X": TensorProto.BFLOAT16, "Y": TensorProto.BFLOAT16},
+        outputs=[("Z", TensorProto.BFLOAT16)],
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        {"X": base, "Y": exponent},
+        {"X": TensorProto.BFLOAT16, "Y": TensorProto.BFLOAT16},
+        [("Z", TensorProto.BFLOAT16, expected.shape)],
+        use_musa=True,
+    )
+    np.testing.assert_allclose(
+        bfloat16_bits_to_float32(actual), expected, rtol=2e-2, atol=2e-2
+    )

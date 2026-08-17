@@ -46,6 +46,11 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
     splits.assign(
         count, shape0[static_cast<size_t>(axis)] / static_cast<int64_t>(count));
   }
+  if (std::any_of(splits.begin(), splits.end(),
+                  [](int64_t split) { return split < 0; })) {
+    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                      "Split sizes must be non-negative");
+  }
   size_t elem_size = ElementSize(elem_type);
   if (elem_size == 0) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,

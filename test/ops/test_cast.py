@@ -13,6 +13,7 @@
 """End-to-end CPU-vs-MUSA test for the Cast operator."""
 
 import numpy as np
+import pytest
 from onnx import helper
 
 from op_test_utils import (
@@ -145,6 +146,23 @@ def test_cast_int16_to_uint32():
         inputs={"X": x},
         outputs=[("Y", TensorProto.UINT32)],
         attrs={"to": TensorProto.UINT32},
+    )
+
+
+@pytest.mark.parametrize(
+    ("dtype", "tensor_type", "target_type"),
+    [
+        (np.uint16, TensorProto.UINT16, TensorProto.UINT64),
+        (np.uint64, TensorProto.UINT64, TensorProto.UINT16),
+    ],
+)
+def test_cast_unsigned_wide_dtype_matrix(dtype, tensor_type, target_type):
+    x = np.arange(24, dtype=np.uint64).reshape(4, 6).astype(dtype)
+    run_and_compare(
+        "Cast",
+        inputs={"X": x},
+        outputs=[("Y", target_type)],
+        attrs={"to": target_type},
     )
 
 

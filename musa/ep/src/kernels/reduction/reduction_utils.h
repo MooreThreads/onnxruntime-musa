@@ -75,12 +75,21 @@ inline MusaReduceParams MakeReduceParams(
 // ReduceSumSquare.
 inline OrtStatus* ReduceCompute(Ort::KernelContext& ctx,
                                 std::vector<int64_t> axes, bool keepdims,
-                                ReduceMode mode) {
+                                ReduceMode mode,
+                                bool noop_with_empty_axes = false) {
   Ort::ConstValue input0 = ctx.GetInput(0);
   auto input_info = input0.GetTensorTypeAndShapeInfo();
   auto elem_type = input_info.GetElementType();
   auto input_shape = input_info.GetShape();
   if (ctx.GetInputCount() > 1) axes = ReadIntTensor(ctx, 1);
+  if (axes.empty() && noop_with_empty_axes) {
+    Ort::UnownedValue y = ctx.GetOutput(0, input_shape);
+    if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
+      return UnsupportedReduceStatus("Reduce requires MUSA device tensors");
+    }
+    return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes(),
+                         GetComputeStream(ctx));
+  }
   auto axes_set = AxesSet(axes, input_shape.size());
 
   std::vector<int64_t> output_shape;

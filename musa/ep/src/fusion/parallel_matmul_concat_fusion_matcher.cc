@@ -26,12 +26,31 @@
 #include <utility>
 #include <vector>
 
+#include "fusion/fusion_dtype.h"
 #include "fusion/fusion_matcher.h"
 #include "fusion/fusion_matcher_utils.h"
 #include "graph/graph_utils.h"
 #include "plugin_ep_utils.h"
 
 namespace musa_ep {
+namespace {
+
+bool IsParallelMatMulConcatStorageType(ONNXTensorElementDataType elem_type) {
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+}
+
+bool RequireSameParallelMatMulConcatStorageType(
+    const std::vector<Ort::ConstValueInfo>& value_infos) {
+  ONNXTensorElementDataType elem_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  if (!RequireSameElementType(value_infos, elem_type)) {
+    return false;
+  }
+  return IsParallelMatMulConcatStorageType(elem_type);
+}
+
+}  // namespace
 
 bool CanFuseParallelMatMulConcat(
     Ort::ConstNode concat_node,
@@ -40,11 +59,15 @@ bool CanFuseParallelMatMulConcat(
     std::vector<Ort::ConstNode>& fusion_nodes) {
   std::vector<Ort::ConstValueInfo> concat_inputs = concat_node.GetInputs();
   std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
+  std::vector<Ort::ConstValueInfo> dtype_value_infos;
   if (concat_inputs.size() < 2 || concat_outputs.size() != 1 ||
       graph_output_names.count(Name(concat_outputs[0])) != 0 ||
-      !IsFloatTensorValueInfo(concat_outputs[0])) {
+      !IsParallelMatMulConcatStorageType(
+          GetTensorElementType(concat_outputs[0])
+              .value_or(ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED))) {
     return false;
   }
+  dtype_value_infos.push_back(concat_outputs[0]);
 
   auto concat_axis_attr = GetIntAttribute(concat_node, "axis");
   if (!concat_axis_attr.has_value()) {
@@ -67,10 +90,10 @@ bool CanFuseParallelMatMulConcat(
     if (unsqueeze_output_consumers.size() != 1 ||
         unsqueeze_output_consumers[0].node.GetId() != concat_node.GetId() ||
         unsqueeze_output_consumers[0].index != static_cast<int64_t>(i) ||
-        graph_output_names.count(Name(concat_input)) != 0 ||
-        !IsFloatTensorValueInfo(concat_input)) {
+        graph_output_names.count(Name(concat_input)) != 0) {
       return false;
     }
+    dtype_value_infos.push_back(concat_input);
 
     Ort::ValueInfoConsumerProducerInfo producer =
         concat_input.GetProducerNode();
@@ -94,10 +117,10 @@ bool CanFuseParallelMatMulConcat(
     if (matmul_output_consumers.size() != 1 ||
         matmul_output_consumers[0].node.GetId() != unsqueeze_node.GetId() ||
         matmul_output_consumers[0].index != 0 ||
-        graph_output_names.count(Name(matmul_output)) != 0 ||
-        !IsFloatTensorValueInfo(matmul_output)) {
+        graph_output_names.count(Name(matmul_output)) != 0) {
       return false;
     }
+    dtype_value_infos.push_back(matmul_output);
 
     Ort::ValueInfoConsumerProducerInfo matmul_producer =
         matmul_output.GetProducerNode();
@@ -109,11 +132,11 @@ bool CanFuseParallelMatMulConcat(
     std::vector<Ort::ConstValueInfo> matmul_inputs = matmul_node.GetInputs();
     std::vector<Ort::ConstValueInfo> matmul_outputs = matmul_node.GetOutputs();
     if (matmul_inputs.size() != 2 || matmul_outputs.size() != 1 ||
-        Name(matmul_outputs[0]) != Name(matmul_output) ||
-        !IsFloatTensorValueInfo(matmul_inputs[0]) ||
-        !IsFloatTensorValueInfo(matmul_inputs[1])) {
+        Name(matmul_outputs[0]) != Name(matmul_output)) {
       return false;
     }
+    dtype_value_infos.push_back(matmul_inputs[0]);
+    dtype_value_infos.push_back(matmul_inputs[1]);
 
     const std::string input_name = Name(matmul_inputs[0]);
     if (common_input_name.empty()) {
@@ -176,6 +199,10 @@ bool CanFuseParallelMatMulConcat(
 
     matmul_nodes.push_back(matmul_node);
     unsqueeze_nodes.push_back(unsqueeze_node);
+  }
+
+  if (!RequireSameParallelMatMulConcatStorageType(dtype_value_infos)) {
+    return false;
   }
 
   auto concat_shape = GetTensorShape(concat_outputs[0]);

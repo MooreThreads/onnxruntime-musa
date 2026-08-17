@@ -22,11 +22,16 @@ from onnx import helper, numpy_helper
 from op_test_utils import TensorProto, musa_devices, run_model_and_compare
 
 
-def _build_masked_embedding_lookup_model() -> bytes:
+def _build_masked_embedding_lookup_model(
+    table_dtype=np.float32, tensor_proto_dtype=TensorProto.FLOAT
+) -> bytes:
     sequence = 6
     embedding_dim = 4
+    table_values = np.arange(8 * embedding_dim, dtype=np.float32).reshape(
+        8, embedding_dim
+    )
     table = numpy_helper.from_array(
-        np.arange(8 * embedding_dim, dtype=np.float32).reshape(8, embedding_dim),
+        table_values.astype(table_dtype),
         name="table",
     )
     reshape_shape = numpy_helper.from_array(np.array([-1], dtype=np.int64), name="shape")
@@ -38,7 +43,7 @@ def _build_masked_embedding_lookup_model() -> bytes:
         np.array([0], dtype=np.int64), name="unsqueeze_axes"
     )
     zero_data = numpy_helper.from_array(
-        np.zeros((sequence, embedding_dim), dtype=np.float32), name="zero_data"
+        np.zeros((sequence, embedding_dim), dtype=table_dtype), name="zero_data"
     )
     nodes = [
         helper.make_node("Reshape", ["Ids", "shape"], ["FlatIds"], name="Reshape"),
@@ -79,7 +84,7 @@ def _build_masked_embedding_lookup_model() -> bytes:
         [helper.make_tensor_value_info("Ids", TensorProto.INT64, [1, sequence])],
         [
             helper.make_tensor_value_info(
-                "Y", TensorProto.FLOAT, [1, sequence, embedding_dim]
+                "Y", tensor_proto_dtype, [1, sequence, embedding_dim]
             )
         ],
         initializer=[
@@ -145,3 +150,41 @@ def test_masked_embedding_lookup_fusion(tmp_path):
         }
         & op_names
     )
+
+
+def test_masked_embedding_lookup_fusion_float16_payload(tmp_path):
+    model = _build_masked_embedding_lookup_model(np.float16, TensorProto.FLOAT16)
+    ids = np.array([[3, -1, 0, 7, -1, 2]], dtype=np.int64)
+    feeds = {"Ids": ids}
+
+    (actual,) = run_model_and_compare(model, feeds, rtol=0, atol=0)
+    table = np.arange(8 * 4, dtype=np.float32).reshape(8, 4).astype(np.float16)
+    expected = np.zeros((1, 6, 4), dtype=np.float16)
+    flat = ids.reshape(-1)
+    for i, value in enumerate(flat):
+        if value >= 0:
+            expected[0, i, :] = table[value]
+    np.testing.assert_array_equal(actual, expected)
+
+    so = ort.SessionOptions()
+    so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    so.enable_profiling = True
+    so.profile_file_prefix = str(tmp_path / "masked_embedding_lookup_f16")
+    so.add_provider_for_devices(musa_devices(), {})
+    session = ort.InferenceSession(model, sess_options=so)
+    session.run(None, feeds)
+    profile_path = session.end_profiling()
+    try:
+        with open(profile_path, "r", encoding="utf-8") as f:
+            events = json.load(f)
+    finally:
+        if os.path.exists(profile_path):
+            os.remove(profile_path)
+
+    node_events = [
+        e
+        for e in events
+        if e.get("cat") == "Node" and e.get("name", "").endswith("_kernel_time")
+    ]
+    op_names = {e.get("args", {}).get("op_name") for e in node_events}
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)

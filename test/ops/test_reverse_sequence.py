@@ -13,6 +13,7 @@
 """End-to-end CPU-vs-MUSA tests for ReverseSequence."""
 
 import numpy as np
+import pytest
 
 from op_test_utils import TensorProto, run_and_compare
 
@@ -62,4 +63,28 @@ def test_reverse_sequence_bool_opset10():
         opset=10,
         rtol=0,
         atol=0,
+    )
+
+@pytest.mark.parametrize(("dtype", "tensor_type"), [
+    (np.float16, TensorProto.FLOAT16), (np.float64, TensorProto.DOUBLE),
+    (np.int8, TensorProto.INT8), (np.int16, TensorProto.INT16),
+    (np.int32, TensorProto.INT32), (np.uint8, TensorProto.UINT8),
+    (np.uint16, TensorProto.UINT16), (np.uint32, TensorProto.UINT32),
+    (np.uint64, TensorProto.UINT64),
+])
+def test_reverse_sequence_fixed_size_dtype_matrix(dtype, tensor_type):
+    x = np.arange(3 * 5 * 2, dtype=np.int64).reshape(3, 5, 2).astype(dtype)
+    sequence_lens = np.array([2, 5, 3], dtype=np.int64)
+    run_and_compare("ReverseSequence", inputs={"X": x, "sequence_lens": sequence_lens},
+                    outputs=[("Y", tensor_type)], attrs={"time_axis": 1, "batch_axis": 0}, opset=10)
+
+
+def test_reverse_sequence_float16():
+    x = np.arange(3 * 5 * 2, dtype=np.float16).reshape(3, 5, 2)
+    sequence_lens = np.array([2, 5, 3], dtype=np.int64)
+    run_and_compare(
+        "ReverseSequence", inputs={"X": x, "sequence_lens": sequence_lens},
+        outputs=[("Y", TensorProto.FLOAT16)],
+        attrs={"time_axis": 1, "batch_axis": 0}, opset=10,
+        rtol=2e-2, atol=2e-2,
     )

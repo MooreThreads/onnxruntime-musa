@@ -96,8 +96,6 @@ struct ParallelLinearScratch {
   DeviceBuffer merged_weights;
   DeviceBuffer merged_output;
   DeviceBuffer pointer_arrays;
-  size_t merged_weight_bytes = 0;
-  bool merged_weights_valid = false;
 };
 
 ParallelLinearScratch& ScratchForStream(const void* owner,
@@ -410,17 +408,10 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
       const size_t merged_weight_bytes =
           static_cast<size_t>(weight_shape[0] * branch_count * branch_width) *
           sizeof(float);
-      if (scratch.merged_weight_bytes != merged_weight_bytes) {
-        scratch.merged_weights_valid = false;
-        scratch.merged_weight_bytes = merged_weight_bytes;
-      }
       RETURN_IF_ERROR(
           scratch.merged_weights.Resize(merged_weight_bytes, stream));
-      if (!scratch.merged_weights_valid) {
-        MergeWeights(weight_pointers, weight_shape,
-                     scratch.merged_weights.data<float>(), stream);
-        scratch.merged_weights_valid = true;
-      }
+      MergeWeights(weight_pointers, weight_shape,
+                   scratch.merged_weights.data<float>(), stream);
 
       const size_t merged_output_bytes =
           static_cast<size_t>(rows * branch_count * branch_width) *

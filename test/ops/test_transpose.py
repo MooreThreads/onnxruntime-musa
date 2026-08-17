@@ -13,6 +13,7 @@
 """End-to-end CPU-vs-MUSA test for the Transpose operator."""
 
 import numpy as np
+import pytest
 
 from op_test_utils import (
     TensorProto,
@@ -63,9 +64,26 @@ def test_transpose_float16_perm():
     )
 
 
+def test_transpose_float64_perm():
+    x = np.arange(24, dtype=np.float64).reshape(2, 3, 4)
+    run_and_compare(
+        "Transpose", inputs={"X": x}, outputs=[("Y", TensorProto.DOUBLE)],
+        attrs={"perm": [2, 0, 1]},
+    )
+
+
 def test_transpose_uint16_default():
     x = np.arange(2 * 3 * 4, dtype=np.uint16).reshape(2, 3, 4)
     run_and_compare("Transpose", inputs={"X": x}, outputs=[("Y", TensorProto.UINT16)])
+
+@pytest.mark.parametrize(("dtype", "tensor_type"), [
+    (np.uint8, TensorProto.UINT8), (np.uint32, TensorProto.UINT32),
+    (np.uint64, TensorProto.UINT64), (np.int8, TensorProto.INT8),
+    (np.int16, TensorProto.INT16), (np.int32, TensorProto.INT32),
+])
+def test_transpose_integer_dtype_matrix(dtype, tensor_type):
+    x = np.arange(24, dtype=np.int64).reshape(2, 3, 4).astype(dtype)
+    run_and_compare("Transpose", inputs={"X": x}, outputs=[("Y", tensor_type)], attrs={"perm": [2, 0, 1]})
 
 
 def test_transpose_bfloat16_perm():

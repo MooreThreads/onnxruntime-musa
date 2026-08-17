@@ -126,3 +126,14 @@ def test_fused_gemm_double_relu():
         use_musa=True,
     )
     np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-10)
+
+
+def test_fused_gemm_float16_relu():
+    rng = np.random.default_rng(6)
+    a = rng.standard_normal((4, 8)).astype(np.float16)
+    b = rng.standard_normal((8, 5)).astype(np.float16)
+    c = rng.standard_normal((5,)).astype(np.float16)
+    run_and_compare("FusedGemm", inputs={"A": a, "B": b, "C": c},
+                    outputs=[("Y", TensorProto.FLOAT16)],
+                    attrs={"activation": "Relu"}, domain="com.microsoft",
+                    rtol=2e-2, atol=2e-2)

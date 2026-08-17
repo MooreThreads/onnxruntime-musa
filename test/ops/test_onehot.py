@@ -13,6 +13,7 @@
 """End-to-end CPU-vs-MUSA tests for the OneHot operator."""
 
 import numpy as np
+import pytest
 from onnx import helper
 
 from op_test_utils import (
@@ -20,6 +21,7 @@ from op_test_utils import (
     build_graph_model,
     run_and_compare,
     run_model_and_compare,
+    run,
 )
 
 
@@ -47,6 +49,29 @@ def test_onehot_negative_and_out_of_range_indices():
         attrs={"axis": -1},
         opset=18,
     )
+
+
+@pytest.mark.parametrize("np_dtype,tensor_type", [
+    (np.uint8, TensorProto.UINT8), (np.uint16, TensorProto.UINT16),
+    (np.uint32, TensorProto.UINT32), (np.uint64, TensorProto.UINT64),
+    (np.int8, TensorProto.INT8), (np.int16, TensorProto.INT16),
+    (np.int32, TensorProto.INT32), (np.int64, TensorProto.INT64),
+    (np.float16, TensorProto.FLOAT16), (np.float32, TensorProto.FLOAT),
+    (np.float64, TensorProto.DOUBLE), (np.bool_, TensorProto.BOOL),
+])
+def test_onehot_registered_values_dtypes(np_dtype, tensor_type):
+    indices = np.array([0, 2], dtype=np.int64)
+    depth = np.array(3, dtype=np.int64)
+    values = np.array([0, 1], dtype=np_dtype)
+    model = build_graph_model(
+        [helper.make_node("OneHot", ["indices", "depth", "values"], ["Y"], axis=-1)],
+        inputs={"indices": indices, "depth": depth, "values": values},
+        outputs=[("Y", tensor_type)], opset=18, name="onehot_dtype")
+    (actual,) = run(model, {"indices": indices, "depth": depth, "values": values}, use_musa=True)
+    expected = np.zeros((2, 3), dtype=np_dtype)
+    expected[0, 0] = values[1]
+    expected[1, 2] = values[1]
+    np.testing.assert_array_equal(actual, expected)
 
 
 def test_onehot_tile_mul_chain():

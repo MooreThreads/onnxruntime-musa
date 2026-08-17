@@ -97,17 +97,41 @@ std::vector<std::string> ValueInfoNames(
   return names;
 }
 
+std::vector<std::string> ValueInfoDTypes(
+    const std::vector<Ort::ConstValueInfo>& value_infos) {
+  std::vector<std::string> dtypes;
+  dtypes.reserve(value_infos.size());
+  for (Ort::ConstValueInfo value_info : value_infos) {
+    auto elem_type = musa_ep::GetTensorElementType(value_info);
+    dtypes.push_back(elem_type.has_value()
+                         ? musa_ep::FusionDTypeName(*elem_type)
+                         : "dtype=?");
+  }
+  return dtypes;
+}
+
 RuntimeGraphNodeMetadata CreateFusionRuntimeMetadata(
     const Ort::ConstGraph& graph, const Ort::ConstNode& fused_node,
-    const std::string& display_type) {
+    const std::string& display_type, const char* finder_name) {
   RuntimeGraphNodeMetadata metadata;
   metadata.kind = "fusion";
   metadata.display_type = display_type;
   metadata.node_name = fused_node.GetName();
   metadata.domain_name = fused_node.GetDomain();
   metadata.since_version = fused_node.GetSinceVersion();
-  metadata.inputs = ValueInfoNames(fused_node.GetInputs());
-  metadata.outputs = ValueInfoNames(fused_node.GetOutputs());
+  const std::vector<Ort::ConstValueInfo> inputs = fused_node.GetInputs();
+  const std::vector<Ort::ConstValueInfo> outputs = fused_node.GetOutputs();
+  metadata.inputs = ValueInfoNames(inputs);
+  metadata.outputs = ValueInfoNames(outputs);
+  metadata.input_dtypes = ValueInfoDTypes(inputs);
+  metadata.output_dtypes = ValueInfoDTypes(outputs);
+
+  const musa_ep::FusionDTypeContract& contract =
+      musa_ep::FusionDTypeContractForFinder(finder_name);
+  metadata.dtype_storage_types = contract.storage_types;
+  metadata.dtype_accumulator_type = contract.accumulator_type;
+  metadata.dtype_output_policy = contract.output_type_policy;
+  metadata.dtype_cast_policy = contract.cast_policy;
 
   std::unordered_set<std::string> seen_source_ops;
   for (Ort::ConstNode source_node : graph.GetNodes()) {
@@ -123,6 +147,31 @@ RuntimeGraphNodeMetadata CreateFusionRuntimeMetadata(
     }
   }
   return metadata;
+}
+
+void AppendTensorTypes(const std::vector<Ort::ConstValueInfo>& value_infos,
+                       std::vector<ONNXTensorElementDataType>& elem_types) {
+  elem_types.reserve(elem_types.size() + value_infos.size());
+  for (Ort::ConstValueInfo value_info : value_infos) {
+    auto elem_type = musa_ep::GetTensorElementType(value_info);
+    if (elem_type.has_value()) {
+      elem_types.push_back(*elem_type);
+    }
+  }
+}
+
+musa_ep::FusionComputeConfig CreateFusionComputeConfig(
+    Ort::ConstNode fused_node, const char* finder) {
+  const musa_ep::FusionDTypeContract& contract =
+      musa_ep::FusionDTypeContractForFinder(finder);
+  musa_ep::FusionComputeConfig config;
+  config.storage_types = contract.storage_types;
+  config.accumulator_type = contract.accumulator_type;
+  config.output_type_policy = contract.output_type_policy;
+  config.cast_policy = contract.cast_policy;
+  AppendTensorTypes(fused_node.GetInputs(), config.input_types);
+  AppendTensorTypes(fused_node.GetOutputs(), config.output_types);
+  return config;
 }
 
 std::string RuntimeTypeName(const FusionNodeCompute& compute) {
@@ -229,81 +278,116 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
 
       std::string fused_node_name = fused_node.GetName();
       auto& fusion_compute = ep->GetFusionComputes()[fused_node_name];
+      const char* finder_name = nullptr;
       if (IsMultiKqvMhaOutputProjectionFusionGraph(graph)) {
         fusion_compute =
             CreateMultiKqvMhaOutputProjectionFusion(graph, fused_node);
+        finder_name = "FindMultiKqvMhaOutputProjectionFusions";
       } else if (IsMhtaScaledDotProductAttentionFusionGraph(graph)) {
         fusion_compute =
             CreateMhtaScaledDotProductAttentionFusion(graph, fused_node);
+        finder_name = "FindMhtaScaledDotProductAttentionFusions";
       } else if (IsQkvAttentionOutputProjectionFusionGraph(graph)) {
         fusion_compute =
             CreateQkvAttentionOutputProjectionFusion(graph, fused_node);
+        finder_name = "FindQkvAttentionOutputProjectionFusions";
       } else if (IsMoEFusionGraph(graph)) {
         fusion_compute = CreateMoEFusion(graph, fused_node);
+        finder_name = "FindMoEFusions";
       } else if (IsSplitSequenceMoEFusionGraph(graph)) {
         fusion_compute = CreateSplitSequenceMoEFusion(graph, fused_node);
+        finder_name = "FindSplitSequenceMoEFusions";
       } else if (IsParallelEinsumActivationFusionGraph(graph)) {
         fusion_compute =
             CreateParallelEinsumActivationFusion(graph, fused_node);
+        finder_name = "FindParallelEinsumActivationFusions";
       } else if (IsRmsNormFusionGraph(graph)) {
         fusion_compute = CreateRmsNormFusion(graph, fused_node);
+        finder_name = "FindRmsNormFusions";
       } else if (IsCenteredReduceFusionGraph(graph)) {
         fusion_compute = CreateCenteredReduceFusion(graph, fused_node);
+        finder_name = "FindCenteredReduceFusions";
       } else if (IsSegmentMaxBroadcastFusionGraph(graph)) {
         fusion_compute = CreateSegmentMaxBroadcastFusion(graph, fused_node);
+        finder_name = "FindSegmentMaxBroadcastFusions";
       } else if (IsRecRankCalibrationFusionGraph(graph)) {
         fusion_compute = CreateRecRankCalibrationFusion(graph, fused_node);
+        finder_name = "FindRecRankCalibrationFusions";
       } else if (IsTargetIdCountEmbeddingFusionGraph(graph)) {
         fusion_compute = CreateTargetIdCountEmbeddingFusion(graph, fused_node);
+        finder_name = "FindTargetIdCountEmbeddingFusions";
       } else if (IsMaskedEmbeddingLookupFusionGraph(graph)) {
         fusion_compute = CreateMaskedEmbeddingLookupFusion(graph, fused_node);
+        finder_name = "FindMaskedEmbeddingLookupFusions";
       } else if (IsSparseIdToMaskFusionGraph(graph)) {
         fusion_compute = CreateSparseIdToMaskFusion(graph, fused_node);
+        finder_name = "FindSparseIdToMaskFusions";
       } else if (IsBucketizeGatherFusionGraph(graph)) {
         fusion_compute = CreateBucketizeGatherFusion(graph, fused_node);
+        finder_name = "FindBucketizeGatherFusions";
       } else if (IsModuloGatherFusionGraph(graph)) {
         fusion_compute = CreateModuloGatherFusion(graph, fused_node);
+        finder_name = "FindModuloGatherFusions";
       } else if (IsReplaceInvalidIdFusionGraph(graph)) {
         fusion_compute = CreateReplaceInvalidIdFusion(graph, fused_node);
+        finder_name = "FindReplaceInvalidIdFusions";
       } else if (IsMathConcatLogFusionGraph(graph)) {
         fusion_compute = CreateMathConcatLogFusion(graph, fused_node);
+        finder_name = "FindMathConcatLogFusions";
       } else if (IsSplitUnsqueezeConcatFusionGraph(graph)) {
         fusion_compute = CreateSplitUnsqueezeConcatFusion(graph, fused_node);
+        finder_name = "FindSplitUnsqueezeConcatFusions";
       } else if (IsSplitReduceFusionGraph(graph)) {
         fusion_compute = CreateSplitReduceFusion(graph, fused_node);
+        finder_name = "FindSplitReduceFusions";
       } else if (IsConcatMatMulFusionGraph(graph)) {
         fusion_compute = CreateConcatMatMulFusion(graph, fused_node);
+        finder_name = "FindConcatMatMulFusions";
       } else if (IsConcatSplitFusionGraph(graph)) {
         fusion_compute = CreateConcatSplitFusion(graph, fused_node);
+        finder_name = "FindConcatSplitFusions";
       } else if (IsSplitConcatFusionGraph(graph)) {
         fusion_compute = CreateSplitConcatFusion(graph, fused_node);
+        finder_name = "FindSplitConcatFusions";
       } else if (IsParallelMatMulConcatFusionGraph(graph)) {
         fusion_compute = CreateParallelMatMulConcatFusion(graph, fused_node);
+        finder_name = "FindParallelMatMulConcatFusions";
       } else if (IsParallelLinearFusionGraph(graph)) {
         fusion_compute = CreateParallelLinearFusion(graph, fused_node);
+        finder_name = "FindParallelLinearFusions";
       } else if (IsStridedViewFusionGraph(graph)) {
         fusion_compute = CreateStridedViewFusion(graph, fused_node);
+        finder_name = "FindStridedViewFusions";
       } else if (IsShapeReshapeFusionGraph(graph)) {
         fusion_compute = CreateShapeReshapeFusion(graph, fused_node);
+        finder_name = "FindShapeReshapeFusions";
       } else if (IsTileConcatFusionGraph(graph)) {
         fusion_compute = CreateTileConcatFusion(graph, fused_node);
+        finder_name = "FindTileConcatFusions";
       } else if (IsSliceConcatFusionGraph(graph)) {
         fusion_compute = CreateSliceConcatFusion(graph, fused_node);
+        finder_name = "FindSliceConcatFusions";
       } else if (IsConcatReshapeFusionGraph(graph)) {
         fusion_compute = CreateConcatReshapeFusion(graph, fused_node);
+        finder_name = "FindConcatReshapeFusions";
       } else if (IsGemmActivationFusionGraph(graph)) {
         fusion_compute = CreateGemmActivationFusion(graph, fused_node);
+        finder_name = "FindGemmActivationFusions";
       } else if (IsFusedGemmFusionGraph(graph)) {
         fusion_compute = CreateFusedGemmFusion(graph, fused_node);
+        finder_name = "FindFusedGemmFusions";
       } else {
         throw std::runtime_error("unsupported MUSA fusion graph: " +
                                  fused_node_name);
       }
+      fusion_compute->SetDTypeConfig(
+          CreateFusionComputeConfig(fused_node, finder_name));
       if (RuntimeGraphDumpEnabled()) {
         RegisterRuntimeFusionInstance(
             fusion_compute.get(),
             CreateFusionRuntimeMetadata(graph, fused_node,
-                                        RuntimeTypeName(*fusion_compute)));
+                                        RuntimeTypeName(*fusion_compute),
+                                        finder_name));
       }
       node_compute_infos[i] = CreateFusionNodeComputeInfo(*ep);
     }

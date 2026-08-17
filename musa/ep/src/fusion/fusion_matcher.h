@@ -21,12 +21,21 @@
 #include <unordered_set>
 #include <vector>
 
+#include "fusion/fusion_dtype.h"
+
 namespace musa_ep {
+
+struct FusionDTypeRejection {
+  std::vector<Ort::ConstNode> nodes;
+  std::string reason;
+};
 
 struct FusionMatch {
   const char* finder;
   bool drop_constant_initializers;
+  FusionDTypeContract dtype_contract;
   std::vector<std::vector<Ort::ConstNode>> fusions;
+  std::vector<FusionDTypeRejection> dtype_rejections;
 };
 
 std::vector<FusionMatch> FindFusionMatches(

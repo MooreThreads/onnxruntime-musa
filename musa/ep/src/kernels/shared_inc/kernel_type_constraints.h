@@ -147,6 +147,24 @@ inline std::vector<const OrtDataType*> FloatLikeTensorTypes() {
   };
 }
 
+// muDNN MatMul/BatchMatMul device dispatch excludes DOUBLE.
+inline std::vector<const OrtDataType*> MatMulTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+  };
+}
+
+// ONNX random generator schemas through opset 19 do not include BF16.
+inline std::vector<const OrtDataType*> RandomTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+  };
+}
+
 inline std::vector<const OrtDataType*> FloatTensorTypes() {
   return {GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)};
 }
@@ -158,8 +176,26 @@ inline std::vector<const OrtDataType*> ClipTensorTypes() {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+  };
+}
+
+inline std::vector<const OrtDataType*> PReluOpset16TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
   };
 }
 
@@ -212,6 +248,12 @@ inline std::vector<const OrtDataType*> MaxPoolOpset12TensorTypes() {
 
 inline std::vector<const OrtDataType*> TopKTensorTypes() {
   return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
@@ -222,8 +264,18 @@ inline std::vector<const OrtDataType*> TopKTensorTypes() {
 
 inline std::vector<const OrtDataType*> UniqueTensorTypes() {
   return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL),
   };
 }
 

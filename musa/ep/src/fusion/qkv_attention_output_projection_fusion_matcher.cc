@@ -57,7 +57,9 @@ bool CanFuseQkvAttentionOutputProjection(
     return false;
   if (GetIntAttribute(attention, "unidirectional").value_or(0) != 0)
     return false;
-  if (ai.size() == 4 && !IsIntTensorValueInfo(ai[3])) return false;
+  // The fused runtime consumes the mask as int32_t. Keep the matcher aligned
+  // with both the standalone Attention registration and fusion compute path.
+  if (ai.size() == 4 && !IsInt32TensorValueInfo(ai[3])) return false;
   auto qkv = GetIntsAttribute(attention, "qkv_hidden_sizes");
   if (!qkv.has_value() || qkv->size() != 3 || (*qkv)[0] != (*qkv)[1] ||
       (*qkv)[1] != (*qkv)[2] ||

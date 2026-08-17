@@ -17,9 +17,12 @@
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <string>
 #include <unordered_set>
 #include <vector>
+
+#include "fusion/fusion_dtype.h"
 
 namespace {
 
@@ -76,8 +79,9 @@ std::string NodeId(const std::string& prefix, const Ort::ConstNode& node) {
   return prefix + "_" + NodeId(node);
 }
 
-std::string EdgeKey(const std::string& from, const std::string& to) {
-  return from + "\n" + to;
+std::string EdgeKey(const std::string& from, const std::string& to,
+                    const std::string& label) {
+  return from + "\n" + to + "\n" + label;
 }
 
 std::string NumberedPath(const char* configured_path,
@@ -109,13 +113,37 @@ std::string NumberedPath(const char* configured_path,
   return path + "_" + std::to_string(index);
 }
 
+std::string DTypeLabel(Ort::ConstValueInfo value_info) {
+  try {
+    auto elem_type = musa_ep::GetTensorElementType(value_info);
+    if (elem_type.has_value()) {
+      return musa_ep::FusionDTypeName(*elem_type);
+    }
+  } catch (...) {
+  }
+  return "dtype=?";
+}
+
+std::string ValueLabel(Ort::ConstValueInfo value_info) {
+  if (value_info == nullptr) {
+    return "";
+  }
+  return DTypeLabel(value_info);
+}
+
 void WriteEdge(std::ostream& out, std::unordered_set<std::string>& seen,
-               const std::string& from, const std::string& to) {
-  const std::string key = EdgeKey(from, to);
+               const std::string& from, const std::string& to,
+               Ort::ConstValueInfo value_info) {
+  const std::string label = ValueLabel(value_info);
+  const std::string key = EdgeKey(from, to, label);
   if (!seen.insert(key).second) {
     return;
   }
-  out << "  " << from << " --> " << to << "\n";
+  out << "  " << from << " -->";
+  if (!label.empty()) {
+    out << "|\"" << EscapeLabel(label) << "\"|";
+  }
+  out << " " << to << "\n";
 }
 
 std::string NodeLabel(const Ort::ConstNode& node) {
@@ -134,6 +162,47 @@ void WriteGraph(std::ostream& out, const OrtGraph& ort_graph,
   Ort::ConstGraph graph{&ort_graph};
   const std::vector<Ort::ConstNode> nodes = graph.GetNodes();
 
+  std::map<std::string, Ort::ConstValueInfo> external_values;
+  std::unordered_set<std::string> produced_values;
+  std::unordered_set<std::string> consumed_values;
+  for (const Ort::ConstNode& node : nodes) {
+    for (Ort::ConstValueInfo input : node.GetInputs()) {
+      if (input != nullptr && !input.GetName().empty()) {
+        consumed_values.insert(input.GetName());
+      }
+    }
+    for (Ort::ConstValueInfo output : node.GetOutputs()) {
+      if (output != nullptr && !output.GetName().empty()) {
+        produced_values.insert(output.GetName());
+      }
+    }
+  }
+
+  for (const Ort::ConstNode& node : nodes) {
+    for (Ort::ConstValueInfo input : node.GetInputs()) {
+      if (input != nullptr && !input.GetName().empty() &&
+          produced_values.count(input.GetName()) == 0) {
+        external_values.emplace(input.GetName(), input);
+      }
+    }
+    for (Ort::ConstValueInfo output : node.GetOutputs()) {
+      if (output != nullptr && !output.GetName().empty() &&
+          consumed_values.count(output.GetName()) == 0) {
+        external_values.emplace(output.GetName(), output);
+      }
+    }
+  }
+
+  uint64_t value_index = 0;
+  std::map<std::string, std::string> external_value_ids;
+  for (const auto& [value_name, value_info] : external_values) {
+    const std::string value_id =
+        node_prefix + "_value_" + std::to_string(value_index++);
+    external_value_ids.emplace(value_name, value_id);
+    out << "    " << value_id << "[\"" << EscapeLabel(ValueLabel(value_info))
+        << "\"]\n";
+  }
+
   for (const Ort::ConstNode& node : nodes) {
     out << "    " << NodeId(node_prefix, node) << "[\""
         << EscapeLabel(NodeLabel(node)) << "\"]\n";
@@ -148,7 +217,26 @@ void WriteGraph(std::ostream& out, const OrtGraph& ort_graph,
 
       Ort::ValueInfoConsumerProducerInfo producer = input.GetProducerNode();
       if (producer.node != nullptr) {
-        WriteEdge(out, seen_edges, NodeId(node_prefix, producer.node), to);
+        WriteEdge(out, seen_edges, NodeId(node_prefix, producer.node), to,
+                  input);
+        continue;
+      }
+
+      auto external_it = external_value_ids.find(input.GetName());
+      if (external_it != external_value_ids.end()) {
+        WriteEdge(out, seen_edges, external_it->second, to, input);
+      }
+    }
+
+    for (Ort::ConstValueInfo output : node.GetOutputs()) {
+      if (output == nullptr || output.GetName().empty() ||
+          consumed_values.count(output.GetName()) != 0) {
+        continue;
+      }
+
+      auto external_it = external_value_ids.find(output.GetName());
+      if (external_it != external_value_ids.end()) {
+        WriteEdge(out, seen_edges, to, external_it->second, output);
       }
     }
   }

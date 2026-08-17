@@ -130,14 +130,6 @@ float ReadFloatAttribute(Ort::ConstNode node, const std::string& name,
   return status.IsOK() ? value : default_value;
 }
 
-void ValidateFloatTensor(Ort::ConstValue value, const char* name) {
-  auto info = value.GetTensorTypeAndShapeInfo();
-  if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    throw std::runtime_error(
-        std::string("FusedGemm only supports float tensors for ") + name);
-  }
-}
-
 std::vector<int64_t> BiasShapeForOutput(
     const std::vector<int64_t>& c_shape, const std::vector<int64_t>& y_shape,
     const std::vector<int64_t>& flat_y_shape) {
@@ -154,12 +146,12 @@ std::vector<int64_t> BiasShapeForOutput(
 }
 
 OrtStatus* RunDeviceFusedGemm(
-    float* y_data, const float* a_data, const float* b_data,
-    const float* c_data, const std::vector<int64_t>& a_shape,
-    const std::vector<int64_t>& b_shape, const std::vector<int64_t>& c_shape,
-    const std::vector<int64_t>& y_shape, bool trans_a, bool trans_b,
-    float alpha, float beta, const std::string& activation,
-    float activation_alpha, bool has_bias, musaStream_t stream) {
+    void* y_data, const void* a_data, const void* b_data, const void* c_data,
+    const std::vector<int64_t>& a_shape, const std::vector<int64_t>& b_shape,
+    const std::vector<int64_t>& c_shape, const std::vector<int64_t>& y_shape,
+    bool trans_a, bool trans_b, float alpha, float beta,
+    const std::string& activation, float activation_alpha, bool has_bias,
+    ONNXTensorElementDataType elem_type, musaStream_t stream) {
   GemmShapeInfo shape_info;
   RETURN_IF_ERROR(
       ResolveGemmShape(a_shape, b_shape, trans_a, trans_b, shape_info));
@@ -175,8 +167,8 @@ OrtStatus* RunDeviceFusedGemm(
   }
 
   if (TryMudnnGemm(y_data, a_data, b_data, c_data, a_shape, b_shape, c_shape,
-                   y_shape, trans_a, trans_b, alpha, beta, has_bias,
-                   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, stream)) {
+                   y_shape, trans_a, trans_b, alpha, beta, has_bias, elem_type,
+                   stream)) {
     if (activation.empty()) {
       return nullptr;
     }
@@ -186,26 +178,37 @@ OrtStatus* RunDeviceFusedGemm(
       return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                         "unsupported FusedGemm activation");
     }
+    MusaElementType musa_elem_type;
+    if (!ToMusaElementType(elem_type, musa_elem_type)) {
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "unsupported FusedGemm dtype");
+    }
     MusaBroadcastParams params = MakeBroadcastParams(y_shape, y_shape, {1});
-    return LaunchStatus(LaunchMusaGemmPostFloatKernel(
+    return LaunchStatus(LaunchMusaGemmPostKernel(
         y_data, nullptr, params, false, 0.0f, activation_op, true,
-        activation_alpha, stream));
+        activation_alpha, musa_elem_type, stream));
   }
 
-  mublasHandle_t handle = nullptr;
-  RETURN_IF_ERROR(EnsureMublasHandle(&handle, stream));
-  mublasOperation_t op_a = trans_a ? MUBLAS_OP_T : MUBLAS_OP_N;
-  mublasOperation_t op_b = trans_b ? MUBLAS_OP_T : MUBLAS_OP_N;
-  int lda = static_cast<int>(shape_info.lda);
-  int ldb = static_cast<int>(shape_info.ldb);
-  int mi = static_cast<int>(m);
-  int ki = static_cast<int>(k);
-  int ni = static_cast<int>(n);
-  mublasStatus status =
-      MublasGemmEx(handle, op_b, op_a, ni, mi, ki, alpha, b_data, ldb, a_data,
-                   lda, 0.0, y_data, ni, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
-  if (status != MUBLAS_STATUS_SUCCESS) {
-    return Ort::GetApi().CreateStatus(ORT_EP_FAIL, "mublasSgemm failed");
+  bool gemm_done = false;
+  if (m <= INT32_MAX && k <= INT32_MAX && n <= INT32_MAX) {
+    mublasHandle_t handle = nullptr;
+    RETURN_IF_ERROR(EnsureMublasHandle(&handle, stream));
+    mublasOperation_t op_a = trans_a ? MUBLAS_OP_T : MUBLAS_OP_N;
+    mublasOperation_t op_b = trans_b ? MUBLAS_OP_T : MUBLAS_OP_N;
+    int lda = static_cast<int>(shape_info.lda);
+    int ldb = static_cast<int>(shape_info.ldb);
+    int mi = static_cast<int>(m);
+    int ki = static_cast<int>(k);
+    int ni = static_cast<int>(n);
+    mublasStatus status =
+        MublasGemmEx(handle, op_b, op_a, ni, mi, ki, alpha, b_data, ldb, a_data,
+                     lda, 0.0, y_data, ni, elem_type);
+    gemm_done = status == MUBLAS_STATUS_SUCCESS;
+  }
+  if (!gemm_done) {
+    RETURN_IF_ERROR(ComputeMusaMatMulDevice(
+        a_data, b_data, y_data, elem_type, a_shape, b_shape, y_shape, trans_a,
+        trans_b, false, false, alpha, stream));
   }
 
   MusaUnaryOp activation_op = MusaUnaryOp::Relu;
@@ -214,11 +217,16 @@ OrtStatus* RunDeviceFusedGemm(
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "unsupported FusedGemm activation");
   }
+  MusaElementType musa_elem_type;
+  if (!ToMusaElementType(elem_type, musa_elem_type)) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "unsupported FusedGemm dtype");
+  }
 
   MusaBroadcastParams params = MakeBroadcastParams(y_shape, y_shape, c_shape);
-  return LaunchStatus(LaunchMusaGemmPostFloatKernel(
+  return LaunchStatus(LaunchMusaGemmPostKernel(
       y_data, c_data, params, has_bias, beta, activation_op, has_activation,
-      activation_alpha, stream));
+      activation_alpha, musa_elem_type, stream));
 }
 
 struct LinearFusionComputeBase : FusionNodeCompute {
@@ -245,8 +253,19 @@ struct LinearFusionComputeBase : FusionNodeCompute {
       Ort::ConstValue a = ctx.GetInput(a_input_index);
       Ort::ConstValue b = ctx.GetInput(b_input_index);
       musaStream_t stream = GetComputeStream(ctx);
-      ValidateFloatTensor(a, "A");
-      ValidateFloatTensor(b, "B");
+      auto a_info = a.GetTensorTypeAndShapeInfo();
+      auto b_info = b.GetTensorTypeAndShapeInfo();
+      const auto elem_type = a_info.GetElementType();
+      musaDataType_t unused_data_type;
+      mublasComputeType_t unused_compute_type;
+      if (!MublasDataType(elem_type, unused_data_type, unused_compute_type)) {
+        return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                          "unsupported FusedGemm dtype");
+      }
+      if (b_info.GetElementType() != elem_type) {
+        return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                          "FusedGemm input dtypes must match");
+      }
       DeviceInputBuffer a_buffer;
       DeviceInputBuffer b_buffer;
       RETURN_IF_ERROR(a_buffer.Bind(a, stream));
@@ -255,16 +274,19 @@ struct LinearFusionComputeBase : FusionNodeCompute {
       std::vector<int64_t> a_shape = TensorShape(a);
       std::vector<int64_t> b_shape = TensorShape(b);
       std::vector<int64_t> c_shape = {1};
-      const float* c_data = nullptr;
+      const void* c_data = nullptr;
       bool has_bias = bias_input_index != kNoBiasInput;
       Ort::ConstValue c{nullptr};
       DeviceInputBuffer c_buffer;
       if (has_bias) {
         c = ctx.GetInput(bias_input_index);
-        ValidateFloatTensor(c, "bias");
+        if (c.GetTensorTypeAndShapeInfo().GetElementType() != elem_type) {
+          return Ort::GetApi().CreateStatus(
+              ORT_INVALID_ARGUMENT, "FusedGemm bias dtype must match inputs");
+        }
         c_shape = TensorShape(c);
         RETURN_IF_ERROR(c_buffer.Bind(c, stream));
-        c_data = static_cast<const float*>(c_buffer.data());
+        c_data = c_buffer.data();
       }
 
       if (b_shape.size() != 2) {
@@ -305,13 +327,16 @@ struct LinearFusionComputeBase : FusionNodeCompute {
 
       Ort::UnownedValue y = ctx.GetOutput(
           0, final_output_shape.empty() ? y_shape : final_output_shape);
+      if (y.GetTensorTypeAndShapeInfo().GetElementType() != elem_type) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT, "FusedGemm output dtype must match inputs");
+      }
       if (IsGpuMemory(y.GetTensorMemoryInfo())) {
         return RunDeviceFusedGemm(
-            y.GetTensorMutableData<float>(),
-            static_cast<const float*>(a_buffer.data()),
-            static_cast<const float*>(b_buffer.data()), c_data, compute_a_shape,
-            b_shape, c_shape, compute_y_shape, trans_a, trans_b, alpha, beta,
-            activation, activation_alpha, has_bias, stream);
+            y.GetTensorMutableRawData(), a_buffer.data(), b_buffer.data(),
+            c_data, compute_a_shape, b_shape, c_shape, compute_y_shape, trans_a,
+            trans_b, alpha, beta, activation, activation_alpha, has_bias,
+            elem_type, stream);
       }
 
       return Ort::GetApi().CreateStatus(

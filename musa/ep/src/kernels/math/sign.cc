@@ -22,7 +22,11 @@ class Sign : public OpKernelBase<Sign> {
 
 OrtStatus* Sign::Compute(Ort::KernelContext& ctx) const {
   auto info = ctx.GetInput(0).GetTensorTypeAndShapeInfo();
-  return UnaryDeviceCompute(ctx, info.GetShape(), info.GetElementType(),
+  auto shape = info.GetShape();
+  if (OutputEmptyTensorIfNeeded(ctx, shape)) {
+    return nullptr;
+  }
+  return UnaryDeviceCompute(ctx, shape, info.GetElementType(),
                             MusaUnaryOp::Sign, "Sign");
 }
 }  // namespace

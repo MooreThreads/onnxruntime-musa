@@ -13,8 +13,10 @@
 """End-to-end CPU-vs-MUSA test for the Unsqueeze operator."""
 
 import numpy as np
+import pytest
 
 from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import build_model_with_input_types, float32_to_bfloat16_bits, run_with_iobinding
 
 
 def test_unsqueeze_axis0():
@@ -51,3 +53,30 @@ def test_unsqueeze_float16():
         rtol=2e-2,
         atol=2e-2,
     )
+
+@pytest.mark.parametrize(("dtype", "tensor_type"), [
+    (np.float64, TensorProto.DOUBLE), (np.int8, TensorProto.INT8),
+    (np.int16, TensorProto.INT16), (np.int64, TensorProto.INT64),
+    (np.uint8, TensorProto.UINT8), (np.uint16, TensorProto.UINT16),
+    (np.uint32, TensorProto.UINT32), (np.uint64, TensorProto.UINT64),
+])
+def test_unsqueeze_fixed_size_dtype_matrix(dtype, tensor_type):
+    x = np.arange(6, dtype=np.int64).reshape(2, 3).astype(dtype)
+    axes = np.array([1], dtype=np.int64)
+    run_and_compare("Unsqueeze", inputs={"X": x, "axes": axes}, outputs=[("Y", tensor_type)])
+
+
+def test_unsqueeze_bfloat16():
+    x = float32_to_bfloat16_bits(np.arange(6, dtype=np.float32).reshape(2, 3))
+    axes = np.array([1], dtype=np.int64)
+    model = build_model_with_input_types(
+        "Unsqueeze", inputs={"X": x, "axes": axes},
+        input_types={"X": TensorProto.BFLOAT16, "axes": TensorProto.INT64},
+        outputs=[("Y", TensorProto.BFLOAT16)],
+    )
+    (actual,) = run_with_iobinding(
+        model, {"X": x, "axes": axes},
+        {"X": TensorProto.BFLOAT16, "axes": TensorProto.INT64},
+        [("Y", TensorProto.BFLOAT16, (2, 1, 3))], use_musa=True,
+    )
+    np.testing.assert_array_equal(actual, x.reshape(2, 1, 3))

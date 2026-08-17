@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "fusion/fusion_dtype.h"
 #include "graph/graph_utils.h"
 #include "kernels/nn/rms_norm_impl.h"
 #include "kernels/shared_inc/op_kernel_common.h"
@@ -97,9 +98,11 @@ bool IsFloatGpuTensor(Ort::ConstValue value) {
          IsGpuMemory(value.GetTensorMemoryInfo());
 }
 
-bool IsFloatTensor(Ort::ConstValue value) {
-  return value.GetTensorTypeAndShapeInfo().GetElementType() ==
-         ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
+bool IsRmsNormStorageType(ONNXTensorElementDataType elem_type) {
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE;
 }
 
 }  // namespace
@@ -121,13 +124,13 @@ struct RmsNormFusionCompute : FusionNodeCompute {
         return Ort::GetApi().CreateStatus(
             ORT_NOT_IMPLEMENTED, "RmsNorm requires a MUSA floating input");
       }
-      if (!IsFloatTensor(gamma)) {
-        return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                          "RmsNorm requires float gamma");
-      }
 
       auto input_info = input.GetTensorTypeAndShapeInfo();
       auto gamma_info = gamma.GetTensorTypeAndShapeInfo();
+      if (gamma_info.GetElementType() != input_info.GetElementType()) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED, "RmsNorm requires gamma dtype to match input");
+      }
       std::vector<int64_t> input_shape = input_info.GetShape();
       std::vector<int64_t> gamma_shape = gamma_info.GetShape();
       if (input_shape.size() < 2 || input_shape.back() <= 0 ||
@@ -166,11 +169,10 @@ struct RmsNormFusionCompute : FusionNodeCompute {
       const musaStream_t stream = GetComputeStream(ctx);
       DeviceInputBuffer gamma_buffer;
       RETURN_IF_ERROR(gamma_buffer.Bind(gamma, stream));
-      return LaunchStatus(LaunchMusaRmsNormKernel(
-          input.GetTensorRawData(),
-          reinterpret_cast<const float*>(gamma_buffer.data()),
-          output.GetTensorMutableRawData(), rows, norm_size, epsilon, elem_type,
-          stream));
+      return LaunchStatus(
+          LaunchMusaRmsNormKernel(input.GetTensorRawData(), gamma_buffer.data(),
+                                  output.GetTensorMutableRawData(), rows,
+                                  norm_size, epsilon, elem_type, stream));
     } catch (const Ort::Exception& ex) {
       Ort::Status status(ex);
       return status.release();
@@ -284,9 +286,13 @@ std::unique_ptr<FusionNodeCompute> CreateRmsNormFusion(
     throw std::runtime_error("RmsNorm requires ReduceMean before Add");
   }
   auto epsilon = musa_ep::ReadScalarFloatInitializer(epsilon_input);
-  if (!musa_ep::IsFloatTensorValueInfo(epsilon_input) || !epsilon.has_value()) {
+  auto input_elem_type = musa_ep::GetTensorElementType(input);
+  auto epsilon_elem_type = musa_ep::GetTensorElementType(epsilon_input);
+  if (!input_elem_type.has_value() || !epsilon_elem_type.has_value() ||
+      *epsilon_elem_type != *input_elem_type ||
+      !IsRmsNormStorageType(*epsilon_elem_type) || !epsilon.has_value()) {
     throw std::runtime_error(
-        "RmsNorm epsilon must be a scalar float initializer");
+        "RmsNorm epsilon must be a scalar initializer matching input dtype");
   }
 
   std::vector<Ort::ConstValueInfo> reduce_inputs = reduce_node.GetInputs();

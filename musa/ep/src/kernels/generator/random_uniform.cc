@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <atomic>
+#include <chrono>
+
 #include "generator/random_impl.h"
 #include "shared_inc/op_kernel_common.h"
 
@@ -24,8 +27,12 @@ class RandomUniformBase {
     high_ = AttrOrDefault<float>(kernel_info, "high", 1.0f);
     dtype_ = AttrOrDefault<int64_t>(kernel_info, "dtype",
                                     ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
-    seed_ =
-        static_cast<uint64_t>(AttrOrDefault<float>(kernel_info, "seed", 0.0f));
+    try {
+      seed_ = static_cast<uint64_t>(kernel_info.GetAttribute<float>("seed"));
+    } catch (...) {
+      seed_ = static_cast<uint64_t>(
+          std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    }
   }
 
   OrtStatus* FillOutput(Ort::UnownedValue output,
@@ -41,9 +48,15 @@ class RandomUniformBase {
       return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                         "RandomUniform unsupported dtype");
     }
+    // Advance a deterministic counter for seeded nodes. This matches the CUDA
+    // EP generator contract: a seed reproduces a sequence across sessions, but
+    // repeated executions of one kernel instance do not replay one tensor.
+    const uint64_t invocation =
+        invocation_.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t effective_seed = seed_ + invocation * 0x9e3779b97f4a7c15ULL;
     musaError_t status = LaunchMusaRandomUniformKernel(
         output.GetTensorMutableRawData(), NumElements(shape), low_, high_,
-        seed_, musa_elem_type, stream);
+        effective_seed, musa_elem_type, stream);
     if (status == musaErrorNotSupported) {
       return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                         "RandomUniform unsupported dtype");
@@ -55,6 +68,7 @@ class RandomUniformBase {
   float high_ = 1.0f;
   int64_t dtype_ = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
   uint64_t seed_ = 0;
+  mutable std::atomic<uint64_t> invocation_{0};
 };
 
 class RandomUniform : public OpKernelBase<RandomUniform>,
@@ -111,12 +125,12 @@ class RandomUniformLike : public OpKernelBase<RandomUniformLike>,
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     RandomUniform, kOnnxDomain, 1, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", RandomTensorTypes())),
     RandomUniform)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     RandomUniformLike, kOnnxDomain, 1, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T1", AllFixedSizeTensorTypes())
-         .AddTypeConstraint("T2", FloatLikeTensorTypes())),
+         .AddTypeConstraint("T2", RandomTensorTypes())),
     RandomUniformLike)

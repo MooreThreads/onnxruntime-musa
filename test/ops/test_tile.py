@@ -89,3 +89,21 @@ def test_tile_bfloat16():
         use_musa=True,
     )
     np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    ("np_dtype", "tensor_type"),
+    [
+        (np.float64, TensorProto.DOUBLE),
+        (np.int8, TensorProto.INT8), (np.int16, TensorProto.INT16),
+        (np.uint8, TensorProto.UINT8), (np.uint16, TensorProto.UINT16),
+        (np.uint32, TensorProto.UINT32), (np.uint64, TensorProto.UINT64),
+    ],
+)
+def test_tile_data_dtype_matrix_extended(np_dtype, tensor_type):
+    x = np.array([[1], [2]], dtype=np_dtype)
+    repeats = np.array([2, 3], dtype=np.int64)
+    run_and_compare(
+        "Tile", inputs={"X": x, "repeats": repeats},
+        outputs=[("Y", tensor_type)],
+    )

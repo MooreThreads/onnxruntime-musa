@@ -15,7 +15,14 @@
 import numpy as np
 import pytest
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import (
+    TensorProto,
+    bfloat16_bits_to_float32,
+    build_model_with_input_types,
+    float32_to_bfloat16_bits,
+    run_and_compare,
+    run_with_iobinding,
+)
 
 
 def test_fused_matmul_2d():
@@ -94,10 +101,44 @@ def test_fused_matmul_batched_transb():
     )
 
 
-def test_fused_matmul_double_alpha_unsupported():
+def test_fused_matmul_float16_uses_fp32_reference_accumulation():
+    rng = np.random.default_rng(12)
+    a = rng.standard_normal((5, 16)).astype(np.float16)
+    b = rng.standard_normal((16, 7)).astype(np.float16)
+    expected = (0.75 * (a.astype(np.float32) @ b.astype(np.float32))).astype(np.float16)
+    types = {"A": TensorProto.FLOAT16, "B": TensorProto.FLOAT16}
+    model = build_model_with_input_types("FusedMatMul", {"A": a, "B": b}, types,
+                                         [("Y", TensorProto.FLOAT16)],
+                                         {"alpha": 0.75}, "com.microsoft")
+    (actual,) = run_with_iobinding(model, {"A": a, "B": b}, types,
+                                   [("Y", TensorProto.FLOAT16, expected.shape)],
+                                   use_musa=True)
+    np.testing.assert_allclose(actual, expected, rtol=2e-2, atol=2e-2)
+
+
+def test_fused_matmul_bfloat16_uses_fp32_reference_accumulation():
+    rng = np.random.default_rng(13)
+    a = float32_to_bfloat16_bits(rng.standard_normal((5, 16)).astype(np.float32))
+    b = float32_to_bfloat16_bits(rng.standard_normal((16, 7)).astype(np.float32))
+    expected = 0.75 * (bfloat16_bits_to_float32(a) @ bfloat16_bits_to_float32(b))
+    types = {"A": TensorProto.BFLOAT16, "B": TensorProto.BFLOAT16}
+    model = build_model_with_input_types("FusedMatMul", {"A": a, "B": b}, types,
+                                         [("Y", TensorProto.BFLOAT16)],
+                                         {"alpha": 0.75}, "com.microsoft")
+    (actual,) = run_with_iobinding(model, {"A": a, "B": b}, types,
+                                   [("Y", TensorProto.BFLOAT16, expected.shape)],
+                                   use_musa=True)
+    np.testing.assert_allclose(bfloat16_bits_to_float32(actual), expected,
+                               rtol=3e-2, atol=3e-2)
+
+
+def test_fused_matmul_double_is_not_registered():
     a = np.random.default_rng(12).standard_normal((4, 8)).astype(np.float64)
     b = np.random.default_rng(13).standard_normal((8, 5)).astype(np.float64)
-    with pytest.raises(Exception, match="unsupported MatMul dtype"):
+    with pytest.raises(
+        Exception,
+        match="(?i)(not supported|not implemented|kernel|default CPU EP|fallback disabled)",
+    ):
         run_and_compare(
             "FusedMatMul",
             inputs={"A": a, "B": b},

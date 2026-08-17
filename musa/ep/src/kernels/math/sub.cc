@@ -15,52 +15,11 @@
 #include "shared_inc/op_kernel_common.h"
 
 namespace {
-constexpr size_t kMudnnMaxElementwiseRank = 5;
-
 bool TryMudnnSub(Ort::KernelContext& ctx, const std::vector<int64_t>& shape0,
                  const std::vector<int64_t>& shape1,
                  ONNXTensorElementDataType elem_type) {
-  std::vector<int64_t> out_shape = BroadcastShape(shape0, shape1);
-  if (shape0.empty() || shape1.empty() ||
-      out_shape.size() > kMudnnMaxElementwiseRank ||
-      shape0.size() > kMudnnMaxElementwiseRank ||
-      shape1.size() > kMudnnMaxElementwiseRank ||
-      !IsGpuMemory(ctx.GetInput(0).GetTensorMemoryInfo()) ||
-      !IsGpuMemory(ctx.GetInput(1).GetTensorMemoryInfo())) {
-    return false;
-  }
-
-  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-  if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
-    return false;
-  }
-
-  ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
-  if (handle_status != nullptr) {
-    Ort::GetApi().ReleaseStatus(handle_status);
-    return false;
-  }
-
-  ::musa::dnn::Tensor lhs_tensor;
-  ::musa::dnn::Tensor rhs_tensor;
-  ::musa::dnn::Tensor output_tensor;
-  if (!SetMudnnTensor(lhs_tensor, ctx.GetInput(0).GetTensorRawData(), shape0,
-                      elem_type) ||
-      !SetMudnnTensor(rhs_tensor, ctx.GetInput(1).GetTensorRawData(), shape1,
-                      elem_type) ||
-      !SetMudnnTensor(output_tensor, y.GetTensorMutableRawData(), out_shape,
-                      elem_type)) {
-    return false;
-  }
-
-  ::musa::dnn::Binary op;
-  if (op.SetMode(::musa::dnn::Binary::Mode::SUB) !=
-      ::musa::dnn::Status::SUCCESS) {
-    return false;
-  }
-  return op.Run(*handle, output_tensor, lhs_tensor, rhs_tensor) ==
-         ::musa::dnn::Status::SUCCESS;
+  return TryMudnnBinary(ctx, shape0, shape1, elem_type,
+                        ::musa::dnn::Binary::Mode::SUB);
 }
 
 class Sub : public OpKernelBase<Sub> {

@@ -17,6 +17,11 @@
 #include "onnxruntime_cxx_api.h"
 #undef ORT_API_MANUAL_INIT
 
+#include <optional>
+#include <utility>
+
+#include "fusion/fusion_dtype.h"
+
 class MusaEp;
 
 // Runtime implementation for one ORT fused node.
@@ -28,6 +33,17 @@ class MusaEp;
 struct FusionNodeCompute {
   virtual ~FusionNodeCompute() = default;
   virtual OrtStatus* Compute(OrtKernelContext* kernel_context) const = 0;
+
+  const std::optional<musa_ep::FusionComputeConfig>& DTypeConfig() const {
+    return dtype_config_;
+  }
+
+  void SetDTypeConfig(musa_ep::FusionComputeConfig config) {
+    dtype_config_ = std::move(config);
+  }
+
+ private:
+  std::optional<musa_ep::FusionComputeConfig> dtype_config_;
 };
 
 OrtNodeComputeInfo* CreateFusionNodeComputeInfo(MusaEp& ep);

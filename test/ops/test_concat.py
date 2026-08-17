@@ -13,9 +13,18 @@
 """End-to-end CPU-vs-MUSA test for the Concat operator."""
 
 import numpy as np
+import pytest
 from onnx import helper
 
-from op_test_utils import TensorProto, build_graph_model, run_and_compare, run_model_and_compare
+from op_test_utils import (
+    TensorProto,
+    build_graph_model,
+    build_model_with_input_types,
+    float32_to_bfloat16_bits,
+    run_and_compare,
+    run_model_and_compare,
+    run_with_iobinding,
+)
 
 
 def test_concat_axis0():
@@ -94,6 +103,32 @@ def test_concat_uint8_axis0():
         outputs=[("Y", TensorProto.UINT8)],
         attrs={"axis": 0},
     )
+
+@pytest.mark.parametrize(("dtype", "tensor_type"), [
+    (np.uint16, TensorProto.UINT16), (np.uint32, TensorProto.UINT32),
+    (np.uint64, TensorProto.UINT64), (np.int8, TensorProto.INT8),
+    (np.int16, TensorProto.INT16), (np.float64, TensorProto.DOUBLE),
+])
+def test_concat_dtype_matrix(dtype, tensor_type):
+    a = np.arange(6, dtype=np.int64).reshape(2, 3).astype(dtype)
+    b = np.arange(6, 12, dtype=np.int64).reshape(2, 3).astype(dtype)
+    run_and_compare("Concat", inputs={"A": a, "B": b}, outputs=[("Y", tensor_type)], attrs={"axis": 0})
+
+
+def test_concat_bfloat16():
+    a = float32_to_bfloat16_bits(np.arange(6, dtype=np.float32).reshape(2, 3))
+    b = float32_to_bfloat16_bits(np.arange(6, 12, dtype=np.float32).reshape(2, 3))
+    model = build_model_with_input_types(
+        "Concat", inputs={"A": a, "B": b},
+        input_types={"A": TensorProto.BFLOAT16, "B": TensorProto.BFLOAT16},
+        outputs=[("Y", TensorProto.BFLOAT16)], attrs={"axis": 0},
+    )
+    (actual,) = run_with_iobinding(
+        model, {"A": a, "B": b},
+        {"A": TensorProto.BFLOAT16, "B": TensorProto.BFLOAT16},
+        [("Y", TensorProto.BFLOAT16, (4, 3))], use_musa=True,
+    )
+    np.testing.assert_array_equal(actual, np.concatenate([a, b], axis=0))
 
 def test_concat_many_small_inputs_axis1():
     inputs = {}

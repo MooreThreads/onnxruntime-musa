@@ -13,6 +13,7 @@
 """End-to-end CPU-vs-MUSA test for the Split operator."""
 
 import numpy as np
+import pytest
 
 from op_test_utils import (
     TensorProto,
@@ -94,6 +95,21 @@ def test_split_uint8_three_outputs():
             ("Y2", TensorProto.UINT8),
         ],
         attrs={"axis": 1},
+    )
+
+
+def test_split_zero_length_middle_output():
+    x = np.arange(2 * 5, dtype=np.uint16).reshape(2, 5)
+    split = np.array([2, 0, 3], dtype=np.int64)
+    run_and_compare(
+        "Split",
+        inputs={"X": x, "split": split},
+        outputs=[
+            ("Y0", TensorProto.UINT16),
+            ("Y1", TensorProto.UINT16),
+            ("Y2", TensorProto.UINT16),
+        ],
+        attrs={"axis": -1},
     )
 
 
@@ -179,6 +195,24 @@ def test_split_equal_three_outputs_bfloat16():
     )
     for output, expected in zip(actual, np.split(x, 3, axis=1)):
         np.testing.assert_array_equal(output, expected)
+
+
+@pytest.mark.parametrize(
+    ("np_dtype", "tensor_type"),
+    [
+        (np.float64, TensorProto.DOUBLE),
+        (np.int8, TensorProto.INT8), (np.int16, TensorProto.INT16),
+        (np.uint16, TensorProto.UINT16), (np.uint32, TensorProto.UINT32),
+        (np.uint64, TensorProto.UINT64),
+    ],
+)
+def test_split_data_dtype_matrix(np_dtype, tensor_type):
+    x = np.arange(12, dtype=np.int64).reshape(3, 4).astype(np_dtype)
+    split = np.array([1, 3], dtype=np.int64)
+    run_and_compare(
+        "Split", inputs={"X": x, "split": split},
+        outputs=[("Y0", tensor_type), ("Y1", tensor_type)], attrs={"axis": 1},
+    )
 
 
 def test_split_equal_thirty_three_outputs_fallback():

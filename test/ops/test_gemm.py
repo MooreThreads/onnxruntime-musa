@@ -16,7 +16,9 @@ import numpy as np
 
 from op_test_utils import (
     TensorProto,
+    bfloat16_bits_to_float32,
     build_model_with_input_types,
+    float32_to_bfloat16_bits,
     run_and_compare,
     run_with_iobinding,
 )
@@ -134,3 +136,38 @@ def test_gemm_float16_with_bias():
         use_musa=True,
     )
     np.testing.assert_allclose(actual, expected, rtol=2e-2, atol=2e-2)
+
+
+def test_gemm_bfloat16_with_bias_uses_fp32_reference_accumulation():
+    rng = np.random.default_rng(7)
+    a = float32_to_bfloat16_bits(rng.standard_normal((4, 16)).astype(np.float32))
+    b = float32_to_bfloat16_bits(rng.standard_normal((16, 5)).astype(np.float32))
+    c = float32_to_bfloat16_bits(rng.standard_normal((5,)).astype(np.float32))
+    attrs = {"alpha": 0.75, "beta": 0.5}
+    expected = (
+        attrs["alpha"]
+        * (bfloat16_bits_to_float32(a) @ bfloat16_bits_to_float32(b))
+        + attrs["beta"] * bfloat16_bits_to_float32(c)
+    )
+    input_types = {
+        "A": TensorProto.BFLOAT16,
+        "B": TensorProto.BFLOAT16,
+        "C": TensorProto.BFLOAT16,
+    }
+    model = build_model_with_input_types(
+        "Gemm",
+        inputs={"A": a, "B": b, "C": c},
+        input_types=input_types,
+        outputs=[("Y", TensorProto.BFLOAT16)],
+        attrs=attrs,
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        {"A": a, "B": b, "C": c},
+        input_types,
+        [("Y", TensorProto.BFLOAT16, expected.shape)],
+        use_musa=True,
+    )
+    np.testing.assert_allclose(
+        bfloat16_bits_to_float32(actual), expected, rtol=3e-2, atol=3e-2
+    )

@@ -13,6 +13,7 @@
 """End-to-end CPU-vs-MUSA tests for Unique."""
 
 import numpy as np
+import pytest
 from op_test_utils import TensorProto, build_model, run, run_and_compare
 
 
@@ -100,6 +101,29 @@ def test_unique_int32_musa_against_numpy_reference():
     x = np.array([4, 1, 4, 2, 9, 1, 2, 8, 9], dtype=np.int32)
     expected = _unique_reference(x, sorted_values=True)
     actual = _run_musa_unique(x, TensorProto.INT32, {"axis": 0, "sorted": 1})
+    for got, want in zip(actual, expected):
+        np.testing.assert_array_equal(got, want)
+
+
+@pytest.mark.parametrize(
+    ("np_dtype", "tensor_type"),
+    [
+        (np.uint8, TensorProto.UINT8),
+        (np.uint16, TensorProto.UINT16),
+        (np.uint32, TensorProto.UINT32),
+        (np.uint64, TensorProto.UINT64),
+        (np.int8, TensorProto.INT8),
+        (np.int16, TensorProto.INT16),
+        (np.float16, TensorProto.FLOAT16),
+        (np.float32, TensorProto.FLOAT),
+        (np.float64, TensorProto.DOUBLE),
+        (np.bool_, TensorProto.BOOL),
+    ],
+)
+def test_unique_integer_and_bool_device_dtypes(np_dtype, tensor_type):
+    x = np.array([3, 1, 3, 2, 1, 0], dtype=np_dtype)
+    expected = _unique_reference(x, sorted_values=True)
+    actual = _run_musa_unique(x, tensor_type, {"sorted": 1})
     for got, want in zip(actual, expected):
         np.testing.assert_array_equal(got, want)
 

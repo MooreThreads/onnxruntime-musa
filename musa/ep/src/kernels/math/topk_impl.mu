@@ -579,6 +579,24 @@ musaError_t LaunchMusaTopKPairReduceKernel(const void* input, void* values,
                                            MusaElementType elem_type,
                                            musaStream_t stream) {
   switch (elem_type) {
+    case MusaElementType::Uint8:
+      return LaunchPairReduceTyped<uint8_t>(input, values, indices, params,
+                                            stream);
+    case MusaElementType::Uint16:
+      return LaunchPairReduceTyped<uint16_t>(input, values, indices, params,
+                                             stream);
+    case MusaElementType::Uint32:
+      return LaunchPairReduceTyped<uint32_t>(input, values, indices, params,
+                                             stream);
+    case MusaElementType::Uint64:
+      return LaunchPairReduceTyped<uint64_t>(input, values, indices, params,
+                                             stream);
+    case MusaElementType::Int8:
+      return LaunchPairReduceTyped<int8_t>(input, values, indices, params,
+                                           stream);
+    case MusaElementType::Int16:
+      return LaunchPairReduceTyped<int16_t>(input, values, indices, params,
+                                            stream);
     case MusaElementType::Float:
       return LaunchPairReduceTyped<float>(input, values, indices, params,
                                           stream);
@@ -605,6 +623,24 @@ musaError_t LaunchMusaTopKBlockSortKernel(const void* input, void* values,
                                           MusaElementType elem_type,
                                           musaStream_t stream) {
   switch (elem_type) {
+    case MusaElementType::Uint8:
+      return LaunchBlockSortTyped<uint8_t>(input, values, indices, params,
+                                           stream);
+    case MusaElementType::Uint16:
+      return LaunchBlockSortTyped<uint16_t>(input, values, indices, params,
+                                            stream);
+    case MusaElementType::Uint32:
+      return LaunchBlockSortTyped<uint32_t>(input, values, indices, params,
+                                            stream);
+    case MusaElementType::Uint64:
+      return LaunchBlockSortTyped<uint64_t>(input, values, indices, params,
+                                            stream);
+    case MusaElementType::Int8:
+      return LaunchBlockSortTyped<int8_t>(input, values, indices, params,
+                                          stream);
+    case MusaElementType::Int16:
+      return LaunchBlockSortTyped<int16_t>(input, values, indices, params,
+                                           stream);
     case MusaElementType::Float:
       return LaunchBlockSortTyped<float>(input, values, indices, params,
                                          stream);
@@ -629,6 +665,24 @@ musaError_t LaunchMusaTopKStablePostprocessKernel(
     const void* input, void* values, int64_t* indices, MusaTopKParams params,
     MusaElementType elem_type, musaStream_t stream) {
   switch (elem_type) {
+    case MusaElementType::Uint8:
+      return LaunchStablePostprocessTyped<uint8_t>(input, values, indices,
+                                                   params, stream);
+    case MusaElementType::Uint16:
+      return LaunchStablePostprocessTyped<uint16_t>(input, values, indices,
+                                                    params, stream);
+    case MusaElementType::Uint32:
+      return LaunchStablePostprocessTyped<uint32_t>(input, values, indices,
+                                                    params, stream);
+    case MusaElementType::Uint64:
+      return LaunchStablePostprocessTyped<uint64_t>(input, values, indices,
+                                                    params, stream);
+    case MusaElementType::Int8:
+      return LaunchStablePostprocessTyped<int8_t>(input, values, indices,
+                                                  params, stream);
+    case MusaElementType::Int16:
+      return LaunchStablePostprocessTyped<int16_t>(input, values, indices,
+                                                   params, stream);
     case MusaElementType::Float:
       return LaunchStablePostprocessTyped<float>(input, values, indices, params,
                                                  stream);
@@ -656,6 +710,18 @@ musaError_t GetMusaTopKRadixSortWorkspaceSize(MusaTopKParams params,
     return musaErrorInvalidValue;
   }
   switch (elem_type) {
+    case MusaElementType::Uint8:
+      return GetRadixWorkspaceSizeTyped<uint8_t>(params, workspace_bytes);
+    case MusaElementType::Uint16:
+      return GetRadixWorkspaceSizeTyped<uint16_t>(params, workspace_bytes);
+    case MusaElementType::Uint32:
+      return GetRadixWorkspaceSizeTyped<uint32_t>(params, workspace_bytes);
+    case MusaElementType::Uint64:
+      return GetRadixWorkspaceSizeTyped<uint64_t>(params, workspace_bytes);
+    case MusaElementType::Int8:
+      return GetRadixWorkspaceSizeTyped<int8_t>(params, workspace_bytes);
+    case MusaElementType::Int16:
+      return GetRadixWorkspaceSizeTyped<int16_t>(params, workspace_bytes);
     case MusaElementType::Float:
       return GetRadixWorkspaceSizeTyped<float>(params, workspace_bytes);
     case MusaElementType::Double:
@@ -676,6 +742,24 @@ musaError_t LaunchMusaTopKRadixSortKernel(
     MusaElementType elem_type, void* workspace, size_t workspace_bytes,
     musaStream_t stream) {
   switch (elem_type) {
+    case MusaElementType::Uint8:
+      return LaunchRadixSortTyped<uint8_t>(input, values, indices, params,
+                                           workspace, workspace_bytes, stream);
+    case MusaElementType::Uint16:
+      return LaunchRadixSortTyped<uint16_t>(input, values, indices, params,
+                                            workspace, workspace_bytes, stream);
+    case MusaElementType::Uint32:
+      return LaunchRadixSortTyped<uint32_t>(input, values, indices, params,
+                                            workspace, workspace_bytes, stream);
+    case MusaElementType::Uint64:
+      return LaunchRadixSortTyped<uint64_t>(input, values, indices, params,
+                                            workspace, workspace_bytes, stream);
+    case MusaElementType::Int8:
+      return LaunchRadixSortTyped<int8_t>(input, values, indices, params,
+                                          workspace, workspace_bytes, stream);
+    case MusaElementType::Int16:
+      return LaunchRadixSortTyped<int16_t>(input, values, indices, params,
+                                           workspace, workspace_bytes, stream);
     case MusaElementType::Float:
       return LaunchRadixSortTyped<float>(input, values, indices, params,
                                          workspace, workspace_bytes, stream);

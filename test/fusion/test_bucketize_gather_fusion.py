@@ -22,7 +22,9 @@ from onnx import helper, numpy_helper
 from op_test_utils import TensorProto, musa_devices, run_model_and_compare
 
 
-def _build_bucketize_gather_model() -> bytes:
+def _build_bucketize_gather_model(
+    table_dtype=np.float32, tensor_proto_dtype=TensorProto.FLOAT
+) -> bytes:
     modulus = numpy_helper.from_array(np.array(10, dtype=np.int64), name="modulus")
     offset = numpy_helper.from_array(np.array(1, dtype=np.int64), name="offset")
     threshold = numpy_helper.from_array(
@@ -30,7 +32,8 @@ def _build_bucketize_gather_model() -> bytes:
     )
     axes = numpy_helper.from_array(np.array([1], dtype=np.int64), name="axes")
     table = numpy_helper.from_array(
-        np.arange(11 * 6, dtype=np.float32).reshape(11, 6), name="table"
+        np.arange(11 * 6, dtype=np.float32).reshape(11, 6).astype(table_dtype),
+        name="table",
     )
     nodes = [
         helper.make_node("Cast", ["Ids"], ["IdsFloat"], to=TensorProto.FLOAT),
@@ -60,7 +63,7 @@ def _build_bucketize_gather_model() -> bytes:
         nodes,
         "bucketize_gather_fusion",
         [helper.make_tensor_value_info("Ids", TensorProto.INT64, ["N", 1])],
-        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
+        [helper.make_tensor_value_info("Y", tensor_proto_dtype, None)],
         initializer=[modulus, offset, threshold, axes, table],
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
@@ -105,3 +108,38 @@ def test_bucketize_gather_fusion(tmp_path):
         {"Cast", "Greater", "Div", "Mul", "Sub", "Add", "Gather", "Squeeze"}
         & op_names
     )
+
+
+def test_bucketize_gather_fusion_float16_payload(tmp_path):
+    model = _build_bucketize_gather_model(np.float16, TensorProto.FLOAT16)
+    ids = np.array([[0], [1], [10], [11], [-1], [23]], dtype=np.int64)
+    feeds = {"Ids": ids}
+
+    (actual,) = run_model_and_compare(model, feeds, rtol=0, atol=0)
+    table = np.arange(11 * 6, dtype=np.float32).reshape(11, 6).astype(np.float16)
+    gather_ids = np.where(ids.astype(np.float32) > 0, (ids - (ids // 10) * 10) + 1, 0)
+    expected = np.squeeze(table[gather_ids], axis=1)
+    np.testing.assert_array_equal(actual, expected)
+
+    so = ort.SessionOptions()
+    so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    so.enable_profiling = True
+    so.profile_file_prefix = str(tmp_path / "bucketize_gather_fusion_f16")
+    so.add_provider_for_devices(musa_devices(), {})
+    session = ort.InferenceSession(model, sess_options=so)
+    session.run(None, feeds)
+    profile_path = session.end_profiling()
+    try:
+        with open(profile_path, "r", encoding="utf-8") as f:
+            events = json.load(f)
+    finally:
+        if os.path.exists(profile_path):
+            os.remove(profile_path)
+
+    node_events = [
+        e
+        for e in events
+        if e.get("cat") == "Node" and e.get("name", "").endswith("_kernel_time")
+    ]
+    op_names = {e.get("args", {}).get("op_name") for e in node_events}
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)

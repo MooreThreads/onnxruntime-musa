@@ -73,5 +73,5 @@ OrtStatus* FusedMatMul::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     FusedMatMul, kMSDomain, 1, 1,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", MatMulTensorTypes())),
     FusedMatMul)

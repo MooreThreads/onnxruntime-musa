@@ -84,6 +84,8 @@ def make_provider_options(
     user_compute_stream: int | Any | None = None,
     use_ep_level_unified_stream: bool | None = None,
     do_copy_in_default_stream: bool = True,
+    precision_policy: str = "strict",
+    dtype_diagnostics: bool = False,
 ) -> dict[str, str]:
     """Build MUSAExecutionProvider options for add_provider_for_devices().
 
@@ -93,10 +95,14 @@ def make_provider_options(
     """
     if device_id < 0:
         raise ValueError("device_id must be non-negative")
+    if precision_policy not in {"strict", "report"}:
+        raise ValueError("precision_policy must be 'strict' or 'report'")
 
     options = {
         "device_id": str(device_id),
         "do_copy_in_default_stream": _as_bool_option(do_copy_in_default_stream),
+        "precision_policy": precision_policy,
+        "dtype_diagnostics": _as_bool_option(dtype_diagnostics),
     }
 
     if user_compute_stream is not None:

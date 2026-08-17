@@ -12,6 +12,7 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <cstdint>
 #include <initializer_list>
 #include <optional>
 #include <unordered_map>
@@ -26,9 +27,31 @@
 namespace musa_ep {
 namespace {
 
-bool IsZeroFloatInitializer(Ort::ConstValueInfo value_info) {
+bool IsEmbeddingPayloadTensorValueInfo(Ort::ConstValueInfo value_info) {
+  if (value_info == nullptr ||
+      value_info.TypeInfo().GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+  ONNXTensorElementDataType elem_type =
+      value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+}
+
+bool HasSameEmbeddingPayloadType(Ort::ConstValueInfo lhs,
+                                 Ort::ConstValueInfo rhs) {
+  if (!IsEmbeddingPayloadTensorValueInfo(lhs) ||
+      !IsEmbeddingPayloadTensorValueInfo(rhs)) {
+    return false;
+  }
+  return lhs.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
+         rhs.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
+}
+
+bool IsZeroPayloadInitializer(Ort::ConstValueInfo value_info) {
   if (value_info == nullptr || !value_info.IsConstantInitializer() ||
-      !IsFloatTensorValueInfo(value_info)) {
+      !IsEmbeddingPayloadTensorValueInfo(value_info)) {
     return false;
   }
   Ort::ConstValue value{nullptr};
@@ -36,10 +59,10 @@ bool IsZeroFloatInitializer(Ort::ConstValueInfo value_info) {
   if (!status.IsOK() || !value) {
     return false;
   }
-  auto info = value.GetTensorTypeAndShapeInfo();
-  const float* data = value.GetTensorData<float>();
-  for (int64_t i = 0; i < info.GetElementCount(); ++i) {
-    if (data[i] != 0.0f) {
+  const uint8_t* data = static_cast<const uint8_t*>(value.GetTensorRawData());
+  const size_t bytes = value.GetTensorSizeInBytes();
+  for (size_t i = 0; i < bytes; ++i) {
+    if (data[i] != 0) {
       return false;
     }
   }
@@ -83,7 +106,7 @@ bool CanFuseMaskedEmbeddingLookup(
   std::vector<Ort::ConstValueInfo> unsqueeze_outputs =
       unsqueeze_node.GetOutputs();
   if (unsqueeze_inputs.size() != 2 || unsqueeze_outputs.size() != 1 ||
-      !IsFloatTensorValueInfo(unsqueeze_outputs[0]) ||
+      !IsEmbeddingPayloadTensorValueInfo(unsqueeze_outputs[0]) ||
       !ReadUnsqueezeAxes(unsqueeze_node).has_value() ||
       ReadUnsqueezeAxes(unsqueeze_node)->size() != 1 ||
       (*ReadUnsqueezeAxes(unsqueeze_node))[0] != 0) {
@@ -100,7 +123,9 @@ bool CanFuseMaskedEmbeddingLookup(
   if (scatter_inputs.size() != 3 || scatter_outputs.size() != 1 ||
       graph_output_names.count(Name(scatter_outputs[0])) != 0 ||
       !HasOnlyConsumer(scatter_outputs[0], unsqueeze_node, 0) ||
-      !IsZeroFloatInitializer(scatter_inputs[0])) {
+      !HasSameEmbeddingPayloadType(scatter_inputs[0], scatter_outputs[0]) ||
+      !HasSameEmbeddingPayloadType(scatter_outputs[0], unsqueeze_outputs[0]) ||
+      !IsZeroPayloadInitializer(scatter_inputs[0])) {
     return false;
   }
 
@@ -131,8 +156,8 @@ bool CanFuseMaskedEmbeddingLookup(
       graph_output_names.count(Name(transpose_outputs[0])) != 0 ||
       graph_output_names.count(Name(embedding_outputs[0])) != 0 ||
       !HasOnlyConsumer(embedding_outputs[0], scatter_node, 2) ||
-      !IsFloatTensorValueInfo(embedding_inputs[0]) ||
-      !IsFloatTensorValueInfo(embedding_outputs[0])) {
+      !HasSameEmbeddingPayloadType(embedding_inputs[0], embedding_outputs[0]) ||
+      !HasSameEmbeddingPayloadType(embedding_outputs[0], scatter_inputs[0])) {
     return false;
   }
 

@@ -105,7 +105,6 @@ inline MusaBroadcastParams MakeBroadcastParams(
     const std::vector<int64_t>& rhs_shape) {
   MusaBroadcastParams params{};
   const size_t rank = out_shape.size();
-  params.rank = static_cast<int32_t>(rank);
   params.total_elements = NumElements(out_shape);
 
   auto out_strides = Strides(out_shape);
@@ -116,27 +115,137 @@ inline MusaBroadcastParams MakeBroadcastParams(
   const size_t lhs_offset = rank - lhs_rank;
   const size_t rhs_offset = rank - rhs_rank;
 
-  for (size_t dim = 0; dim < rank; ++dim) {
-    params.output_strides[dim] = out_strides[dim];
+  std::vector<int64_t> dims;
+  std::vector<int64_t> compressed_out_strides;
+  std::vector<int64_t> compressed_lhs_strides;
+  std::vector<int64_t> compressed_rhs_strides;
+  dims.reserve(rank);
+  compressed_out_strides.reserve(rank);
+  compressed_lhs_strides.reserve(rank);
+  compressed_rhs_strides.reserve(rank);
 
-    if (dim < lhs_offset) {
-      params.lhs_strides[dim] = 0;
-    } else {
-      const size_t lhs_dim = dim - lhs_offset;
-      params.lhs_strides[dim] =
-          lhs_shape[lhs_dim] == 1 ? 0 : lhs_strides[lhs_dim];
+  const auto can_merge_stride = [](int64_t outer, int64_t inner,
+                                   int64_t inner_dim) {
+    return (outer == 0 && inner == 0) || outer == inner_dim * inner;
+  };
+
+  for (size_t dim = 0; dim < rank; ++dim) {
+    const int64_t lhs_stride = dim < lhs_offset
+                                   ? 0
+                                   : (lhs_shape[dim - lhs_offset] == 1
+                                          ? 0
+                                          : lhs_strides[dim - lhs_offset]);
+    const int64_t rhs_stride = dim < rhs_offset
+                                   ? 0
+                                   : (rhs_shape[dim - rhs_offset] == 1
+                                          ? 0
+                                          : rhs_strides[dim - rhs_offset]);
+
+    // Leading output dimensions of size one never contribute to an index.
+    // Dropping them reduces the number of divisions in ResolveBroadcastIndices
+    // without changing either operand offset.
+    if (dims.empty() && out_shape[dim] == 1) {
+      continue;
     }
 
-    if (dim < rhs_offset) {
-      params.rhs_strides[dim] = 0;
+    const bool can_merge =
+        !dims.empty() &&
+        compressed_out_strides.back() == out_shape[dim] * out_strides[dim] &&
+        can_merge_stride(compressed_lhs_strides.back(), lhs_stride,
+                         out_shape[dim]) &&
+        can_merge_stride(compressed_rhs_strides.back(), rhs_stride,
+                         out_shape[dim]);
+    if (can_merge) {
+      dims.back() *= out_shape[dim];
+      compressed_out_strides.back() = out_strides[dim];
+      compressed_lhs_strides.back() = lhs_stride;
+      compressed_rhs_strides.back() = rhs_stride;
     } else {
-      const size_t rhs_dim = dim - rhs_offset;
-      params.rhs_strides[dim] =
-          rhs_shape[rhs_dim] == 1 ? 0 : rhs_strides[rhs_dim];
+      dims.push_back(out_shape[dim]);
+      compressed_out_strides.push_back(out_strides[dim]);
+      compressed_lhs_strides.push_back(lhs_stride);
+      compressed_rhs_strides.push_back(rhs_stride);
     }
   }
 
+  params.rank = static_cast<int32_t>(dims.size());
+  for (size_t dim = 0; dim < dims.size(); ++dim) {
+    params.output_strides[dim] = compressed_out_strides[dim];
+    params.lhs_strides[dim] = compressed_lhs_strides[dim];
+    params.rhs_strides[dim] = compressed_rhs_strides[dim];
+  }
+
   return params;
+}
+
+struct MusaMudnnBroadcastShapes {
+  std::vector<int64_t> output;
+  std::vector<int64_t> lhs;
+  std::vector<int64_t> rhs;
+};
+
+// Collapse only dimensions whose flattened addressing is valid for both
+// operands. The returned shapes describe the same byte ranges as the
+// originals, but can be passed to muDNN when the original rank is too large.
+inline MusaMudnnBroadcastShapes CompressBroadcastShapesForMudnn(
+    const std::vector<int64_t>& out_shape,
+    const std::vector<int64_t>& lhs_shape,
+    const std::vector<int64_t>& rhs_shape) {
+  const size_t rank = out_shape.size();
+  const auto out_strides = Strides(out_shape);
+  const auto lhs_strides = Strides(lhs_shape);
+  const auto rhs_strides = Strides(rhs_shape);
+  const size_t lhs_offset = rank - lhs_shape.size();
+  const size_t rhs_offset = rank - rhs_shape.size();
+
+  MusaMudnnBroadcastShapes result;
+  result.output.reserve(rank);
+  result.lhs.reserve(rank);
+  result.rhs.reserve(rank);
+  std::vector<int64_t> output_strides;
+  std::vector<int64_t> lhs_compressed_strides;
+  std::vector<int64_t> rhs_compressed_strides;
+  output_strides.reserve(rank);
+  lhs_compressed_strides.reserve(rank);
+  rhs_compressed_strides.reserve(rank);
+
+  const auto can_merge_stride = [](int64_t outer, int64_t inner,
+                                   int64_t inner_dim) {
+    return (outer == 0 && inner == 0) || outer == inner_dim * inner;
+  };
+
+  for (size_t dim = 0; dim < rank; ++dim) {
+    const int64_t lhs_dim = dim < lhs_offset ? 1 : lhs_shape[dim - lhs_offset];
+    const int64_t rhs_dim = dim < rhs_offset ? 1 : rhs_shape[dim - rhs_offset];
+    const int64_t lhs_stride = lhs_dim == 1 ? 0 : lhs_strides[dim - lhs_offset];
+    const int64_t rhs_stride = rhs_dim == 1 ? 0 : rhs_strides[dim - rhs_offset];
+
+    if (result.output.empty() && out_shape[dim] == 1) continue;
+
+    const bool can_merge =
+        !result.output.empty() &&
+        output_strides.back() == out_shape[dim] * out_strides[dim] &&
+        can_merge_stride(lhs_compressed_strides.back(), lhs_stride,
+                         out_shape[dim]) &&
+        can_merge_stride(rhs_compressed_strides.back(), rhs_stride,
+                         out_shape[dim]);
+    if (can_merge) {
+      result.output.back() *= out_shape[dim];
+      result.lhs.back() *= lhs_dim;
+      result.rhs.back() *= rhs_dim;
+      output_strides.back() = out_strides[dim];
+      lhs_compressed_strides.back() = lhs_stride;
+      rhs_compressed_strides.back() = rhs_stride;
+    } else {
+      result.output.push_back(out_shape[dim]);
+      result.lhs.push_back(lhs_dim);
+      result.rhs.push_back(rhs_dim);
+      output_strides.push_back(out_strides[dim]);
+      lhs_compressed_strides.push_back(lhs_stride);
+      rhs_compressed_strides.push_back(rhs_stride);
+    }
+  }
+  return result;
 }
 
 inline bool CanUseBroadcastKernel(const std::vector<int64_t>& out_shape,

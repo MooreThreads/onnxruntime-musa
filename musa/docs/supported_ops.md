@@ -14,8 +14,8 @@ Rows are grouped by operator/domain. Multiple opset ranges in a row preserve sep
 | `BatchNormalization` | `ai.onnx` | 9–13: `T`: float16, float32, float64<br>14–14: `T`: float16, float32, float64<br>`U`: float16, float32, float64<br>15–19: `T`: float16, float32, float64<br>`T1`: float16, float32, float64<br>`T2`: float16, float32, float64 | `nn/batch_normalization.cc` |
 | `BitwiseAnd` | `ai.onnx` | 18–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64 | `logical/bitwise_and.cc` |
 | `Cast` | `ai.onnx` | 13–19: `T1`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`T2`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/cast.cc` |
-| `Ceil` | `ai.onnx` | 13–19: `T`: float16, float32, float64 | `math/ceil.cc` |
-| `Clip` | `ai.onnx` | 13–19: `T`: float16, float32, float64, int8, uint8, int64, uint64 | `math/clip.cc` |
+| `Ceil` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `math/ceil.cc` |
+| `Clip` | `ai.onnx` | 13–19: `T`: float16, float32, float64, int8, uint8, int16, uint16, int32, uint32, int64, uint64, bfloat16 | `math/clip.cc` |
 | `Concat` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/concat.cc` |
 | `ConstantOfShape` | `ai.onnx` | 9–19: `T1`: int64<br>`T2`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bool | `generator/constant_of_shape.cc` |
 | `Conv` | `ai.onnx` | 11–19: `T`: float32 | `nn/conv.cc` |
@@ -27,7 +27,7 @@ Rows are grouped by operator/domain. Multiple opset ranges in a row preserve sep
 | `Exp` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `math/exp.cc` |
 | `Expand` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/expand.cc` |
 | `Flatten` | `ai.onnx` | 1–8: `T`: float16, float32, float64<br>9–10: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bool<br>11–12: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bool<br>13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/flatten.cc` |
-| `Floor` | `ai.onnx` | 13–19: `T`: float16, float32, float64 | `math/floor.cc` |
+| `Floor` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `math/floor.cc` |
 | `Gather` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`Tind`: int32, int64 | `tensor/gather.cc` |
 | `GatherElements` | `ai.onnx` | 11–12: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`Tind`: int32, int64<br>13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`Tind`: int32, int64 | `tensor/gather_elements.cc` |
 | `GatherND` | `ai.onnx` | 11–12: `T`: float32, float64, float16, int64, bfloat16, bool<br>`indices`: int64<br>13–19: `T`: float32, float64, float16, int64, bfloat16, bool<br>`indices`: int64 | `tensor/gather_nd.cc` |
@@ -43,8 +43,8 @@ Rows are grouped by operator/domain. Multiple opset ranges in a row preserve sep
 | `LeakyRelu` | `ai.onnx` | 6–15: `T`: float16, float32, float64<br>16–19: `T`: float16, float32, float64, bfloat16 | `activation/leaky_relu.cc` |
 | `Less` | `ai.onnx` | 13–19: `T`: uint32, uint64, int32, int64, float16, float32, float64, bfloat16 | `logical/less.cc` |
 | `LessOrEqual` | `ai.onnx` | 12–15: `T`: uint32, uint64, int32, int64, float16, float32, float64<br>16–19: `T`: uint32, uint64, int32, int64, float16, float32, float64, bfloat16 | `logical/less_or_equal.cc` |
-| `Log` | `ai.onnx` | 13–19: `T`: float16, float32, float64 | `activation/log.cc` |
-| `Loop` | `ai.onnx` | 1–12: `I`: int64<br>`B`: bool<br>`V`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bool<br>13–19: `I`: int64<br>`B`: bool<br>`V`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `controlflow/loop.cc` |
+| `Log` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `activation/log.cc` |
+| `Loop` | `ai.onnx` | 1–12: `I`: int64<br>`B`: bool<br>`V`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bool<br>13–19: `I`: int64<br>`B`: bool<br>`V`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bool | `controlflow/loop.cc` |
 | `MatMul` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `math/matmul.cc` |
 | `Max` | `ai.onnx` | 13–19: `T`: uint32, uint64, int32, int64, float16, float32, float64, bfloat16 | `math/max.cc` |
 | `MaxPool` | `ai.onnx` | 1–7: `T`: float16, float32, float64<br>8–11: `T`: float16, float32, float64<br>`I`: int64<br>12–19: `T`: float16, float32, float64, int8, uint8<br>`I`: int64 | `nn/pool.cc` |
@@ -56,13 +56,13 @@ Rows are grouped by operator/domain. Multiple opset ranges in a row preserve sep
 | `Not` | `ai.onnx` | 1–19: `T`: bool | `logical/not.cc` |
 | `OneHot` | `ai.onnx` | 11–19: `T1`: int32, int64<br>`T2`: int32, int64<br>`T3`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bool | `tensor/onehot.cc` |
 | `Or` | `ai.onnx` | 7–19: `T`: bool | `logical/or.cc` |
-| `PRelu` | `ai.onnx` | 7–15: `T`: float16, float32, float64<br>16–19: `T`: float16, float32, float64, bfloat16 | `activation/prelu.cc` |
+| `PRelu` | `ai.onnx` | 7–15: `T`: float16, float32, float64<br>16–19: `T`: float16, float32, float64, bfloat16, uint32, uint64, int32, int64 | `activation/prelu.cc` |
 | `Pad` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/pad.cc` |
 | `Pow` | `ai.onnx` | 13–14: `T`: int32, int64, float16, float32, float64, bfloat16<br>`T1`: int32, int64, float16, float32, float64<br>15–19: `T`: int32, int64, float16, float32, float64, bfloat16<br>`T1`: int32, int64, float16, float32, float64, bfloat16 | `math/pow.cc` |
-| `RandomUniform` | `ai.onnx` | 1–19: `T`: float16, float32, float64, bfloat16 | `generator/random_uniform.cc` |
-| `RandomUniformLike` | `ai.onnx` | 1–19: `T1`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`T2`: float16, float32, float64, bfloat16 | `generator/random_uniform.cc` |
+| `RandomUniform` | `ai.onnx` | 1–19: `T`: float16, float32, float64 | `generator/random_uniform.cc` |
+| `RandomUniformLike` | `ai.onnx` | 1–19: `T1`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`T2`: float16, float32, float64 | `generator/random_uniform.cc` |
 | `Range` | `ai.onnx` | 11–19: `T`: int16, int32, int64, float32, float64 | `generator/range.cc` |
-| `Reciprocal` | `ai.onnx` | 13–19: `T`: float16, float32, float64 | `activation/reciprocal.cc` |
+| `Reciprocal` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `activation/reciprocal.cc` |
 | `ReduceL2` | `ai.onnx` | 13–17: `T`: float16, float32, float64, int32<br>18–19: `T`: float16, float32, float64, bfloat16, int32 | `reduction/reduce_l2.cc` |
 | `ReduceMax` | `ai.onnx` | 13–19: `T`: uint8, int8, float16, float32, float64, bfloat16, int32, int64 | `reduction/reduce_max.cc` |
 | `ReduceMean` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16, int32 | `reduction/reduce_mean.cc` |
@@ -71,7 +71,7 @@ Rows are grouped by operator/domain. Multiple opset ranges in a row preserve sep
 | `ReduceSumSquare` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `reduction/reduce_sum_square.cc` |
 | `Relu` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `activation/relu.cc` |
 | `Reshape` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>19–19: `T`: string | `tensor/reshape.cc` |
-| `ReverseSequence` | `ai.onnx` | 10–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/reverse_sequence.cc` |
+| `ReverseSequence` | `ai.onnx` | 10–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bool | `tensor/reverse_sequence.cc` |
 | `Round` | `ai.onnx` | 11–19: `T`: float16, float32, float64 | `math/round.cc` |
 | `ScatterElements` | `ai.onnx` | 11–12: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`Tind`: int32, int64<br>13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`Tind`: int32, int64 | `tensor/scatter_elements.cc` |
 | `ScatterND` | `ai.onnx` | 11–12: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`indices`: int64<br>13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`indices`: int64 | `tensor/scatter_nd.cc` |
@@ -80,7 +80,7 @@ Rows are grouped by operator/domain. Multiple opset ranges in a row preserve sep
 | `Sign` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16 | `math/sign.cc` |
 | `Slice` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool<br>`Tind`: int32, int64 | `tensor/slice.cc` |
 | `Softmax` | `ai.onnx` | 13–17: `T`: float16, float32, float64, bfloat16 | `math/softmax.cc` |
-| `Softplus` | `ai.onnx` | 1–19: `T`: float16, float32, float64, bfloat16 | `activation/softplus.cc` |
+| `Softplus` | `ai.onnx` | 1–19: `T`: float16, float32, float64 | `activation/softplus.cc` |
 | `Split` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/split.cc` |
 | `Sqrt` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `activation/sqrt.cc` |
 | `Squeeze` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/squeeze.cc` |
@@ -88,12 +88,12 @@ Rows are grouped by operator/domain. Multiple opset ranges in a row preserve sep
 | `Sum` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `math/sum.cc` |
 | `Tanh` | `ai.onnx` | 13–19: `T`: float16, float32, float64, bfloat16 | `activation/tanh.cc` |
 | `Tile` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/tile.cc` |
-| `TopK` | `ai.onnx` | 10–10: `T`: float16, float32, float64, int32, int64<br>`I`: int64<br>11–19: `T`: float16, float32, float64, int32, int64<br>`I`: int64 | `math/topk.cc` |
+| `TopK` | `ai.onnx` | 10–10: `T`: uint8, uint16, uint32, uint64, int8, int16, float16, float32, float64, int32, int64<br>`I`: int64<br>11–19: `T`: uint8, uint16, uint32, uint64, int8, int16, float16, float32, float64, int32, int64<br>`I`: int64 | `math/topk.cc` |
 | `Transpose` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/transpose.cc` |
-| `Unique` | `ai.onnx` | 11–19: `T`: int32, int64 | `tensor/unique.cc` |
+| `Unique` | `ai.onnx` | 11–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bool | `tensor/unique.cc` |
 | `Unsqueeze` | `ai.onnx` | 13–19: `T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/unsqueeze.cc` |
 | `Where` | `ai.onnx` | 9–15: `B`: bool<br>`T`: float16, float32, float64, int32, int64, uint8<br>16–19: `B`: bool<br>`T`: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float16, float32, float64, bfloat16, bool | `tensor/where.cc` |
 | `Attention` | `com.microsoft` | 1–1: `T`: float32<br>`M`: int32 | `llm/attention.cc` |
-| `FusedGemm` | `com.microsoft` | 1–1: `T`: float16, float32, float64, bfloat16 | `math/fused_gemm.cc` |
-| `FusedMatMul` | `com.microsoft` | 1–1: `T`: float16, float32, float64, bfloat16 | `math/fused_matmul.cc` |
+| `FusedGemm` | `com.microsoft` | 1–1: `T`: float16, float32, float64 | `math/fused_gemm.cc` |
+| `FusedMatMul` | `com.microsoft` | 1–1: `T`: float16, float32, bfloat16 | `math/fused_matmul.cc` |
 | `MultiHeadAttention` | `com.microsoft` | 1–1: `T`: float32<br>`QK`: float32<br>`M`: int32 | `llm/multihead_attention.cc` |

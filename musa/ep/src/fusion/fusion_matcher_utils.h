@@ -57,5 +57,6 @@ bool ValueHasExternalConsumerOrGraphOutput(
     Ort::ConstValueInfo value_info, Ort::ConstNode internal_consumer,
     const std::unordered_set<std::string>& graph_output_names);
 std::optional<int64_t> ReadScalarIntInitializer(Ort::ConstValueInfo value_info);
+bool HasCastBoundary(const std::vector<Ort::ConstNode>& fusion_nodes);
 
 }  // namespace musa_ep

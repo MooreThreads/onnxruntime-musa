@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <limits>
+
 #include "shared_inc/op_kernel_common.h"
 #include "tensor/where_impl.h"
 
@@ -34,6 +36,20 @@ void FillBroadcastStrides(const std::vector<int64_t>& out_shape,
   }
 }
 
+MusaFastDivmod MakeFastDivmod(int64_t divisor) {
+  MusaFastDivmod result{};
+  result.divisor = static_cast<uint32_t>(divisor);
+  for (; result.shift < 32; ++result.shift) {
+    if ((uint64_t{1} << result.shift) >= result.divisor) break;
+  }
+  const uint64_t multiplier =
+      ((uint64_t{1} << 32) * ((uint64_t{1} << result.shift) - result.divisor)) /
+          result.divisor +
+      1;
+  result.multiplier = static_cast<uint32_t>(multiplier);
+  return result;
+}
+
 MusaWhereParams MakeWhereParams(const std::vector<int64_t>& out_shape,
                                 const std::vector<int64_t>& condition_shape,
                                 const std::vector<int64_t>& x_shape,
@@ -41,9 +57,22 @@ MusaWhereParams MakeWhereParams(const std::vector<int64_t>& out_shape,
   MusaWhereParams params{};
   params.rank = static_cast<int32_t>(out_shape.size());
   params.total_elements = NumElements(out_shape);
+  const auto mode = [&out_shape](const std::vector<int64_t>& shape) {
+    if (shape == out_shape) return 0;
+    if (NumElements(shape) == 1) return 1;
+    return 2;
+  };
+  params.condition_mode = mode(condition_shape);
+  params.x_mode = mode(x_shape);
+  params.y_mode = mode(y_shape);
   auto output_strides = Strides(out_shape);
+  params.use_fast_divmod =
+      params.total_elements <= std::numeric_limits<int32_t>::max();
   for (size_t dim = 0; dim < out_shape.size(); ++dim) {
     params.output_strides[dim] = output_strides[dim];
+    if (params.use_fast_divmod) {
+      params.output_divmod[dim] = MakeFastDivmod(output_strides[dim]);
+    }
   }
   FillBroadcastStrides(out_shape, condition_shape, params.condition_strides);
   FillBroadcastStrides(out_shape, x_shape, params.x_strides);

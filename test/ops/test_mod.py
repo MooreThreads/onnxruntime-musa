@@ -43,3 +43,17 @@ def test_mod_int32_tensor_broadcast():
         rtol=0,
         atol=0,
     )
+
+
+def test_mod_int32_floor_mod_negative_values():
+    x = np.array([-8, -8, 8, 8], dtype=np.int32)
+    y = np.array([3, -3, 3, -3], dtype=np.int32)
+    run_and_compare(
+        "Mod",
+        inputs={"A": x, "B": y},
+        outputs=[("Y", TensorProto.INT32)],
+        attrs={"fmod": 0},
+        opset=19,
+        rtol=0,
+        atol=0,
+    )

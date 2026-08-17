@@ -19,14 +19,18 @@ class ReduceSum : public OpKernelBase<ReduceSum> {
   ReduceSum(const OrtKernelInfo* info, void* /*state*/) {
     Ort::ConstKernelInfo kernel_info(info);
     keepdims_ = AttrOrDefault<int64_t>(kernel_info, "keepdims", 1);
+    noop_with_empty_axes_ =
+        AttrOrDefault<int64_t>(kernel_info, "noop_with_empty_axes", 0);
     axes_attr_ = AttrsOrEmpty(kernel_info, "axes");
   }
   OrtStatus* Compute(Ort::KernelContext& ctx) const {
-    return ReduceCompute(ctx, axes_attr_, keepdims_ != 0, ReduceMode::kSum);
+    return ReduceCompute(ctx, axes_attr_, keepdims_ != 0, ReduceMode::kSum,
+                         noop_with_empty_axes_ != 0);
   }
 
  private:
   int64_t keepdims_ = 1;
+  int64_t noop_with_empty_axes_ = 0;
   std::vector<int64_t> axes_attr_;
 };
 }  // namespace

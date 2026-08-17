@@ -86,6 +86,12 @@ OrtStatus* GatherElements::Compute(Ort::KernelContext& ctx) const {
         "GatherElements only supports int32/int64 indices");
   }
 
+  if (data_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING ||
+      data_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_COMPLEX64 ||
+      data_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_COMPLEX128) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "GatherElements unsupported dtype");
+  }
   const size_t elem_size = ElementSize(data_info.GetElementType());
   const size_t index_elem_size = ElementSize(indices_type);
   if (elem_size == 0 || index_elem_size == 0) {

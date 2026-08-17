@@ -103,6 +103,23 @@ OrtStatus* ValidateBooleanProviderOption(const OrtApi& ort_api,
   return CreateInvalidArgumentStatus(ort_api, oss.str());
 }
 
+OrtStatus* ParsePrecisionPolicy(const OrtApi& ort_api, const std::string& value,
+                                MusaPrecisionPolicy& out) {
+  if (value == "strict") {
+    out = MusaPrecisionPolicy::Strict;
+    return nullptr;
+  }
+  if (value == "report") {
+    out = MusaPrecisionPolicy::Report;
+    return nullptr;
+  }
+  std::ostringstream oss;
+  oss << "Invalid MUSA provider option 'precision_policy': expected "
+         "'strict' or 'report', got '"
+      << value << "'.";
+  return CreateInvalidArgumentStatus(ort_api, oss.str());
+}
+
 OrtStatus* ParseStreamPointerOption(const OrtApi& ort_api,
                                     const std::string& value,
                                     musaStream_t& out) {
@@ -142,6 +159,8 @@ OrtStatus* ValidateMusaProviderOptions(const OrtApi& ort_api,
                                     options.use_ep_level_unified_stream));
   RETURN_IF_ERROR(ValidateBooleanProviderOption(
       ort_api, "do_copy_in_default_stream", options.do_copy_in_default_stream));
+  RETURN_IF_ERROR(ValidateBooleanProviderOption(ort_api, "dtype_diagnostics",
+                                                options.dtype_diagnostics));
 
   if (options.has_user_compute_stream != 0 &&
       options.user_compute_stream == nullptr) {
@@ -198,6 +217,18 @@ OrtStatus* ParseMusaProviderOptionsFromSession(
                                          value,
                                          options.do_copy_in_default_stream));
 
+  RETURN_IF_ERROR(GetProviderOptionOrDefault(
+      ort_api, session_options, ep_name, "precision_policy",
+      MusaPrecisionPolicyName(options.precision_policy), value));
+  RETURN_IF_ERROR(
+      ParsePrecisionPolicy(ort_api, value, options.precision_policy));
+
+  RETURN_IF_ERROR(GetProviderOptionOrDefault(
+      ort_api, session_options, ep_name, "dtype_diagnostics",
+      std::to_string(options.dtype_diagnostics), value));
+  RETURN_IF_ERROR(ParseIntProviderOption(ort_api, "dtype_diagnostics", value,
+                                         options.dtype_diagnostics));
+
   return ValidateMusaProviderOptions(ort_api, options);
 }
 
@@ -240,6 +271,18 @@ OrtStatus* ParseMusaProviderOptionsFromKeyValuePairs(
   RETURN_IF_ERROR(ParseIntProviderOption(ort_api, "do_copy_in_default_stream",
                                          value,
                                          options.do_copy_in_default_stream));
+
+  RETURN_IF_ERROR(GetProviderOptionFromKeyValuePairs(
+      ort_api, key_value_pairs, "precision_policy",
+      MusaPrecisionPolicyName(options.precision_policy), value));
+  RETURN_IF_ERROR(
+      ParsePrecisionPolicy(ort_api, value, options.precision_policy));
+
+  RETURN_IF_ERROR(GetProviderOptionFromKeyValuePairs(
+      ort_api, key_value_pairs, "dtype_diagnostics",
+      std::to_string(options.dtype_diagnostics), value));
+  RETURN_IF_ERROR(ParseIntProviderOption(ort_api, "dtype_diagnostics", value,
+                                         options.dtype_diagnostics));
 
   return ValidateMusaProviderOptions(ort_api, options);
 }
@@ -423,6 +466,9 @@ OrtStatus* ORT_API_CALL MusaEpFactory::GetSupportedDevicesImpl(
                                         "use_ep_level_unified_stream", "0");
       factory->ort_api_.AddKeyValuePair(ep_options, "do_copy_in_default_stream",
                                         "1");
+      factory->ort_api_.AddKeyValuePair(ep_options, "precision_policy",
+                                        "strict");
+      factory->ort_api_.AddKeyValuePair(ep_options, "dtype_diagnostics", "0");
 
       // OrtEpDevice copies ep_metadata and ep_options.
       OrtEpDevice* ep_device = nullptr;

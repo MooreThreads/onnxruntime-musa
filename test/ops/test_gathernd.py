@@ -36,6 +36,15 @@ def test_gathernd_float_opset13():
     )
 
 
+def test_gathernd_float64_opset13():
+    data = np.arange(12, dtype=np.float64).reshape(3, 4)
+    indices = np.array([[0, 0], [2, 3], [1, 2]], dtype=np.int64)
+    run_and_compare(
+        "GatherND", inputs={"data": data, "indices": indices},
+        outputs=[("Y", TensorProto.DOUBLE)], opset=13, rtol=0, atol=0,
+    )
+
+
 def test_gathernd_batch_dims_int64_opset13():
     data = np.arange(2 * 3 * 4, dtype=np.int64).reshape(2, 3, 4)
     indices = np.array([[[0], [2]], [[1], [0]]], dtype=np.int64)

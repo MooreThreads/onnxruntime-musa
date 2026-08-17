@@ -8,7 +8,7 @@ namespace {
 
 template <typename T>
 __global__ void RmsNormKernel(const T* input,
-                              const float* gamma,
+                              const T* gamma,
                               T* output,
                               int64_t rows,
                               int64_t norm_size,
@@ -39,14 +39,15 @@ __global__ void RmsNormKernel(const T* input,
       rsqrtf(shared[0] / static_cast<float>(norm_size) + epsilon);
   for (int64_t col = threadIdx.x; col < norm_size; col += blockDim.x) {
     const float value =
-        MusaScalarToFloat(input[row_offset + col]) * inv_rms * gamma[col];
+        MusaScalarToFloat(input[row_offset + col]) * inv_rms *
+        MusaScalarToFloat(gamma[col]);
     output[row_offset + col] = MusaScalarFromFloat<T>(value);
   }
 }
 
 template <typename T>
 musaError_t LaunchRmsNormTyped(const void* input,
-                               const float* gamma,
+                               const void* gamma,
                                void* output,
                                int64_t rows,
                                int64_t norm_size,
@@ -59,15 +60,15 @@ musaError_t LaunchRmsNormTyped(const void* input,
     return musaErrorNotSupported;
   }
   RmsNormKernel<T><<<static_cast<int>(rows), kThreadsPerBlock, 0, stream>>>(
-      reinterpret_cast<const T*>(input), gamma, reinterpret_cast<T*>(output),
-      rows, norm_size, epsilon);
+      reinterpret_cast<const T*>(input), reinterpret_cast<const T*>(gamma),
+      reinterpret_cast<T*>(output), rows, norm_size, epsilon);
   return musaGetLastError();
 }
 
 }  // namespace
 
 musaError_t LaunchMusaRmsNormKernel(const void* input,
-                                    const float* gamma,
+                                    const void* gamma,
                                     void* output,
                                     int64_t rows,
                                     int64_t norm_size,

@@ -115,7 +115,9 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
                             GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))
          .AddTypeConstraint("B",
                             GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL))
-         .AddTypeConstraint("V", AllFixedSizeTensorTypes())
+         // ORT's Loop schema through opset 19 rejects BF16 loop-carried
+         // values, so do not advertise a wider kernel constraint.
+         .AddTypeConstraint("V", AllFixedSizeTensorTypesNoBFloat16())
          .SetInputMemType(0, OrtMemTypeCPUInput)
          .SetInputMemType(1, OrtMemTypeCPUInput)),
     Loop)

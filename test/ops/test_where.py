@@ -84,6 +84,37 @@ def test_where_float_broadcast_opset16():
     )
 
 
+def test_where_attention_mask_scalar_broadcast_opset16():
+    """Exercise the attention-shaped (broadcast mask, contiguous X, scalar Y) path."""
+    cond = np.array([[[[True, False, True]]]], dtype=np.bool_)
+    x = np.arange(12, dtype=np.float32).reshape(1, 2, 2, 3)
+    y = np.array(-100.0, dtype=np.float32)
+    expected = np.where(cond, x, y)
+    model = build_model(
+        "Where",
+        inputs={"condition": cond, "X": x, "Y": y},
+        outputs=[("Z", TensorProto.FLOAT)],
+        opset=16,
+    )
+    (actual,) = run(model, {"condition": cond, "X": x, "Y": y}, use_musa=True)
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_where_no_broadcast_opset16():
+    cond = np.array([[True, False], [False, True]], dtype=np.bool_)
+    x = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    y = np.array([[10.0, 20.0], [30.0, 40.0]], dtype=np.float32)
+    expected = np.where(cond, x, y)
+    model = build_model(
+        "Where",
+        inputs={"condition": cond, "X": x, "Y": y},
+        outputs=[("Z", TensorProto.FLOAT)],
+        opset=16,
+    )
+    (actual,) = run(model, {"condition": cond, "X": x, "Y": y}, use_musa=True)
+    np.testing.assert_array_equal(actual, expected)
+
+
 @pytest.mark.parametrize(
     ("np_dtype", "tensor_type", "values_a", "values_b"),
     _WHERE_OPSET9_DTYPES,

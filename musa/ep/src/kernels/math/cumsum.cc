@@ -34,6 +34,7 @@ std::vector<const OrtDataType*> CumSumOpset11TensorTypes() {
 std::vector<const OrtDataType*> CumSumOpset14TensorTypes() {
   auto types = CumSumOpset11TensorTypes();
   types.push_back(GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16));
+  types.push_back(GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16));
   return types;
 }
 
@@ -72,7 +73,8 @@ bool IsCumSumDeviceType(ONNXTensorElementDataType elem_type) {
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64 ||
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE ||
-         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16;
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
 }
 
 class CumSum : public OpKernelBase<CumSum> {

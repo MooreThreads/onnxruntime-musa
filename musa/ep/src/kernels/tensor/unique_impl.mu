@@ -177,12 +177,42 @@ musaError_t LaunchMusaUniqueCountKernel(const void* input, int64_t count,
                                         MusaElementType elem_type,
                                         musaStream_t stream) {
   switch (elem_type) {
+    case MusaElementType::Uint8:
+      return LaunchUniqueCountTyped<uint8_t>(input, count, first_flags,
+                                             block_counts, stream);
+    case MusaElementType::Uint16:
+      return LaunchUniqueCountTyped<uint16_t>(input, count, first_flags,
+                                              block_counts, stream);
+    case MusaElementType::Uint32:
+      return LaunchUniqueCountTyped<uint32_t>(input, count, first_flags,
+                                              block_counts, stream);
+    case MusaElementType::Uint64:
+      return LaunchUniqueCountTyped<uint64_t>(input, count, first_flags,
+                                              block_counts, stream);
+    case MusaElementType::Int8:
+      return LaunchUniqueCountTyped<int8_t>(input, count, first_flags,
+                                            block_counts, stream);
+    case MusaElementType::Int16:
+      return LaunchUniqueCountTyped<int16_t>(input, count, first_flags,
+                                             block_counts, stream);
     case MusaElementType::Int32:
       return LaunchUniqueCountTyped<int32_t>(input, count, first_flags,
                                              block_counts, stream);
     case MusaElementType::Int64:
       return LaunchUniqueCountTyped<int64_t>(input, count, first_flags,
                                              block_counts, stream);
+    case MusaElementType::Float16:
+      return LaunchUniqueCountTyped<__half>(input, count, first_flags,
+                                            block_counts, stream);
+    case MusaElementType::Float:
+      return LaunchUniqueCountTyped<float>(input, count, first_flags,
+                                           block_counts, stream);
+    case MusaElementType::Double:
+      return LaunchUniqueCountTyped<double>(input, count, first_flags,
+                                            block_counts, stream);
+    case MusaElementType::Bool:
+      return LaunchUniqueCountTyped<bool>(input, count, first_flags,
+                                          block_counts, stream);
     default:
       return musaErrorNotSupported;
   }
@@ -194,12 +224,52 @@ musaError_t LaunchMusaUniqueOutputKernel(
     int64_t* inverse_indices, int64_t* counts, int sorted,
     MusaElementType elem_type, musaStream_t stream) {
   switch (elem_type) {
+    case MusaElementType::Uint8:
+      return LaunchUniqueOutputTyped<uint8_t>(
+          input, input_count, unique_count, first_flags, values, indices,
+          inverse_indices, counts, sorted, stream);
+    case MusaElementType::Uint16:
+      return LaunchUniqueOutputTyped<uint16_t>(
+          input, input_count, unique_count, first_flags, values, indices,
+          inverse_indices, counts, sorted, stream);
+    case MusaElementType::Uint32:
+      return LaunchUniqueOutputTyped<uint32_t>(
+          input, input_count, unique_count, first_flags, values, indices,
+          inverse_indices, counts, sorted, stream);
+    case MusaElementType::Uint64:
+      return LaunchUniqueOutputTyped<uint64_t>(
+          input, input_count, unique_count, first_flags, values, indices,
+          inverse_indices, counts, sorted, stream);
+    case MusaElementType::Int8:
+      return LaunchUniqueOutputTyped<int8_t>(
+          input, input_count, unique_count, first_flags, values, indices,
+          inverse_indices, counts, sorted, stream);
+    case MusaElementType::Int16:
+      return LaunchUniqueOutputTyped<int16_t>(
+          input, input_count, unique_count, first_flags, values, indices,
+          inverse_indices, counts, sorted, stream);
     case MusaElementType::Int32:
       return LaunchUniqueOutputTyped<int32_t>(
           input, input_count, unique_count, first_flags, values, indices,
           inverse_indices, counts, sorted, stream);
     case MusaElementType::Int64:
       return LaunchUniqueOutputTyped<int64_t>(
+          input, input_count, unique_count, first_flags, values, indices,
+          inverse_indices, counts, sorted, stream);
+    case MusaElementType::Float16:
+      return LaunchUniqueOutputTyped<__half>(
+          input, input_count, unique_count, first_flags, values, indices,
+          inverse_indices, counts, sorted, stream);
+    case MusaElementType::Float:
+      return LaunchUniqueOutputTyped<float>(
+          input, input_count, unique_count, first_flags, values, indices,
+          inverse_indices, counts, sorted, stream);
+    case MusaElementType::Double:
+      return LaunchUniqueOutputTyped<double>(
+          input, input_count, unique_count, first_flags, values, indices,
+          inverse_indices, counts, sorted, stream);
+    case MusaElementType::Bool:
+      return LaunchUniqueOutputTyped<bool>(
           input, input_count, unique_count, first_flags, values, indices,
           inverse_indices, counts, sorted, stream);
     default:

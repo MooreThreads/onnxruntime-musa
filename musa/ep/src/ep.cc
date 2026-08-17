@@ -14,6 +14,7 @@
 #include "ep.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -95,6 +96,122 @@ struct SupportedNodeCandidates {
   std::vector<const OrtNode*> tentative_nodes;
 };
 
+const char* DTypeName(ONNXTensorElementDataType type) {
+  switch (type) {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+      return "float32";
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+      return "float16";
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16:
+      return "bfloat16";
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE:
+      return "float64";
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32:
+      return "int32";
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64:
+      return "int64";
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL:
+      return "bool";
+    default:
+      return "other";
+  }
+}
+
+std::string ValueDType(Ort::ConstValueInfo value) {
+  if (value == nullptr) return "missing";
+  Ort::ConstTypeInfo type_info = value.TypeInfo();
+  if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) return "non-tensor";
+  return DTypeName(type_info.GetTensorTypeAndShapeInfo().GetElementType());
+}
+
+std::string FusionNodeIds(const std::vector<Ort::ConstNode>& nodes) {
+  std::string ids;
+  for (Ort::ConstNode node : nodes) {
+    if (!ids.empty()) ids += ',';
+    ids += std::to_string(node.GetId());
+  }
+  return ids.empty() ? "none" : ids;
+}
+
+std::string FusionInputDTypes(const std::vector<Ort::ConstNode>& nodes) {
+  std::string types;
+  for (Ort::ConstNode node : nodes) {
+    for (Ort::ConstValueInfo input : node.GetInputs()) {
+      if (!types.empty()) types += ',';
+      types += ValueDType(input);
+    }
+  }
+  return types.empty() ? "none" : types;
+}
+
+std::string FusionOutputDTypes(const std::vector<Ort::ConstNode>& nodes) {
+  std::string types;
+  for (Ort::ConstNode node : nodes) {
+    for (Ort::ConstValueInfo output : node.GetOutputs()) {
+      if (!types.empty()) types += ',';
+      types += ValueDType(output);
+    }
+  }
+  return types.empty() ? "none" : types;
+}
+
+void EmitDTypeDiagnostics(const std::vector<Ort::ConstNode>& all_nodes,
+                          const std::unordered_set<size_t>& registered_node_ids,
+                          const std::vector<FusionMatch>& fusion_matches,
+                          const MusaProviderOptions& options) {
+  if (options.dtype_diagnostics == 0 &&
+      options.precision_policy != MusaPrecisionPolicy::Report) {
+    return;
+  }
+  std::fprintf(stderr, "MUSA_DTYPE_REPORT_BEGIN policy=%s nodes=%zu\n",
+               MusaPrecisionPolicyName(options.precision_policy),
+               all_nodes.size());
+  for (const auto& node : all_nodes) {
+    const std::string domain =
+        node.GetDomain().empty() ? "ai.onnx" : node.GetDomain();
+    std::string input_types;
+    for (Ort::ConstValueInfo input : node.GetInputs()) {
+      if (!input_types.empty()) input_types += ',';
+      input_types += ValueDType(input);
+    }
+    std::fprintf(stderr,
+                 "MUSA_DTYPE_NODE id=%zu name=%s op=%s domain=%s inputs=%s "
+                 "assigned=%d\n",
+                 node.GetId(), node.GetName().c_str(),
+                 node.GetOperatorType().c_str(), domain.c_str(),
+                 input_types.c_str(),
+                 registered_node_ids.count(node.GetId()) != 0 ? 1 : 0);
+  }
+  for (const FusionMatch& match : fusion_matches) {
+    const FusionDTypeContract& contract = match.dtype_contract;
+    for (const auto& fusion_nodes : match.fusions) {
+      std::fprintf(stderr,
+                   "MUSA_DTYPE_FUSION finder=%s nodes=%s inputs=%s outputs=%s "
+                   "storage=%s accumulator=%s output_policy=\"%s\" "
+                   "cast_policy=\"%s\" accepted=1\n",
+                   match.finder, FusionNodeIds(fusion_nodes).c_str(),
+                   FusionInputDTypes(fusion_nodes).c_str(),
+                   FusionOutputDTypes(fusion_nodes).c_str(),
+                   contract.storage_types, contract.accumulator_type,
+                   contract.output_type_policy, contract.cast_policy);
+    }
+    for (const FusionDTypeRejection& rejection : match.dtype_rejections) {
+      std::fprintf(stderr,
+                   "MUSA_DTYPE_FUSION finder=%s nodes=%s inputs=%s outputs=%s "
+                   "storage=%s accumulator=%s output_policy=\"%s\" "
+                   "cast_policy=\"%s\" accepted=0 reason=\"%s\"\n",
+                   match.finder, FusionNodeIds(rejection.nodes).c_str(),
+                   FusionInputDTypes(rejection.nodes).c_str(),
+                   FusionOutputDTypes(rejection.nodes).c_str(),
+                   contract.storage_types, contract.accumulator_type,
+                   contract.output_type_policy, contract.cast_policy,
+                   rejection.reason.c_str());
+    }
+  }
+  std::fprintf(stderr, "MUSA_DTYPE_REPORT_END\n");
+  std::fflush(stderr);
+}
+
 OrtStatus* CollectSupportedNodeCandidates(
     const OrtEpApi& ep_api, const std::string& ep_name,
     OrtEpGraphSupportInfo* graph_support_info,
@@ -131,7 +248,8 @@ OrtStatus* CollectSupportedNodeCandidates(
 OrtStatus* RegisterSingleNodeCapabilities(
     const OrtEpApi& ep_api, const OrtGraph& ort_graph,
     OrtEpGraphSupportInfo& graph_support_info,
-    const SupportedNodeCandidates& candidates) {
+    const SupportedNodeCandidates& candidates,
+    std::unordered_set<size_t>& registered_node_ids) {
   std::unordered_set<const OrtNode*> cpu_preferred_nodes;
   if (!candidates.tentative_nodes.empty()) {
     RETURN_IF_ERROR(GetCpuPreferredNodes(
@@ -145,6 +263,7 @@ OrtStatus* RegisterSingleNodeCapabilities(
     if (cpu_preferred_nodes.count(node) == 0) {
       RETURN_IF_ERROR(
           ep_api.EpGraphSupportInfo_AddSingleNode(&graph_support_info, node));
+      registered_node_ids.insert(node.GetId());
     }
   }
   return nullptr;
@@ -263,8 +382,13 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
     RETURN_IF_ERROR(CollectSupportedNodeCandidates(
         ep->ep_api_, ep->name_, graph_support_info, all_nodes,
         GetFusedNodeIds(fusion_matches), candidates));
+    std::unordered_set<size_t> registered_node_ids =
+        GetFusedNodeIds(fusion_matches);
     RETURN_IF_ERROR(RegisterSingleNodeCapabilities(
-        ep->ep_api_, *ort_graph, *graph_support_info, candidates));
+        ep->ep_api_, *ort_graph, *graph_support_info, candidates,
+        registered_node_ids));
+    EmitDTypeDiagnostics(all_nodes, registered_node_ids, fusion_matches,
+                         ep->config_.provider_options);
   } catch (const Ort::Exception& ex) {
     Ort::Status status(ex);
     return status.release();

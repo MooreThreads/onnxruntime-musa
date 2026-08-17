@@ -4,7 +4,7 @@
 
 #include "shared_inc/device_kernel_types.h"
 
-musaError_t LaunchMusaRmsNormKernel(const void* input, const float* gamma,
+musaError_t LaunchMusaRmsNormKernel(const void* input, const void* gamma,
                                     void* output, int64_t rows,
                                     int64_t norm_size, float epsilon,
                                     MusaElementType elem_type,

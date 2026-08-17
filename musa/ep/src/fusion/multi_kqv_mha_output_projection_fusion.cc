@@ -192,7 +192,7 @@ bool BuildUnsqueezeAndMha(const Pattern& partial, Ort::ConstNode& q_unsqueeze,
       !IsFloatTensorValueInfo(inputs[3]) ||
       !inputs[3].IsConstantInitializer() ||
       (inputs.size() == 5 &&
-       (!IsIntTensorValueInfo(inputs[4]) ||
+       (!IsInt32TensorValueInfo(inputs[4]) ||
         GetTensorShape(inputs[4]).value_or(std::vector<int64_t>{}).size() !=
             3))) {
     return false;

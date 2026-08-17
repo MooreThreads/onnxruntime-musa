@@ -33,6 +33,7 @@ std::string Name(Ort::ConstValueInfo value_info);
 bool IsFloatTensorValueInfo(Ort::ConstValueInfo value_info);
 bool IsConstantInitializerValueInfo(Ort::ConstValueInfo value_info);
 bool IsIntTensorValueInfo(Ort::ConstValueInfo value_info);
+bool IsInt32TensorValueInfo(Ort::ConstValueInfo value_info);
 bool IsSmallInitializer(Ort::ConstValueInfo input);
 
 std::optional<std::vector<int64_t>> GetStaticShape(

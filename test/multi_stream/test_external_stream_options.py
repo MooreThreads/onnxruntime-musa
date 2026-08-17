@@ -135,6 +135,19 @@ def test_make_provider_options_rejects_non_bool_options():
         musa_ep.make_provider_options(do_copy_in_default_stream=2)
 
 
+def test_make_provider_options_precision_diagnostics():
+    options = musa_ep.make_provider_options(
+        precision_policy="report", dtype_diagnostics=True
+    )
+    assert options["precision_policy"] == "report"
+    assert options["dtype_diagnostics"] == "1"
+
+
+def test_make_provider_options_rejects_unknown_precision_policy():
+    with pytest.raises(ValueError, match="precision_policy"):
+        musa_ep.make_provider_options(precision_policy="force_bf16")
+
+
 def test_user_compute_stream_runs_add_and_remains_user_owned():
     devices = musa_devices()
     if not devices:

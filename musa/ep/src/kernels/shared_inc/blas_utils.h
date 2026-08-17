@@ -143,6 +143,51 @@ inline bool SetMudnnTensor(::musa::dnn::Tensor& tensor, const void* data,
          ::musa::dnn::Status::SUCCESS;
 }
 
+inline bool TryMudnnBinary(Ort::KernelContext& ctx,
+                           const std::vector<int64_t>& lhs_shape,
+                           const std::vector<int64_t>& rhs_shape,
+                           ONNXTensorElementDataType elem_type,
+                           ::musa::dnn::Binary::Mode mode) {
+  constexpr size_t kMudnnMaxElementwiseRank = 5;
+  if (lhs_shape.empty() || rhs_shape.empty() ||
+      !IsGpuMemory(ctx.GetInput(0).GetTensorMemoryInfo()) ||
+      !IsGpuMemory(ctx.GetInput(1).GetTensorMemoryInfo())) {
+    return false;
+  }
+
+  const std::vector<int64_t> out_shape = BroadcastShape(lhs_shape, rhs_shape);
+  const MusaMudnnBroadcastShapes shapes =
+      CompressBroadcastShapesForMudnn(out_shape, lhs_shape, rhs_shape);
+  if (shapes.output.size() > kMudnnMaxElementwiseRank) return false;
+
+  Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+  if (!IsGpuMemory(y.GetTensorMemoryInfo())) return false;
+
+  ::musa::dnn::Handle* handle = nullptr;
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
+  if (handle_status != nullptr) {
+    Ort::GetApi().ReleaseStatus(handle_status);
+    return false;
+  }
+
+  ::musa::dnn::Tensor lhs_tensor;
+  ::musa::dnn::Tensor rhs_tensor;
+  ::musa::dnn::Tensor output_tensor;
+  if (!SetMudnnTensor(lhs_tensor, ctx.GetInput(0).GetTensorRawData(),
+                      shapes.lhs, elem_type) ||
+      !SetMudnnTensor(rhs_tensor, ctx.GetInput(1).GetTensorRawData(),
+                      shapes.rhs, elem_type) ||
+      !SetMudnnTensor(output_tensor, y.GetTensorMutableRawData(), shapes.output,
+                      elem_type)) {
+    return false;
+  }
+
+  ::musa::dnn::Binary op;
+  if (op.SetMode(mode) != ::musa::dnn::Status::SUCCESS) return false;
+  return op.Run(*handle, output_tensor, lhs_tensor, rhs_tensor) ==
+         ::musa::dnn::Status::SUCCESS;
+}
+
 inline bool SetMudnnFloatTensor(::musa::dnn::Tensor& tensor, const void* data,
                                 const std::vector<int64_t>& shape) {
   return SetMudnnTensor(tensor, data, shape,

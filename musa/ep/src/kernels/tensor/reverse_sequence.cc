@@ -106,7 +106,8 @@ OrtStatus* ReverseSequence::Compute(Ort::KernelContext& ctx) const {
 
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    ReverseSequence, kOnnxDomain, 10, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", AllFixedSizeTensorTypes())),
-    ReverseSequence)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(ReverseSequence, kOnnxDomain, 10, 19,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T",
+                                      AllFixedSizeTensorTypesNoBFloat16())),
+                                  ReverseSequence)

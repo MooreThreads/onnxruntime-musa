@@ -13,9 +13,46 @@
 """End-to-end CPU-vs-MUSA test for the Expand operator."""
 
 import numpy as np
+import pytest
 from onnx import helper
 
-from op_test_utils import TensorProto, build_graph_model, run_and_compare, run_model_and_compare
+from op_test_utils import (
+    TensorProto,
+    build_graph_model,
+    build_model_with_input_types,
+    float32_to_bfloat16_bits,
+    run_and_compare,
+    run_model_and_compare,
+    run_with_iobinding,
+)
+
+
+@pytest.mark.parametrize(
+    ("np_dtype", "tensor_type"),
+    [
+        (np.uint8, TensorProto.UINT8), (np.uint32, TensorProto.UINT32),
+        (np.uint64, TensorProto.UINT64), (np.int8, TensorProto.INT8),
+        (np.int16, TensorProto.INT16), (np.float64, TensorProto.DOUBLE),
+    ],
+)
+def test_expand_remaining_fixed_dtypes(np_dtype, tensor_type):
+    x = np.array([1, 2, 3], dtype=np_dtype)
+    shape = np.array([2, 1, 3], dtype=np.int64)
+    run_and_compare("Expand", inputs={"X": x, "shape": shape}, outputs=[("Y", tensor_type)])
+
+
+def test_expand_bfloat16():
+    x = float32_to_bfloat16_bits(np.array([[1.0], [2.0]], dtype=np.float32))
+    shape = np.array([2, 3], dtype=np.int64)
+    expected = np.broadcast_to(x, (2, 3))
+    model = build_model_with_input_types(
+        "Expand", {"X": x, "shape": shape},
+        {"X": TensorProto.BFLOAT16, "shape": TensorProto.INT64},
+        [("Y", TensorProto.BFLOAT16)], opset=19)
+    (actual,) = run_with_iobinding(model, {"X": x, "shape": shape},
+                                   {"X": TensorProto.BFLOAT16, "shape": TensorProto.INT64},
+                                   [("Y", TensorProto.BFLOAT16, expected.shape)], use_musa=True)
+    np.testing.assert_array_equal(actual, expected)
 
 
 def test_expand_float():

@@ -2,6 +2,22 @@
 
 本文档整理本仓库当前用到的环境变量和相关构建变量。默认按源码实际读取路径说明；如果变量只是在脚本或文档命令中使用，会单独标注。
 
+## Dtype contract 审查记录
+
+`musa/ep/src/dtype_contracts.json` 是本地开发使用的、机器可读的 dtype 审查记录，不是运行时配置，也不替代 C++ kernel registration、`GetCapability`、factory 或 device runtime dispatch。算子真正能否执行，仍由 registration、matcher/factory、runtime guard 和 MUSA kernel/library 共同决定。
+
+每条 contract 记录算子的 domain/opset、输入和 storage dtype、输出关系、compute/accumulation、device path、已验证 dtype、E2E 测试路径以及明确拒绝原因。`verified_dtypes` 只表示 registration、runtime dispatch、E2E 数值/placement 和真实 MUSA 设备证据均已确认的集合，不是从注册集合自动推导的理论支持集合。
+
+维护步骤：
+
+1. 新增已注册算子时新增一条 contract；不同 domain、opset 或 dtype 约束需要明确拆分或写在 `opset`/字段中。
+2. 新增 dtype 时，先修改 registration/runtime/kernel 并补 Python E2E；真实 MUSA 设备测试通过后，再加入 `verified_dtypes`。
+3. 收窄支持时同步修改 registration、`storage`、`verified_dtypes`，并在 `unsupported_reasons` 记录 ONNX schema、硬件、layout、rank 或 runtime 限制。
+4. `tests` 记录覆盖该 contract 的测试文件；CPU EP 无法作为参考时，测试应改为 MUSA 直测加 NumPy/reference 对照，并在测试注释中说明原因。
+5. 修改后执行 JSON 校验、对应 focused pytest、真实设备验证和 `git diff --check`。如果仓库中存在 dtype gap 审计脚本，也应确认 `registered - tested` 没有未处理差异。
+
+不要因为 CPU EP 能运行、某个 `.mu` kernel 存在，或 registration 很宽，就直接扩大 `verified_dtypes`。
+
 ## 构建和安装相关
 
 ### `build.sh` 构建模式
@@ -112,7 +128,9 @@ ORT_MUSA_DISABLE_ALL_FUSIONS=1 ./.venv/bin/python your_script.py
 - 用途：在 `MusaEp::GetCapabilityImpl()` 入口处，将 ORT 传入 MUSA EP 之前的 graph dump 成 Mermaid `.mmd`。
 - 默认值：未设置时关闭。
 - 关闭值：空值、`0`、`false`、`off`、`no`。
-- 输出内容：只输出 ONNX 算子节点和节点间依赖边；节点文本使用 op type。
+- 输出内容：ONNX 算子节点、外部输入/输出 value 节点和依赖边；节点文本使用
+  `op type | node name`，value 节点和边标签只显示 dtype，便于检查 `Cast`
+  边界和 matcher dtype 条件，同时避免暴露冗长的 input/output value name。
 - 示例：
 
 ```bash
@@ -141,7 +159,11 @@ ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID_PATH=/tmp/musa_get_capability_graph_{
 - 用途：记录 session 最终实际交给 MUSA EP 执行的 execution graph，并在进程正常退出时输出 Mermaid `.mmd`。
 - 默认值：未设置时关闭。
 - 关闭值：空值、`0`、`false`、`off`、`no`。
-- 输出内容：普通 MUSA kernel 和 MUSA EP fused node 的最终拓扑，边由 tensor value name 建立；fusion 节点会显示实际 dispatch 到的 `*FusionCompute`，例如 `TileConcatFusionCompute`、`LinearFusionCompute`。
+- 输出内容：普通 MUSA kernel 和 MUSA EP fused node 的最终拓扑，边由 tensor
+  value name 建立；边和外部 value 节点只显示 dtype。fusion 节点会显示
+  实际 dispatch 到的 `*FusionCompute`，例如 `TileConcatFusionCompute`、
+  `LinearFusionCompute`，并附带 fused node 的输入/输出 dtype list、storage
+  contract、accumulator policy、output policy 和 Cast policy。
 - 注意：这是 MUSA EP execution graph，不是 MUSA profiler 时间线；muDNN/muBLAS 内部展开出的硬件 kernel 不会在这里继续拆分。
 - 示例：
 

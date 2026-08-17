@@ -89,6 +89,32 @@ def test_tile_identity_concat_fusion(tmp_path):
     _assert_tile_concat_fused(events)
 
 
+def test_tile_identity_concat_fusion_float16(tmp_path):
+    rng = np.random.default_rng(23)
+    x0 = rng.standard_normal((3, 2)).astype(np.float16)
+    x1 = rng.standard_normal((3, 2)).astype(np.float16)
+    x2 = rng.standard_normal((3, 1)).astype(np.float16)
+    repeats = np.array([1, 1], dtype=np.int64)
+    feeds = {"X0": x0, "X1": x1, "X2": x2, "repeats": repeats}
+    model = build_graph_model(
+        [
+            helper.make_node("Tile", ["X0", "repeats"], ["T0"]),
+            helper.make_node("Tile", ["X1", "repeats"], ["T1"]),
+            helper.make_node("Concat", ["T0", "X2", "T1"], ["C"], axis=1),
+            helper.make_node("Relu", ["C"], ["Y"]),
+        ],
+        inputs=feeds,
+        outputs=[("Y", TensorProto.FLOAT16)],
+        name="tile_identity_concat_float16_fusion_graph",
+    )
+
+    run_model_and_compare(model, feeds, rtol=0, atol=0)
+    _, events = _profile_musa_session(
+        model, feeds, tmp_path, "tile_identity_concat_float16"
+    )
+    _assert_tile_concat_fused(events)
+
+
 def test_tile_concat_fusion_non_identity_repeats_fallback():
     rng = np.random.default_rng(19)
     x0 = rng.standard_normal((2, 2)).astype(np.float32)

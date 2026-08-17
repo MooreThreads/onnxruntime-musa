@@ -22,6 +22,7 @@ from onnx import helper
 from op_test_utils import (
     TensorProto,
     build_graph_model,
+    float32_to_bfloat16_bits,
     musa_devices,
     run_model_and_compare,
 )
@@ -53,6 +54,48 @@ def _profile_musa_ops(model, feeds, tmp_path, prefix):
         if args.get("provider") == "MUSAExecutionProvider":
             ops.add(args.get("op_name"))
     return ops
+
+
+def _profile_musa_ops_with_iobinding(
+    model, feeds, feed_types, outputs, tmp_path, prefix
+):
+    so = ort.SessionOptions()
+    so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    so.enable_profiling = True
+    so.profile_file_prefix = str(tmp_path / prefix)
+    so.add_provider_for_devices(musa_devices(), {})
+    session = ort.InferenceSession(model, sess_options=so)
+    io_binding = session.io_binding()
+    for name, arr in feeds.items():
+        io_binding.bind_input(
+            name, "cpu", 0, feed_types[name], arr.shape, arr.ctypes.data
+        )
+    output_buffers = []
+    for name, elem_type, shape in outputs:
+        output = np.empty(tuple(shape), dtype=np.uint16)
+        io_binding.bind_output(
+            name, "cpu", 0, elem_type, output.shape, output.ctypes.data
+        )
+        output_buffers.append(output)
+    session.run_with_iobinding(io_binding)
+    profile_path = session.end_profiling()
+    try:
+        with open(profile_path, "r", encoding="utf-8") as f:
+            events = json.load(f)
+    finally:
+        if os.path.exists(profile_path):
+            os.remove(profile_path)
+
+    ops = set()
+    for event in events:
+        if event.get("cat") != "Node" or not event.get("name", "").endswith(
+            "_kernel_time"
+        ):
+            continue
+        args = event.get("args", {})
+        if args.get("provider") == "MUSAExecutionProvider":
+            ops.add(args.get("op_name"))
+    return ops, output_buffers
 
 
 def test_concat_split_fusion_rank2_axis1_internal_splits():
@@ -101,6 +144,72 @@ def test_concat_split_fusion_rank2_axis1_internal_splits():
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_concat_split_copy_fusion_bfloat16_preserves_raw_payload(tmp_path):
+    rng = np.random.default_rng(29)
+    x0 = float32_to_bfloat16_bits(rng.standard_normal((3, 5)).astype(np.float32))
+    x1 = float32_to_bfloat16_bits(rng.standard_normal((3, 7)).astype(np.float32))
+    x2 = float32_to_bfloat16_bits(rng.standard_normal((3, 4)).astype(np.float32))
+
+    split_sizes = helper.make_tensor(
+        "split_sizes", TensorProto.INT64, [7], [2, 3, 1, 6, 2, 1, 1]
+    )
+    nodes = [
+        helper.make_node("Concat", ["X0", "X1", "X2"], ["Packed"], axis=1),
+        helper.make_node(
+            "Split",
+            ["Packed", "split_sizes"],
+            ["Y0", "Y1", "Y2", "Y3", "Y4", "Y5", "Y6"],
+            axis=1,
+        ),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "concat_split_bfloat16_copy_fusion_graph",
+        [
+            helper.make_tensor_value_info("X0", TensorProto.BFLOAT16, ["batch", 5]),
+            helper.make_tensor_value_info("X1", TensorProto.BFLOAT16, ["batch", 7]),
+            helper.make_tensor_value_info("X2", TensorProto.BFLOAT16, ["batch", 4]),
+        ],
+        [
+            helper.make_tensor_value_info("Y0", TensorProto.BFLOAT16, ["batch", 2]),
+            helper.make_tensor_value_info("Y1", TensorProto.BFLOAT16, ["batch", 3]),
+            helper.make_tensor_value_info("Y2", TensorProto.BFLOAT16, ["batch", 1]),
+            helper.make_tensor_value_info("Y3", TensorProto.BFLOAT16, ["batch", 6]),
+            helper.make_tensor_value_info("Y4", TensorProto.BFLOAT16, ["batch", 2]),
+            helper.make_tensor_value_info("Y5", TensorProto.BFLOAT16, ["batch", 1]),
+            helper.make_tensor_value_info("Y6", TensorProto.BFLOAT16, ["batch", 1]),
+        ],
+        initializer=[split_sizes],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    feeds = {"X0": x0, "X1": x1, "X2": x2}
+
+    ops, outputs = _profile_musa_ops_with_iobinding(
+        model.SerializeToString(),
+        feeds,
+        {"X0": TensorProto.BFLOAT16, "X1": TensorProto.BFLOAT16, "X2": TensorProto.BFLOAT16},
+        [
+            ("Y0", TensorProto.BFLOAT16, (3, 2)),
+            ("Y1", TensorProto.BFLOAT16, (3, 3)),
+            ("Y2", TensorProto.BFLOAT16, (3, 1)),
+            ("Y3", TensorProto.BFLOAT16, (3, 6)),
+            ("Y4", TensorProto.BFLOAT16, (3, 2)),
+            ("Y5", TensorProto.BFLOAT16, (3, 1)),
+            ("Y6", TensorProto.BFLOAT16, (3, 1)),
+        ],
+        tmp_path,
+        "concat_split_bfloat16_copy",
+    )
+    packed = np.concatenate([x0, x1, x2], axis=1)
+    expected = np.split(packed, [2, 5, 6, 12, 14, 15], axis=1)
+    for actual, expected_output in zip(outputs, expected):
+        np.testing.assert_array_equal(actual, expected_output)
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in ops)
+    assert "Concat" not in ops
+    assert "Split" not in ops
 
 
 def test_concat_split_downstream_concat_fusion():

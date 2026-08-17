@@ -38,6 +38,29 @@ bool IsLinearActivationNode(Ort::ConstNode node) {
          IsOnnxOp(node, "Tanh") || IsOnnxOp(node, "Sigmoid");
 }
 
+bool IsLinearGemmStorageType(ONNXTensorElementDataType elem_type) {
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE;
+}
+
+bool IsFusedMatMulStorageType(ONNXTensorElementDataType elem_type) {
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+}
+
+bool RequireSameLinearStorageType(
+    const std::vector<Ort::ConstValueInfo>& value_infos, bool allow_double) {
+  ONNXTensorElementDataType elem_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  if (!RequireSameElementType(value_infos, elem_type)) {
+    return false;
+  }
+  return allow_double ? IsLinearGemmStorageType(elem_type)
+                      : IsFusedMatMulStorageType(elem_type);
+}
+
 bool IsBiasShapeForMatMulN(const std::vector<int64_t>& bias_shape, int64_t n) {
   if (n <= 0) {
     return true;
@@ -72,10 +95,10 @@ bool CanFuseMatMulAddActivation(Ort::ConstNode matmul_node,
   }
 
   const size_t bias_idx = static_cast<size_t>(1 - add_matmul_input_idx);
-  if (!IsFloatTensorValueInfo(matmul_inputs[0]) ||
-      !IsFloatTensorValueInfo(matmul_inputs[1]) ||
-      !IsFloatTensorValueInfo(add_inputs[bias_idx]) ||
-      !IsFloatTensorValueInfo(activation_outputs[0])) {
+  if (!RequireSameLinearStorageType(
+          {matmul_inputs[0], matmul_inputs[1], add_inputs[bias_idx],
+           activation_outputs[0]},
+          false)) {
     return false;
   }
 
@@ -121,10 +144,9 @@ bool CanFuseMatMulAdd(Ort::ConstNode matmul_node, Ort::ConstNode add_node,
   }
 
   const size_t bias_idx = static_cast<size_t>(1 - add_matmul_input_idx);
-  if (!IsFloatTensorValueInfo(matmul_inputs[0]) ||
-      !IsFloatTensorValueInfo(matmul_inputs[1]) ||
-      !IsFloatTensorValueInfo(add_inputs[bias_idx]) ||
-      !IsFloatTensorValueInfo(add_outputs[0])) {
+  if (!RequireSameLinearStorageType({matmul_inputs[0], matmul_inputs[1],
+                                     add_inputs[bias_idx], add_outputs[0]},
+                                    false)) {
     return false;
   }
 
@@ -167,12 +189,12 @@ bool CanFuseGemmActivation(Ort::ConstNode gemm_node,
     return false;
   }
 
-  if (!IsFloatTensorValueInfo(gemm_inputs[0]) ||
-      !IsFloatTensorValueInfo(gemm_inputs[1]) ||
-      !IsFloatTensorValueInfo(activation_outputs[0])) {
-    return false;
+  std::vector<Ort::ConstValueInfo> typed_values = {
+      gemm_inputs[0], gemm_inputs[1], activation_outputs[0]};
+  if (gemm_inputs.size() == 3) {
+    typed_values.push_back(gemm_inputs[2]);
   }
-  if (gemm_inputs.size() == 3 && !IsFloatTensorValueInfo(gemm_inputs[2])) {
+  if (!RequireSameLinearStorageType(typed_values, true)) {
     return false;
   }
 
@@ -211,8 +233,7 @@ bool IsAliasOnlyReshape(Ort::ConstNode reshape_node,
   std::vector<Ort::ConstValueInfo> outputs = reshape_node.GetOutputs();
   if (inputs.size() != 2 || outputs.size() != 1 ||
       !IsSmallIntegerInitializer(inputs[1]) ||
-      !IsFloatTensorValueInfo(inputs[0]) ||
-      !IsFloatTensorValueInfo(outputs[0]) ||
+      !RequireSameLinearStorageType({inputs[0], outputs[0]}, true) ||
       !HasSameStaticElementCount(inputs[0], outputs[0])) {
     return false;
   }
@@ -231,8 +252,7 @@ bool IsAliasOnlyUnsqueeze(Ort::ConstNode unsqueeze_node,
   std::vector<Ort::ConstValueInfo> outputs = unsqueeze_node.GetOutputs();
   if (inputs.size() != 2 || outputs.size() != 1 ||
       !ReadUnsqueezeAxes(unsqueeze_node).has_value() ||
-      !IsFloatTensorValueInfo(inputs[0]) ||
-      !IsFloatTensorValueInfo(outputs[0]) ||
+      !RequireSameLinearStorageType({inputs[0], outputs[0]}, true) ||
       !HasSameStaticElementCount(inputs[0], outputs[0])) {
     return false;
   }
@@ -347,11 +367,14 @@ std::vector<std::vector<Ort::ConstNode>> FindGemmActivationFusions(
     // by CanFuseGemmActivation.
     auto a_shape = GetStaticShape(gemm_inputs[0]);
     auto b_shape = GetStaticShape(gemm_inputs[1]);
-    if (!IsFloatTensorValueInfo(gemm_inputs[0]) ||
-        !IsFloatTensorValueInfo(gemm_inputs[1]) ||
-        (gemm_inputs.size() == 3 && !IsFloatTensorValueInfo(gemm_inputs[2])) ||
-        !IsFloatTensorValueInfo(final_output) || !a_shape.has_value() ||
-        a_shape->size() != 2 || !b_shape.has_value() || b_shape->size() != 2) {
+    std::vector<Ort::ConstValueInfo> typed_values = {
+        gemm_inputs[0], gemm_inputs[1], final_output};
+    if (gemm_inputs.size() == 3) {
+      typed_values.push_back(gemm_inputs[2]);
+    }
+    if (!RequireSameLinearStorageType(typed_values, true) ||
+        !a_shape.has_value() || a_shape->size() != 2 || !b_shape.has_value() ||
+        b_shape->size() != 2) {
       continue;
     }
 

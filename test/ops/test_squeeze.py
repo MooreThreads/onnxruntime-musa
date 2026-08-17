@@ -13,8 +13,15 @@
 """End-to-end CPU-vs-MUSA test for the Squeeze operator."""
 
 import numpy as np
+import pytest
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import (
+    TensorProto,
+    build_model_with_input_types,
+    float32_to_bfloat16_bits,
+    run_and_compare,
+    run_with_iobinding,
+)
 
 
 def test_squeeze_axis0():
@@ -50,3 +57,30 @@ def test_squeeze_uint8():
     x = np.arange(6, dtype=np.uint8).reshape(1, 2, 3)
     axes = np.array([0], dtype=np.int64)
     run_and_compare("Squeeze", inputs={"X": x, "axes": axes}, outputs=[("Y", TensorProto.UINT8)])
+
+@pytest.mark.parametrize(("dtype", "tensor_type"), [
+    (np.float16, TensorProto.FLOAT16), (np.float64, TensorProto.DOUBLE),
+    (np.int8, TensorProto.INT8), (np.int16, TensorProto.INT16),
+    (np.uint16, TensorProto.UINT16), (np.uint32, TensorProto.UINT32),
+    (np.uint64, TensorProto.UINT64),
+])
+def test_squeeze_fixed_size_dtype_matrix(dtype, tensor_type):
+    x = np.arange(6, dtype=np.int64).reshape(1, 2, 3).astype(dtype)
+    axes = np.array([0], dtype=np.int64)
+    run_and_compare("Squeeze", inputs={"X": x, "axes": axes}, outputs=[("Y", tensor_type)])
+
+
+def test_squeeze_bfloat16():
+    x = float32_to_bfloat16_bits(np.arange(6, dtype=np.float32).reshape(1, 2, 3))
+    axes = np.array([0], dtype=np.int64)
+    model = build_model_with_input_types(
+        "Squeeze", inputs={"X": x, "axes": axes},
+        input_types={"X": TensorProto.BFLOAT16, "axes": TensorProto.INT64},
+        outputs=[("Y", TensorProto.BFLOAT16)],
+    )
+    (actual,) = run_with_iobinding(
+        model, {"X": x, "axes": axes},
+        {"X": TensorProto.BFLOAT16, "axes": TensorProto.INT64},
+        [("Y", TensorProto.BFLOAT16, (2, 3))], use_musa=True,
+    )
+    np.testing.assert_array_equal(actual, x.reshape(2, 3))

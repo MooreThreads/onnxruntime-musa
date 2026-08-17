@@ -85,9 +85,7 @@ OrtStatus* Unique::Compute(Ort::KernelContext& ctx) const {
   }
 
   MusaElementType musa_elem_type;
-  if (!ToMusaElementType(elem_type, musa_elem_type) ||
-      (musa_elem_type != MusaElementType::Int32 &&
-       musa_elem_type != MusaElementType::Int64)) {
+  if (!ToMusaElementType(elem_type, musa_elem_type)) {
     return UnsupportedDeviceElementwiseStatus("Unique", elem_type);
   }
 

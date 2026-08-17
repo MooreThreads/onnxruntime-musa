@@ -138,6 +138,37 @@ def test_concat_unsqueeze_reshape_fusion(tmp_path):
     assert "Reshape" not in musa_ops
 
 
+def test_concat_reshape_fusion_float16(tmp_path):
+    rng = np.random.default_rng(43)
+    feeds = {
+        "X0": rng.standard_normal((2, 3, 4)).astype(np.float16),
+        "X1": rng.standard_normal((2, 3, 2)).astype(np.float16),
+    }
+    target_shape = np.array([6, 6], dtype=np.int64)
+
+    model = build_graph_model(
+        [
+            helper.make_node("Concat", ["X0", "X1"], ["C"], axis=2),
+            helper.make_node("Reshape", ["C", "target_shape"], ["Y"]),
+        ],
+        inputs=feeds,
+        outputs=[("Y", TensorProto.FLOAT16)],
+        initializers=[numpy_helper.from_array(target_shape, name="target_shape")],
+        name="concat_reshape_float16_fusion_graph",
+    )
+
+    (actual,) = run_model_and_compare(model, feeds, rtol=0, atol=0)
+    expected = np.concatenate([feeds["X0"], feeds["X1"]], axis=2).reshape(6, 6)
+    np.testing.assert_array_equal(actual, expected)
+    _, events = _profile_musa_session(model, feeds, tmp_path, "concat_reshape_float16")
+    musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
+    fused_ops = {op for op in musa_ops if str(op).startswith("MUSAExecutionProvider_")}
+
+    assert fused_ops
+    assert "Concat" not in musa_ops
+    assert "Reshape" not in musa_ops
+
+
 def test_concat_reshape_fusion_accepts_cpu_produced_input(tmp_path):
     rng = np.random.default_rng(41)
     feeds = {

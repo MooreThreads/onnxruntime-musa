@@ -34,38 +34,76 @@ ReduceFromAccum<__mt_bfloat16, float>(float value) {
   return __float2bfloat16_rn(value);
 }
 
-template <typename AccT>
-__device__ __forceinline__ AccT ReduceLowestValue() {
-  return static_cast<AccT>(0);
+template <typename T, typename AccT>
+__device__ __forceinline__ AccT ReduceLowestValue();
+
+template <>
+__device__ __forceinline__ uint32_t ReduceLowestValue<uint8_t, uint32_t>() {
+  return 0;
 }
 
 template <>
-__device__ __forceinline__ float ReduceLowestValue<float>() {
+__device__ __forceinline__ uint32_t ReduceLowestValue<uint32_t, uint32_t>() {
+  return 0;
+}
+
+template <>
+__device__ __forceinline__ uint64_t ReduceLowestValue<uint64_t, uint64_t>() {
+  return 0;
+}
+
+template <>
+__device__ __forceinline__ int32_t ReduceLowestValue<int8_t, int32_t>() {
+  return INT8_MIN;
+}
+
+template <>
+__device__ __forceinline__ float ReduceLowestValue<float, float>() {
   return -INFINITY;
 }
 
 template <>
-__device__ __forceinline__ double ReduceLowestValue<double>() {
+__device__ __forceinline__ double ReduceLowestValue<double, double>() {
   return -INFINITY;
 }
 
 template <>
-__device__ __forceinline__ int32_t ReduceLowestValue<int32_t>() {
+__device__ __forceinline__ float ReduceLowestValue<__half, float>() {
+  return -INFINITY;
+}
+
+template <>
+__device__ __forceinline__ float ReduceLowestValue<__mt_bfloat16, float>() {
+  return -INFINITY;
+}
+
+template <>
+__device__ __forceinline__ int32_t ReduceLowestValue<int32_t, int32_t>() {
   return INT32_MIN;
 }
 
 template <>
-__device__ __forceinline__ int64_t ReduceLowestValue<int64_t>() {
+__device__ __forceinline__ int64_t ReduceLowestValue<int32_t, int64_t>() {
+  return INT32_MIN;
+}
+
+template <>
+__device__ __forceinline__ float ReduceLowestValue<int32_t, float>() {
+  return static_cast<float>(INT32_MIN);
+}
+
+template <>
+__device__ __forceinline__ int64_t ReduceLowestValue<int64_t, int64_t>() {
   return INT64_MIN;
 }
 
-template <typename AccT>
+template <typename T, typename AccT>
 __device__ __forceinline__ AccT ReduceInitValue(MusaReduceOp op) {
   if (op == MusaReduceOp::Prod) {
     return static_cast<AccT>(1);
   }
   if (op == MusaReduceOp::Max) {
-    return ReduceLowestValue<AccT>();
+    return ReduceLowestValue<T, AccT>();
   }
   return static_cast<AccT>(0);
 }
@@ -115,9 +153,8 @@ __device__ __forceinline__ int64_t ReduceInputBase(int64_t output_index,
   return input_base;
 }
 
-__device__ __forceinline__ int64_t ReduceInputOffset(
-    int64_t reduction_index,
-    MusaReduceParams params) {
+__device__ __forceinline__ int64_t ReduceInputOffset(int64_t reduction_index,
+                                                     MusaReduceParams params) {
   int64_t remaining = reduction_index;
   int64_t input_offset = 0;
   for (int32_t dim = params.rank - 1; dim >= 0; --dim) {
@@ -133,22 +170,19 @@ __device__ __forceinline__ int64_t ReduceInputOffset(
 }
 
 template <typename T, typename AccT>
-__global__ void ReduceKernel(const T* input,
-                             T* output,
-                             MusaReduceParams params,
+__global__ void ReduceKernel(const T* input, T* output, MusaReduceParams params,
                              MusaReduceOp op) {
-  const int64_t thread_id = static_cast<int64_t>(blockIdx.x) * blockDim.x +
-                            threadIdx.x;
+  const int64_t thread_id =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const int64_t total_threads = static_cast<int64_t>(gridDim.x) * blockDim.x;
   for (int64_t output_index = thread_id; output_index < params.output_elements;
        output_index += total_threads) {
     const int64_t input_base = ReduceInputBase(output_index, params);
 
-    AccT acc = ReduceInitValue<AccT>(op);
+    AccT acc = ReduceInitValue<T, AccT>(op);
     for (int64_t r = 0; r < params.reduction_elements; ++r) {
       const int64_t input_index = input_base + ReduceInputOffset(r, params);
-      acc =
-          ReduceUpdateValue(acc, ReduceToAccum<AccT>(input[input_index]), op);
+      acc = ReduceUpdateValue(acc, ReduceToAccum<AccT>(input[input_index]), op);
     }
     if (op == MusaReduceOp::Mean) {
       acc /= static_cast<AccT>(params.reduction_elements);
@@ -161,10 +195,8 @@ __global__ void ReduceKernel(const T* input,
 }
 
 template <typename T, typename AccT>
-__global__ void ReduceBlockKernel(const T* input,
-                                  T* output,
-                                  MusaReduceParams params,
-                                  MusaReduceOp op) {
+__global__ void ReduceBlockKernel(const T* input, T* output,
+                                  MusaReduceParams params, MusaReduceOp op) {
   const int64_t output_index = static_cast<int64_t>(blockIdx.x);
   if (output_index >= params.output_elements) {
     return;
@@ -172,7 +204,7 @@ __global__ void ReduceBlockKernel(const T* input,
 
   const int64_t input_base = ReduceInputBase(output_index, params);
 
-  AccT acc = ReduceInitValue<AccT>(op);
+  AccT acc = ReduceInitValue<T, AccT>(op);
   for (int64_t r = threadIdx.x; r < params.reduction_elements;
        r += blockDim.x) {
     const int64_t input_index = input_base + ReduceInputOffset(r, params);
@@ -184,9 +216,8 @@ __global__ void ReduceBlockKernel(const T* input,
   __syncthreads();
   for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
     if (threadIdx.x < stride) {
-      shared[threadIdx.x] =
-          ReduceCombineValue(shared[threadIdx.x], shared[threadIdx.x + stride],
-                             op);
+      shared[threadIdx.x] = ReduceCombineValue(
+          shared[threadIdx.x], shared[threadIdx.x + stride], op);
     }
     __syncthreads();
   }
@@ -204,12 +235,11 @@ __global__ void ReduceBlockKernel(const T* input,
 }
 
 template <typename T, typename AccT>
-__global__ void ReduceSingleAxisKernel(const T* input,
-                                       T* output,
+__global__ void ReduceSingleAxisKernel(const T* input, T* output,
                                        MusaReduceParams params,
                                        MusaReduceOp op) {
-  const int64_t thread_id = static_cast<int64_t>(blockIdx.x) * blockDim.x +
-                            threadIdx.x;
+  const int64_t thread_id =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const int64_t total_threads = static_cast<int64_t>(gridDim.x) * blockDim.x;
   const int64_t inner_size = params.inner_size;
   const int64_t reduce_dim = params.reduce_dim;
@@ -220,7 +250,7 @@ __global__ void ReduceSingleAxisKernel(const T* input,
         inner_size == 0 ? 0 : output_index - outer * inner_size;
     const int64_t input_base = (outer * reduce_dim) * inner_size + inner;
 
-    AccT acc = ReduceInitValue<AccT>(op);
+    AccT acc = ReduceInitValue<T, AccT>(op);
     for (int64_t r = 0; r < reduce_dim; ++r) {
       acc = ReduceUpdateValue(
           acc, ReduceToAccum<AccT>(input[input_base + r * inner_size]), op);
@@ -236,8 +266,7 @@ __global__ void ReduceSingleAxisKernel(const T* input,
 }
 
 template <typename T, typename AccT>
-__global__ void ReduceLastAxisBlockKernel(const T* input,
-                                          T* output,
+__global__ void ReduceLastAxisBlockKernel(const T* input, T* output,
                                           MusaReduceParams params,
                                           MusaReduceOp op) {
   const int64_t output_index = static_cast<int64_t>(blockIdx.x);
@@ -248,10 +277,10 @@ __global__ void ReduceLastAxisBlockKernel(const T* input,
   const int64_t reduce_dim = params.reduce_dim;
   const int64_t input_base = output_index * reduce_dim;
 
-  AccT acc = ReduceInitValue<AccT>(op);
+  AccT acc = ReduceInitValue<T, AccT>(op);
   for (int64_t r = threadIdx.x; r < reduce_dim; r += blockDim.x) {
-    acc = ReduceUpdateValue(
-        acc, ReduceToAccum<AccT>(input[input_base + r]), op);
+    acc =
+        ReduceUpdateValue(acc, ReduceToAccum<AccT>(input[input_base + r]), op);
   }
 
   __shared__ AccT shared[kThreadsPerBlock];
@@ -259,9 +288,8 @@ __global__ void ReduceLastAxisBlockKernel(const T* input,
   __syncthreads();
   for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
     if (threadIdx.x < stride) {
-      shared[threadIdx.x] =
-          ReduceCombineValue(shared[threadIdx.x], shared[threadIdx.x + stride],
-                             op);
+      shared[threadIdx.x] = ReduceCombineValue(
+          shared[threadIdx.x], shared[threadIdx.x + stride], op);
     }
     __syncthreads();
   }
@@ -279,8 +307,7 @@ __global__ void ReduceLastAxisBlockKernel(const T* input,
 }
 
 template <typename T, typename AccT>
-__global__ void ReduceLastAxisMultiOutputBlockKernel(const T* input,
-                                                     T* output,
+__global__ void ReduceLastAxisMultiOutputBlockKernel(const T* input, T* output,
                                                      MusaReduceParams params,
                                                      MusaReduceOp op,
                                                      int group_size,
@@ -294,11 +321,11 @@ __global__ void ReduceLastAxisMultiOutputBlockKernel(const T* input,
   const int64_t reduce_dim = params.reduce_dim;
   const int64_t input_base = output_index * reduce_dim;
 
-  AccT acc = ReduceInitValue<AccT>(op);
+  AccT acc = ReduceInitValue<T, AccT>(op);
   if (valid) {
     for (int64_t r = lane; r < reduce_dim; r += group_size) {
-      acc = ReduceUpdateValue(acc,
-                              ReduceToAccum<AccT>(input[input_base + r]), op);
+      acc = ReduceUpdateValue(acc, ReduceToAccum<AccT>(input[input_base + r]),
+                              op);
     }
   }
 
@@ -307,9 +334,8 @@ __global__ void ReduceLastAxisMultiOutputBlockKernel(const T* input,
   __syncthreads();
   for (int stride = group_size / 2; stride > 0; stride >>= 1) {
     if (lane < stride) {
-      shared[threadIdx.x] =
-          ReduceCombineValue(shared[threadIdx.x], shared[threadIdx.x + stride],
-                             op);
+      shared[threadIdx.x] = ReduceCombineValue(
+          shared[threadIdx.x], shared[threadIdx.x + stride], op);
     }
     __syncthreads();
   }
@@ -329,10 +355,8 @@ __global__ void ReduceLastAxisMultiOutputBlockKernel(const T* input,
 }  // namespace
 
 template <typename T, typename AccT>
-musaError_t LaunchMusaReduceTyped(const void* input,
-                                  void* output,
-                                  MusaReduceParams params,
-                                  MusaReduceOp op,
+musaError_t LaunchMusaReduceTyped(const void* input, void* output,
+                                  MusaReduceParams params, MusaReduceOp op,
                                   musaStream_t stream) {
   if (params.output_elements == 0) {
     return musaSuccess;
@@ -344,9 +368,9 @@ musaError_t LaunchMusaReduceTyped(const void* input,
         const int group_size = 64;
         const int outputs_per_block = kThreadsPerBlock / group_size;
         ReduceLastAxisMultiOutputBlockKernel<T, AccT>
-            <<<static_cast<int>((params.output_elements + outputs_per_block -
-                                 1) /
-                                outputs_per_block),
+            <<<static_cast<int>(
+                   (params.output_elements + outputs_per_block - 1) /
+                   outputs_per_block),
                kThreadsPerBlock, 0, stream>>>(
                 reinterpret_cast<const T*>(input), reinterpret_cast<T*>(output),
                 params, op, group_size, outputs_per_block);
@@ -379,17 +403,15 @@ musaError_t LaunchMusaReduceTyped(const void* input,
   return musaGetLastError();
 }
 
-musaError_t LaunchMusaReduceKernel(const void* input,
-                                   void* output,
-                                   MusaReduceParams params,
-                                   MusaReduceOp op,
+musaError_t LaunchMusaReduceKernel(const void* input, void* output,
+                                   MusaReduceParams params, MusaReduceOp op,
                                    MusaElementType elem_type,
                                    musaStream_t stream) {
   switch (elem_type) {
     case MusaElementType::Uint8:
       if (op == MusaReduceOp::Mean) return musaErrorNotSupported;
-      return LaunchMusaReduceTyped<uint8_t, uint32_t>(input, output, params,
-                                                      op, stream);
+      return LaunchMusaReduceTyped<uint8_t, uint32_t>(input, output, params, op,
+                                                      stream);
     case MusaElementType::Int8:
       if (op == MusaReduceOp::Mean) return musaErrorNotSupported;
       return LaunchMusaReduceTyped<int8_t, int32_t>(input, output, params, op,
@@ -411,40 +433,46 @@ musaError_t LaunchMusaReduceKernel(const void* input,
       if (op == MusaReduceOp::Mean) return musaErrorNotSupported;
       return LaunchMusaReduceTyped<int64_t, int64_t>(input, output, params, op,
                                                      stream);
+    case MusaElementType::Uint32:
+      if (op == MusaReduceOp::Mean || op == MusaReduceOp::L2) {
+        return musaErrorNotSupported;
+      }
+      return LaunchMusaReduceTyped<uint32_t, uint32_t>(input, output, params,
+                                                       op, stream);
+    case MusaElementType::Uint64:
+      if (op == MusaReduceOp::Mean || op == MusaReduceOp::L2) {
+        return musaErrorNotSupported;
+      }
+      return LaunchMusaReduceTyped<uint64_t, uint64_t>(input, output, params,
+                                                       op, stream);
     case MusaElementType::Float16:
       return LaunchMusaReduceTyped<__half, float>(input, output, params, op,
                                                   stream);
     case MusaElementType::BFloat16:
-      return LaunchMusaReduceTyped<__mt_bfloat16, float>(
-          input, output, params, op, stream);
+      return LaunchMusaReduceTyped<__mt_bfloat16, float>(input, output, params,
+                                                         op, stream);
     default:
       return musaErrorNotSupported;
   }
 }
 
-musaError_t LaunchMusaReduceFloatKernel(const float* input,
-                                        float* output,
+musaError_t LaunchMusaReduceFloatKernel(const float* input, float* output,
                                         MusaReduceParams params,
-                                        MusaReduceOp op,
-                                        musaStream_t stream) {
+                                        MusaReduceOp op, musaStream_t stream) {
   return LaunchMusaReduceKernel(input, output, params, op,
                                 MusaElementType::Float, stream);
 }
 
-musaError_t LaunchMusaReduceInt32Kernel(const int32_t* input,
-                                        int32_t* output,
+musaError_t LaunchMusaReduceInt32Kernel(const int32_t* input, int32_t* output,
                                         MusaReduceParams params,
-                                        MusaReduceOp op,
-                                        musaStream_t stream) {
+                                        MusaReduceOp op, musaStream_t stream) {
   return LaunchMusaReduceKernel(input, output, params, op,
                                 MusaElementType::Int32, stream);
 }
 
-musaError_t LaunchMusaReduceInt64Kernel(const int64_t* input,
-                                        int64_t* output,
+musaError_t LaunchMusaReduceInt64Kernel(const int64_t* input, int64_t* output,
                                         MusaReduceParams params,
-                                        MusaReduceOp op,
-                                        musaStream_t stream) {
+                                        MusaReduceOp op, musaStream_t stream) {
   return LaunchMusaReduceKernel(input, output, params, op,
                                 MusaElementType::Int64, stream);
 }

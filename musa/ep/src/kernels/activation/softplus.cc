@@ -33,5 +33,5 @@ OrtStatus* Softplus::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Softplus, kOnnxDomain, 1, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())),
     Softplus)

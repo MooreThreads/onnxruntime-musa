@@ -13,6 +13,7 @@
 """End-to-end CPU-vs-MUSA tests for ScatterND."""
 
 import numpy as np
+import pytest
 
 from op_test_utils import (
     TensorProto,
@@ -63,6 +64,20 @@ def test_scatter_nd_bool_opset13():
         rtol=0,
         atol=0,
     )
+
+
+@pytest.mark.parametrize("dtype,tensor_type", [
+    (np.float64, TensorProto.DOUBLE), (np.int8, TensorProto.INT8),
+    (np.int16, TensorProto.INT16), (np.int32, TensorProto.INT32),
+    (np.uint8, TensorProto.UINT8), (np.uint16, TensorProto.UINT16),
+    (np.uint32, TensorProto.UINT32), (np.uint64, TensorProto.UINT64),
+])
+def test_scatter_nd_dtype_matrix(dtype, tensor_type):
+    data = np.zeros((3, 2), dtype=dtype)
+    indices = np.array([[0], [2]], dtype=np.int64)
+    updates = np.array([[1, 2], [3, 4]], dtype=dtype)
+    run_and_compare("ScatterND", inputs={"data": data, "indices": indices, "updates": updates},
+                    outputs=[("Y", tensor_type)], opset=13, rtol=0, atol=0)
 
 
 def test_scatter_nd_bfloat16_bits_opset13():

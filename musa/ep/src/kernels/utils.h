@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "../fusion/fusion_dtype.h"
 #include "../plugin_ep_utils.h"
 #include "runtime_graph_dump.h"
 
@@ -190,9 +191,31 @@ static constexpr const char* kMSDomain = "com.microsoft";
           runtime_node.since_version = kernel_info.GetOperatorSinceVersion();  \
           for (size_t i = 0; i < kernel_info.GetInputCount(); ++i) {           \
             runtime_node.inputs.push_back(kernel_info.GetInputName(i));        \
+            try {                                                              \
+              Ort::TypeInfo type_info = kernel_info.GetInputTypeInfo(i);       \
+              if (type_info.GetONNXType() == ONNX_TYPE_TENSOR) {               \
+                runtime_node.input_dtypes.push_back(musa_ep::FusionDTypeName(  \
+                    type_info.GetTensorTypeAndShapeInfo().GetElementType()));  \
+              } else {                                                         \
+                runtime_node.input_dtypes.push_back("non-tensor");             \
+              }                                                                \
+            } catch (...) {                                                    \
+              runtime_node.input_dtypes.push_back("dtype=?");                  \
+            }                                                                  \
           }                                                                    \
           for (size_t i = 0; i < kernel_info.GetOutputCount(); ++i) {          \
             runtime_node.outputs.push_back(kernel_info.GetOutputName(i));      \
+            try {                                                              \
+              Ort::TypeInfo type_info = kernel_info.GetOutputTypeInfo(i);      \
+              if (type_info.GetONNXType() == ONNX_TYPE_TENSOR) {               \
+                runtime_node.output_dtypes.push_back(musa_ep::FusionDTypeName( \
+                    type_info.GetTensorTypeAndShapeInfo().GetElementType()));  \
+              } else {                                                         \
+                runtime_node.output_dtypes.push_back("non-tensor");            \
+              }                                                                \
+            } catch (...) {                                                    \
+              runtime_node.output_dtypes.push_back("dtype=?");                 \
+            }                                                                  \
           }                                                                    \
           RegisterRuntimeKernelInstance(*kernel_out, std::move(runtime_node)); \
         }                                                                      \

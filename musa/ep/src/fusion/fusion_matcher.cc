@@ -335,6 +335,11 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindFusedGemmFusions", false,
                  std::move(fused_gemm_fusions), accepted_node_ids);
 
+  auto silu_fusions =
+      FindSiluFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindSiluFusions", false, std::move(silu_fusions),
+                 accepted_node_ids);
+
   const bool no_overlap = FusionMatchesHaveNoOverlap(matches);
   assert(no_overlap);
   (void)no_overlap;

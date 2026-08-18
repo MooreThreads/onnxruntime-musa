@@ -85,6 +85,12 @@ constexpr FusionDTypeContract kMatMulFamilyDTypeContract = {
     "preserve graph output dtype", "Cast nodes are not part of this fusion",
     FusionFloatPolicy::kFp32Fp16Bf16};
 
+constexpr FusionDTypeContract kSiluDTypeContract = {
+    "float32/float16/bfloat16/float64",
+    "float32 math for float16/bfloat16; float64 math for float64",
+    "same as input", "Cast nodes are not part of this fusion",
+    FusionFloatPolicy::kAnyFloat};
+
 bool FloatingTypeAllowed(ONNXTensorElementDataType elem_type,
                          FusionFloatPolicy policy) {
   switch (policy) {
@@ -122,6 +128,9 @@ const FusionDTypeContract& FusionDTypeContractForFinder(const char* finder) {
   }
   if (name == "FindFusedGemmFusions") {
     return kFusedMatMulDTypeContract;
+  }
+  if (name == "FindSiluFusions") {
+    return kSiluDTypeContract;
   }
   if (name == "FindConcatMatMulFusions" ||
       name == "FindParallelMatMulConcatFusions") {

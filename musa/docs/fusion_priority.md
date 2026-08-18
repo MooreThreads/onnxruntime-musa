@@ -40,6 +40,7 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 31 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
 | 32 | Gemm Activation Fusion | `FindGemmActivationFusions` | `false` | [gemm_activation.md](fusion/gemm_activation.md) |
 | 33 | Fused Gemm Fusion | `FindFusedGemmFusions` | `false` | [fused_gemm.md](fusion/fused_gemm.md) |
+| 34 | Silu Fusion | `FindSiluFusions` | `false` | [silu.md](fusion/silu.md) |
 
 ## Compile Dispatch Order
 
@@ -78,3 +79,4 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 31 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
 | 32 | `IsGemmActivationFusionGraph` | `CreateGemmActivationFusion` | [gemm_activation](fusion/gemm_activation.md) |
 | 33 | `IsFusedGemmFusionGraph` | `CreateFusedGemmFusion` | [fused_gemm](fusion/fused_gemm.md) |
+| 34 | `IsSiluFusionGraph` | `CreateSiluFusion` | [silu](fusion/silu.md) |

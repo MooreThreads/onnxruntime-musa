@@ -49,6 +49,7 @@
 #include "fusion/rms_norm_fusion.h"
 #include "fusion/segment_max_broadcast_fusion.h"
 #include "fusion/shape_reshape_fusion.h"
+#include "fusion/silu_fusion.h"
 #include "fusion/slice_concat_fusion.h"
 #include "fusion/sparse_id_to_mask_fusion.h"
 #include "fusion/split_concat_fusion.h"
@@ -63,8 +64,10 @@
 
 using musa_ep::CreateMultiKqvMhaOutputProjectionFusion;
 using musa_ep::CreateRecRankCalibrationFusion;
+using musa_ep::CreateSiluFusion;
 using musa_ep::IsMultiKqvMhaOutputProjectionFusionGraph;
 using musa_ep::IsRecRankCalibrationFusionGraph;
+using musa_ep::IsSiluFusionGraph;
 
 /*
  * Fusion node runtime bridge
@@ -383,6 +386,9 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       } else if (IsFusedGemmFusionGraph(graph)) {
         fusion_compute = CreateFusedGemmFusion(graph, fused_node);
         finder_name = "FindFusedGemmFusions";
+      } else if (IsSiluFusionGraph(graph)) {
+        fusion_compute = CreateSiluFusion(graph, fused_node);
+        finder_name = "FindSiluFusions";
       } else {
         throw std::runtime_error("unsupported MUSA fusion graph: " +
                                  fused_node_name);

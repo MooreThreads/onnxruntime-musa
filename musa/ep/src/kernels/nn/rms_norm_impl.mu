@@ -5,6 +5,8 @@
 
 namespace {
 
+constexpr int kWarpSize = 32;
+
 template <typename T>
 __global__ void RmsNormKernel(const T* input, const T* gamma, T* output,
                               int64_t rows, int64_t norm_size, float epsilon) {
@@ -55,8 +57,70 @@ musaError_t LaunchRmsNormTyped(const void* input, const void* gamma,
   return musaGetLastError();
 }
 
-__device__ __forceinline__ float CastRmsNormPow2(float value) {
-  return powf(value, 2.0f);
+__device__ __forceinline__ float CastRmsNormSquare(float value) {
+  return value * value;
+}
+
+template <int kBlockThreads>
+__device__ __forceinline__ float CastRmsNormBlockReduceSum(float value) {
+  __shared__ float shared[kBlockThreads / kWarpSize];
+  const int lane = threadIdx.x & (kWarpSize - 1);
+  const int warp_id = threadIdx.x >> 5;
+
+#pragma unroll
+  for (int mask = kWarpSize / 2; mask > 0; mask >>= 1) {
+    value += __shfl_xor_sync(0xffffffff, value, mask);
+  }
+
+  if (lane == 0) {
+    shared[warp_id] = value;
+  }
+  __syncthreads();
+
+  if (warp_id == 0) {
+    value = threadIdx.x < (kBlockThreads / kWarpSize) ? shared[threadIdx.x]
+                                                      : 0.0f;
+#pragma unroll
+    for (int mask = (kBlockThreads / kWarpSize) / 2; mask > 0; mask >>= 1) {
+      value += __shfl_xor_sync(0xffffffff, value, mask);
+    }
+    if (lane == 0) {
+      shared[0] = value;
+    }
+  }
+  __syncthreads();
+  return shared[0];
+}
+
+template <int kGroupSize>
+__device__ __forceinline__ float CastRmsNormGroupReduceSum(float value,
+                                                           int group,
+                                                           int lane) {
+  constexpr int kWarpsPerGroup = kGroupSize / kWarpSize;
+  __shared__ float shared[kThreadsPerBlock / kWarpSize];
+  const int warp_lane = threadIdx.x & (kWarpSize - 1);
+  const int warp_id = threadIdx.x >> 5;
+
+#pragma unroll
+  for (int mask = kWarpSize / 2; mask > 0; mask >>= 1) {
+    value += __shfl_xor_sync(0xffffffff, value, mask);
+  }
+
+  if (warp_lane == 0) {
+    shared[warp_id] = value;
+  }
+  __syncthreads();
+
+  value = lane < kWarpsPerGroup ? shared[group * kWarpsPerGroup + lane] : 0.0f;
+#pragma unroll
+  for (int mask = kWarpSize / 2; mask > 0; mask >>= 1) {
+    value += __shfl_xor_sync(0xffffffff, value, mask);
+  }
+  if (lane == 0) {
+    shared[group * kWarpsPerGroup] = value;
+  }
+  __syncthreads();
+  return shared[group * kWarpsPerGroup];
 }
 
 __device__ __forceinline__ void WriteCastRmsNormBf16Row(
@@ -74,6 +138,7 @@ __device__ __forceinline__ void WriteCastRmsNormBf16Row(
   }
 }
 
+template <int kBlockThreads>
 __global__ void CastRmsNormBf16LastAxisBlockKernel(
     const __mt_bfloat16* input, const __mt_bfloat16* gamma,
     __mt_bfloat16* output, int64_t rows, int64_t norm_size, float epsilon) {
@@ -86,58 +151,42 @@ __global__ void CastRmsNormBf16LastAxisBlockKernel(
   const int64_t row_offset = row * norm_size;
   for (int64_t col = threadIdx.x; col < norm_size; col += blockDim.x) {
     const float value = MusaScalarToFloat(input[row_offset + col]);
-    sum_square += CastRmsNormPow2(value);
+    sum_square += CastRmsNormSquare(value);
   }
 
-  __shared__ float shared[kThreadsPerBlock];
-  shared[threadIdx.x] = sum_square;
-  __syncthreads();
-  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      shared[threadIdx.x] += shared[threadIdx.x + stride];
-    }
-    __syncthreads();
-  }
-
-  const float mean = shared[0] / static_cast<float>(norm_size);
+  const float mean =
+      CastRmsNormBlockReduceSum<kBlockThreads>(sum_square) /
+      static_cast<float>(norm_size);
   WriteCastRmsNormBf16Row(input, gamma, output, row_offset, norm_size, mean,
                           epsilon, threadIdx.x, blockDim.x);
 }
 
+template <int kGroupSize>
 __global__ void CastRmsNormBf16LastAxisMultiOutputBlockKernel(
     const __mt_bfloat16* input, const __mt_bfloat16* gamma,
-    __mt_bfloat16* output, int64_t rows, int64_t norm_size, float epsilon,
-    int group_size, int outputs_per_block) {
-  const int group = threadIdx.x / group_size;
-  const int lane = threadIdx.x - group * group_size;
+    __mt_bfloat16* output, int64_t rows, int64_t norm_size, float epsilon) {
+  constexpr int kOutputsPerBlock = kThreadsPerBlock / kGroupSize;
+  const int group = threadIdx.x / kGroupSize;
+  const int lane = threadIdx.x - group * kGroupSize;
   const int64_t row =
-      static_cast<int64_t>(blockIdx.x) * outputs_per_block + group;
+      static_cast<int64_t>(blockIdx.x) * kOutputsPerBlock + group;
   const bool valid = row < rows;
 
   float sum_square = 0.0f;
   const int64_t row_offset = row * norm_size;
   if (valid) {
-    for (int64_t col = lane; col < norm_size; col += group_size) {
+    for (int64_t col = lane; col < norm_size; col += kGroupSize) {
       const float value = MusaScalarToFloat(input[row_offset + col]);
-      sum_square += CastRmsNormPow2(value);
+      sum_square += CastRmsNormSquare(value);
     }
   }
 
-  __shared__ float shared[kThreadsPerBlock];
-  shared[threadIdx.x] = sum_square;
-  __syncthreads();
-  for (int stride = group_size / 2; stride > 0; stride >>= 1) {
-    if (lane < stride) {
-      shared[threadIdx.x] += shared[threadIdx.x + stride];
-    }
-    __syncthreads();
-  }
-
+  const float group_sum =
+      CastRmsNormGroupReduceSum<kGroupSize>(sum_square, group, lane);
   if (valid) {
-    const float mean =
-        shared[threadIdx.x - lane] / static_cast<float>(norm_size);
+    const float mean = group_sum / static_cast<float>(norm_size);
     WriteCastRmsNormBf16Row(input, gamma, output, row_offset, norm_size, mean,
-                            epsilon, lane, group_size);
+                            epsilon, lane, kGroupSize);
   }
 }
 
@@ -154,7 +203,7 @@ __global__ void CastRmsNormBf16SingleAxisKernel(const __mt_bfloat16* input,
     float sum_square = 0.0f;
     for (int64_t col = 0; col < norm_size; ++col) {
       const float value = MusaScalarToFloat(input[row_offset + col]);
-      sum_square += CastRmsNormPow2(value);
+      sum_square += CastRmsNormSquare(value);
     }
     const float mean = sum_square / static_cast<float>(norm_size);
     WriteCastRmsNormBf16Row(input, gamma, output, row_offset, norm_size, mean,
@@ -202,19 +251,42 @@ musaError_t LaunchMusaCastRmsNormBf16Kernel(const void* input,
   const auto* typed_gamma = reinterpret_cast<const __mt_bfloat16*>(gamma);
   auto* typed_output = reinterpret_cast<__mt_bfloat16*>(output);
   if (norm_size >= 64) {
-    if (norm_size <= 256 && rows >= 1024) {
-      const int group_size = 64;
-      const int outputs_per_block = kThreadsPerBlock / group_size;
-      CastRmsNormBf16LastAxisMultiOutputBlockKernel<<<
-          static_cast<int>((rows + outputs_per_block - 1) / outputs_per_block),
-          kThreadsPerBlock, 0, stream>>>(typed_input, typed_gamma, typed_output,
-                                         rows, norm_size, epsilon, group_size,
-                                         outputs_per_block);
+    if (rows >= 1024 && norm_size <= 1024) {
+      if (norm_size <= 128) {
+        constexpr int kGroupSize = 32;
+        constexpr int kOutputsPerBlock = kThreadsPerBlock / kGroupSize;
+        CastRmsNormBf16LastAxisMultiOutputBlockKernel<kGroupSize><<<
+            static_cast<int>((rows + kOutputsPerBlock - 1) / kOutputsPerBlock),
+            kThreadsPerBlock, 0, stream>>>(
+            typed_input, typed_gamma, typed_output, rows, norm_size, epsilon);
+      } else if (norm_size <= 256) {
+        constexpr int kGroupSize = 64;
+        constexpr int kOutputsPerBlock = kThreadsPerBlock / kGroupSize;
+        CastRmsNormBf16LastAxisMultiOutputBlockKernel<kGroupSize><<<
+            static_cast<int>((rows + kOutputsPerBlock - 1) / kOutputsPerBlock),
+            kThreadsPerBlock, 0, stream>>>(
+            typed_input, typed_gamma, typed_output, rows, norm_size, epsilon);
+      } else {
+        constexpr int kGroupSize = 128;
+        constexpr int kOutputsPerBlock = kThreadsPerBlock / kGroupSize;
+        CastRmsNormBf16LastAxisMultiOutputBlockKernel<kGroupSize><<<
+            static_cast<int>((rows + kOutputsPerBlock - 1) / kOutputsPerBlock),
+            kThreadsPerBlock, 0, stream>>>(
+            typed_input, typed_gamma, typed_output, rows, norm_size, epsilon);
+      }
       return musaGetLastError();
     }
-    CastRmsNormBf16LastAxisBlockKernel<<<static_cast<int>(rows),
-                                         kThreadsPerBlock, 0, stream>>>(
-        typed_input, typed_gamma, typed_output, rows, norm_size, epsilon);
+    if (norm_size <= 512) {
+      constexpr int kBlockThreads = 128;
+      CastRmsNormBf16LastAxisBlockKernel<kBlockThreads>
+          <<<static_cast<int>(rows), kBlockThreads, 0, stream>>>(
+              typed_input, typed_gamma, typed_output, rows, norm_size, epsilon);
+    } else {
+      constexpr int kBlockThreads = kThreadsPerBlock;
+      CastRmsNormBf16LastAxisBlockKernel<kBlockThreads>
+          <<<static_cast<int>(rows), kBlockThreads, 0, stream>>>(
+              typed_input, typed_gamma, typed_output, rows, norm_size, epsilon);
+    }
     return musaGetLastError();
   }
   CastRmsNormBf16SingleAxisKernel<<<BlocksForCount(rows), kThreadsPerBlock, 0,

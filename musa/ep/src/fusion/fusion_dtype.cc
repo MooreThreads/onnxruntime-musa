@@ -151,6 +151,7 @@ const FusionDTypeContract& FusionDTypeContractForFinder(const char* finder) {
   }
   if (name == "FindModuloGatherFusions" ||
       name == "FindBucketizeGatherFusions" ||
+      name == "FindLogBucketizeGatherFusions" ||
       name == "FindMaskedEmbeddingLookupFusions") {
     return kEmbeddingGatherDTypeContract;
   }

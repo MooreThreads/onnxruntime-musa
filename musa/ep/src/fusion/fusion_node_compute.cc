@@ -33,6 +33,7 @@
 #include "fusion/concat_reshape_fusion.h"
 #include "fusion/concat_split_fusion.h"
 #include "fusion/linear_fusion.h"
+#include "fusion/log_bucketize_gather_fusion.h"
 #include "fusion/masked_embedding_lookup_fusion.h"
 #include "fusion/math_concat_log_fusion.h"
 #include "fusion/mhta_scaled_dot_product_attention_fusion.h"
@@ -328,6 +329,9 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       } else if (IsBucketizeGatherFusionGraph(graph)) {
         fusion_compute = CreateBucketizeGatherFusion(graph, fused_node);
         finder_name = "FindBucketizeGatherFusions";
+      } else if (IsLogBucketizeGatherFusionGraph(graph)) {
+        fusion_compute = CreateLogBucketizeGatherFusion(graph, fused_node);
+        finder_name = "FindLogBucketizeGatherFusions";
       } else if (IsModuloGatherFusionGraph(graph)) {
         fusion_compute = CreateModuloGatherFusion(graph, fused_node);
         finder_name = "FindModuloGatherFusions";

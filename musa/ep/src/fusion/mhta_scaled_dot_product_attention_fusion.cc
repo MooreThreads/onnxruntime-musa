@@ -17,10 +17,13 @@
 #include <musa_runtime.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -46,6 +49,25 @@ bool IsOnnxDomain(const std::string& domain) {
 
 bool IsOnnxOp(Ort::ConstNode node, const char* op_type) {
   return node.GetOperatorType() == op_type && IsOnnxDomain(node.GetDomain());
+}
+
+bool EnvFlagEnabled(const char* name) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') return false;
+  return std::strcmp(value, "0") != 0 && std::strcmp(value, "false") != 0 &&
+         std::strcmp(value, "FALSE") != 0 && std::strcmp(value, "off") != 0 &&
+         std::strcmp(value, "OFF") != 0;
+}
+
+std::string ShapeString(const std::vector<int64_t>& shape) {
+  std::ostringstream oss;
+  oss << '[';
+  for (size_t i = 0; i < shape.size(); ++i) {
+    if (i != 0) oss << ',';
+    oss << shape[i];
+  }
+  oss << ']';
+  return oss.str();
 }
 
 bool IsCastTo(Ort::ConstNode node, ONNXTensorElementDataType elem_type) {
@@ -178,6 +200,10 @@ class DeviceBuffer {
   ~DeviceBuffer() {
     if (ptr_ != nullptr) (void)musaFree(ptr_);
   }
+  DeviceBuffer() = default;
+  DeviceBuffer(const DeviceBuffer&) = delete;
+  DeviceBuffer& operator=(const DeviceBuffer&) = delete;
+
   void Resize(size_t bytes) {
     if (bytes <= bytes_) return;
     if (ptr_ != nullptr) (void)musaFree(ptr_);
@@ -194,6 +220,66 @@ class DeviceBuffer {
   void* ptr_ = nullptr;
   size_t bytes_ = 0;
 };
+
+struct MhtaMaskCacheEntry {
+  DeviceBuffer buffer;
+  const void* mask_data = nullptr;
+  ONNXTensorElementDataType elem_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  std::vector<int64_t> active_mask_shape;
+  int64_t mask_b = 0;
+  int64_t mask_h = 0;
+  int64_t mask_q = 0;
+  int64_t mask_k = 0;
+  int64_t seqlen_k = 0;
+  size_t bytes = 0;
+  int64_t reuse_count = 0;
+  int64_t reuse_limit = 0;
+  bool valid = false;
+};
+
+MhtaMaskCacheEntry& MhtaMaskCacheForStream(musaStream_t stream) {
+  thread_local std::unordered_map<musaStream_t,
+                                  std::unique_ptr<MhtaMaskCacheEntry>>
+      cache_by_stream;
+  auto& cache = cache_by_stream[stream];
+  if (!cache) {
+    cache = std::make_unique<MhtaMaskCacheEntry>();
+  }
+  return *cache;
+}
+
+bool MhtaMaskCacheMatches(const MhtaMaskCacheEntry& cache,
+                          const void* mask_data,
+                          ONNXTensorElementDataType elem_type,
+                          const std::vector<int64_t>& active_mask_shape,
+                          const MusaMhtaSdpaFp32Params& params, size_t bytes) {
+  return cache.valid && cache.mask_data == mask_data &&
+         cache.elem_type == elem_type &&
+         cache.active_mask_shape == active_mask_shape &&
+         cache.mask_b == params.mask_b && cache.mask_h == params.mask_h &&
+         cache.mask_q == params.mask_q && cache.mask_k == params.mask_k &&
+         cache.seqlen_k == params.seqlen_k && cache.bytes == bytes &&
+         cache.reuse_count < cache.reuse_limit;
+}
+
+void UpdateMhtaMaskCacheKey(MhtaMaskCacheEntry& cache, const void* mask_data,
+                            ONNXTensorElementDataType elem_type,
+                            std::vector<int64_t> active_mask_shape,
+                            const MusaMhtaSdpaFp32Params& params, size_t bytes,
+                            int64_t reuse_limit) {
+  cache.mask_data = mask_data;
+  cache.elem_type = elem_type;
+  cache.active_mask_shape = std::move(active_mask_shape);
+  cache.mask_b = params.mask_b;
+  cache.mask_h = params.mask_h;
+  cache.mask_q = params.mask_q;
+  cache.mask_k = params.mask_k;
+  cache.seqlen_k = params.seqlen_k;
+  cache.bytes = bytes;
+  cache.reuse_count = 1;
+  cache.reuse_limit = reuse_limit;
+  cache.valid = true;
+}
 
 size_t MhtaSdpaElementSize(ONNXTensorElementDataType elem_type) {
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return sizeof(float);
@@ -428,6 +514,29 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
           ORT_NOT_IMPLEMENTED,
           "MHTA SDPA requires a broadcastable rank-1 to rank-4 mask");
     }
+    if (EnvFlagEnabled("ORT_MUSA_DEBUG_MHTA_SDPA_SHAPES")) {
+      std::cerr << "[ORT_MUSA_DEBUG_MHTA_SDPA_SHAPES] "
+                << "layout=" << (sim_rank3 ? "sim_rank3" : "bhsd")
+                << " elem_type=" << static_cast<int>(elem_type)
+                << " mask_type=" << static_cast<int>(mask_type)
+                << " boolean_mask=" << (boolean_mask_ ? 1 : 0)
+                << " boolean_mask_int32=" << (boolean_mask_int32_ ? 1 : 0)
+                << " q_shape=" << ShapeString(q_shape)
+                << " k_shape=" << ShapeString(k_shape)
+                << " v_shape=" << ShapeString(v_shape)
+                << " mask_shape=" << ShapeString(mask_shape)
+                << " output_shape=" << ShapeString(output_shape)
+                << " batch=" << batch << " heads=" << heads
+                << " seqlen_q=" << seqlen_q << " seqlen_k=" << seqlen_k
+                << " head_dim=" << head_dim << " mask_b=" << mask_params.mask_b
+                << " mask_h=" << mask_params.mask_h
+                << " mask_q=" << mask_params.mask_q
+                << " mask_k=" << mask_params.mask_k << " scale=" << scale_
+                << " mask_scale=" << mask_scale_ << " q_index=" << q_index_
+                << " k_index=" << k_index_ << " v_index=" << v_index_
+                << " mask_index=" << mask_index_
+                << " mask_data=" << mask_buffer.data() << '\n';
+    }
 
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
       musaError_t launch_status = LaunchMusaMhtaSdpaFp32Kernel(
@@ -512,17 +621,53 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       const size_t mask_bytes =
           static_cast<size_t>(NumElements(active_mask_shape)) *
           MhtaSdpaElementSize(elem_type);
-      mask_scaled.Resize(mask_bytes);
-      const musaError_t launch_status =
-          LaunchMusaMhtaSdpaKeepMaskToAdditiveKernel(
-              mask_data, mask_scaled.data(), mask_params,
-              MhtaSdpaMusaElementType(elem_type), stream);
-      if (launch_status != musaSuccess) {
-        throw std::runtime_error(
-            std::string("MHTA SDPA keep-mask materialization failed: ") +
-            MusaErrorString(launch_status));
+      bool mask_cache_hit = false;
+      if (boolean_mask_int32_) {
+        constexpr int64_t kInt32MaskCacheReuseLimit = 8;
+        MhtaMaskCacheEntry& cache = MhtaMaskCacheForStream(stream);
+        if (MhtaMaskCacheMatches(cache, mask_data, elem_type, active_mask_shape,
+                                 mask_params, mask_bytes)) {
+          ++cache.reuse_count;
+          mask_data = cache.buffer.data();
+          mask_cache_hit = true;
+        } else {
+          cache.buffer.Resize(mask_bytes);
+          const musaError_t launch_status =
+              LaunchMusaMhtaSdpaKeepMaskToAdditiveKernel(
+                  mask_data, cache.buffer.data(), mask_params,
+                  MhtaSdpaMusaElementType(elem_type), stream);
+          if (launch_status != musaSuccess) {
+            cache.valid = false;
+            throw std::runtime_error(
+                std::string("MHTA SDPA keep-mask materialization failed: ") +
+                MusaErrorString(launch_status));
+          }
+          UpdateMhtaMaskCacheKey(cache, mask_data, elem_type, active_mask_shape,
+                                 mask_params, mask_bytes,
+                                 kInt32MaskCacheReuseLimit);
+          mask_data = cache.buffer.data();
+        }
+        if (EnvFlagEnabled("ORT_MUSA_DEBUG_MHTA_SDPA_SHAPES")) {
+          const MhtaMaskCacheEntry& cache = MhtaMaskCacheForStream(stream);
+          std::cerr << "[ORT_MUSA_DEBUG_MHTA_MASK_CACHE] "
+                    << (mask_cache_hit ? "hit" : "miss")
+                    << " reuse_count=" << cache.reuse_count
+                    << " reuse_limit=" << cache.reuse_limit
+                    << " cached_mask=" << mask_data << '\n';
+        }
+      } else {
+        mask_scaled.Resize(mask_bytes);
+        const musaError_t launch_status =
+            LaunchMusaMhtaSdpaKeepMaskToAdditiveKernel(
+                mask_data, mask_scaled.data(), mask_params,
+                MhtaSdpaMusaElementType(elem_type), stream);
+        if (launch_status != musaSuccess) {
+          throw std::runtime_error(
+              std::string("MHTA SDPA keep-mask materialization failed: ") +
+              MusaErrorString(launch_status));
+        }
+        mask_data = mask_scaled.data();
       }
-      mask_data = mask_scaled.data();
     } else if (mask_scale_ != 1.0f) {
       const size_t mask_bytes = static_cast<size_t>(NumElements(mask_shape)) *
                                 MhtaSdpaElementSize(elem_type);

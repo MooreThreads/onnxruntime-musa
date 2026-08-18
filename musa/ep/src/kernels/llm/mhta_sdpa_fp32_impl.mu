@@ -88,6 +88,22 @@ __global__ void MhtaKeepMaskToAdditiveKernel(
   }
 }
 
+template <typename T>
+__global__ void MhtaInt32KeepMaskToAdditiveB1H1Kernel(
+    const int32_t* mask, T* additive_mask, int32_t mask_q, int32_t mask_k,
+    int32_t seqlen_k) {
+  const int32_t q = static_cast<int32_t>(blockIdx.y);
+  if (q >= mask_q) {
+    return;
+  }
+  const int32_t k_stride = static_cast<int32_t>(blockDim.x * gridDim.x);
+  for (int32_t k = static_cast<int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
+       k < seqlen_k; k += k_stride) {
+    const bool keep = mask[q * mask_k + k] == 1;
+    additive_mask[q * seqlen_k + k] = MhtaSdpaMaskValue<T>(keep);
+  }
+}
+
 __global__ void MhtaSdpaFp32Kernel(const float* q, const float* k,
                                    const float* v, const void* mask,
                                    float* output,
@@ -177,6 +193,13 @@ musaError_t LaunchMusaMhtaSdpaFp32Kernel(const float* q, const float* k,
   return musaGetLastError();
 }
 
+bool CanUseInt32KeepMaskB1H1FastPath(const MusaMhtaSdpaFp32Params& params) {
+  return params.boolean_mask_int32 && params.mask_b == 1 &&
+         params.mask_h == 1 && params.mask_q > 0 &&
+         params.mask_k >= params.seqlen_k && params.mask_q <= INT32_MAX &&
+         params.mask_k <= INT32_MAX && params.seqlen_k <= INT32_MAX;
+}
+
 template <typename T>
 musaError_t LaunchMusaMhtaSdpaKeepMaskToAdditiveTyped(
     const void* mask, void* additive_mask, MusaMhtaSdpaFp32Params params,
@@ -189,9 +212,20 @@ musaError_t LaunchMusaMhtaSdpaKeepMaskToAdditiveTyped(
   }
   const int64_t count =
       params.mask_b * params.mask_h * params.mask_q * out_mask_k;
-  MhtaKeepMaskToAdditiveKernel<<<BlocksForCount(count), kThreadsPerBlock, 0,
-                                 stream>>>(
-      mask, static_cast<T*>(additive_mask), params);
+  if (CanUseInt32KeepMaskB1H1FastPath(params)) {
+    const dim3 grid(BlocksForCount(params.seqlen_k),
+                    static_cast<unsigned int>(params.mask_q));
+    MhtaInt32KeepMaskToAdditiveB1H1Kernel<T>
+        <<<grid, kThreadsPerBlock, 0, stream>>>(
+            static_cast<const int32_t*>(mask), static_cast<T*>(additive_mask),
+            static_cast<int32_t>(params.mask_q),
+            static_cast<int32_t>(params.mask_k),
+            static_cast<int32_t>(params.seqlen_k));
+  } else {
+    MhtaKeepMaskToAdditiveKernel<<<BlocksForCount(count), kThreadsPerBlock, 0,
+                                   stream>>>(
+        mask, static_cast<T*>(additive_mask), params);
+  }
   return musaGetLastError();
 }
 

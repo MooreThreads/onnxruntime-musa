@@ -173,7 +173,11 @@ def test_log_bucketize_gather_fusion_float32(tmp_path):
             0,
             2**11 * 60000,
             2**12 * 60000,
-            2**16 * 60000,
+            # Keep this below 2**31 ms. ORT CPU EP's vectorized int64 Clip
+            # currently clips values in [2**31, 2**32) to zero, which would
+            # make the CPU reference disagree with the ONNX arithmetic this
+            # fusion implements.
+            2**15 * 60000,
             2**20 * 60000,
             2**21 * 60000,
         ],

@@ -126,11 +126,13 @@ def _build_pow_rms_norm_model() -> bytes:
     return model.SerializeToString()
 
 
-def _build_cast_rms_norm_model(expose_cast_output: bool = False) -> bytes:
+def _build_cast_rms_norm_model(
+    expose_cast_output: bool = False, shape=(2, 3, 5)
+) -> bytes:
     two = numpy_helper.from_array(np.array(2.0, dtype=np.float32), name="two")
     eps = numpy_helper.from_array(np.array(1.0e-4, dtype=np.float32), name="eps")
     axes = numpy_helper.from_array(np.array([-1], dtype=np.int64), name="axes")
-    gamma_f32 = np.linspace(0.5, 1.5, num=5, dtype=np.float32)
+    gamma_f32 = np.linspace(0.5, 1.5, num=shape[-1], dtype=np.float32)
     gamma = _bf16_initializer("gamma", float32_to_bfloat16_bits(gamma_f32))
     nodes = [
         helper.make_node(
@@ -162,13 +164,13 @@ def _build_cast_rms_norm_model(expose_cast_output: bool = False) -> bytes:
             "Mul", ["NormedBf16", "gamma"], ["Y"], name="cast_rms_norm/Mul"
         ),
     ]
-    outputs = [helper.make_tensor_value_info("Y", TensorProto.BFLOAT16, [2, 3, 5])]
+    outputs = [helper.make_tensor_value_info("Y", TensorProto.BFLOAT16, shape)]
     if expose_cast_output:
-        outputs.append(helper.make_tensor_value_info("Xf", TensorProto.FLOAT, [2, 3, 5]))
+        outputs.append(helper.make_tensor_value_info("Xf", TensorProto.FLOAT, shape))
     graph = helper.make_graph(
         nodes,
         "cast_rms_norm_fusion",
-        [helper.make_tensor_value_info("X", TensorProto.BFLOAT16, [2, 3, 5])],
+        [helper.make_tensor_value_info("X", TensorProto.BFLOAT16, shape)],
         outputs,
         initializer=[two, eps, axes, gamma],
     )
@@ -241,7 +243,7 @@ def _rms_norm_reference(x: np.ndarray, gamma: np.ndarray, epsilon: float) -> np.
     )
 
 
-def _cast_rms_norm_reference_bf16(
+def _cast_rms_norm_reference_high_precision_bf16(
     x_bits: np.ndarray, gamma_bits: np.ndarray, epsilon: float
 ) -> np.ndarray:
     x_f32 = bfloat16_bits_to_float32(x_bits)
@@ -249,9 +251,17 @@ def _cast_rms_norm_reference_bf16(
     inv = np.reciprocal(
         np.sqrt(np.mean(x_f32 * x_f32, axis=-1, keepdims=True) + epsilon)
     )
-    norm_bits = float32_to_bfloat16_bits(x_f32 * inv)
-    y_f32 = bfloat16_bits_to_float32(norm_bits) * gamma_f32
-    return float32_to_bfloat16_bits(y_f32)
+    return float32_to_bfloat16_bits((x_f32 * inv) * gamma_f32)
+
+
+def _assert_cast_rms_norm_bf16_output(actual, x, gamma, epsilon):
+    expected = _cast_rms_norm_reference_high_precision_bf16(x, gamma, epsilon)
+    np.testing.assert_allclose(
+        bfloat16_bits_to_float32(actual),
+        bfloat16_bits_to_float32(expected),
+        rtol=1e-2,
+        atol=1e-2,
+    )
 
 
 def test_rms_norm_fusion(tmp_path):
@@ -368,8 +378,7 @@ def test_cast_rms_norm_fusion_bfloat16(tmp_path):
         [("Y", TensorProto.BFLOAT16, x.shape)],
         use_musa=True,
     )
-    expected = _cast_rms_norm_reference_bf16(x, gamma, 1.0e-4)
-    np.testing.assert_array_equal(actual, expected)
+    _assert_cast_rms_norm_bf16_output(actual, x, gamma, 1.0e-4)
     op_names = _profile_op_names(
         model,
         {"X": x},
@@ -379,6 +388,36 @@ def test_cast_rms_norm_fusion_bfloat16(tmp_path):
     )
     assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
     assert not ({"Cast", "Pow", "ReduceMean", "Add", "Sqrt", "Div", "Mul"} & op_names)
+
+
+def test_cast_rms_norm_fusion_bfloat16_large_shapes(tmp_path):
+    for shape in [(2048, 128), (2048, 256), (1536, 512), (1536, 768)]:
+        model = _build_cast_rms_norm_model(shape=shape)
+        total = int(np.prod(shape))
+        x_f32 = np.linspace(-2.0, 2.0, num=total, dtype=np.float32).reshape(shape)
+        x = float32_to_bfloat16_bits(x_f32)
+        gamma = float32_to_bfloat16_bits(
+            np.linspace(0.5, 1.5, num=shape[-1], dtype=np.float32)
+        )
+        (actual,) = run_with_iobinding(
+            model,
+            {"X": x},
+            {"X": TensorProto.BFLOAT16},
+            [("Y", TensorProto.BFLOAT16, x.shape)],
+            use_musa=True,
+        )
+        _assert_cast_rms_norm_bf16_output(actual, x, gamma, 1.0e-4)
+        op_names = _profile_op_names(
+            model,
+            {"X": x},
+            str(tmp_path / f"cast_rms_norm_large_{shape[0]}_{shape[1]}"),
+            {"X": TensorProto.BFLOAT16},
+            [("Y", TensorProto.BFLOAT16, x.shape)],
+        )
+        assert any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
+        assert not (
+            {"Cast", "Pow", "ReduceMean", "Add", "Sqrt", "Div", "Mul"} & op_names
+        )
 
 
 def test_cast_rms_norm_rejects_external_cast_consumer(tmp_path):

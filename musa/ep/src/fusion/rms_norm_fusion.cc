@@ -14,6 +14,8 @@
 #include "fusion/rms_norm_fusion.h"
 
 #include <climits>
+#include <functional>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -23,6 +25,7 @@
 #include "fusion/fusion_dtype.h"
 #include "graph/graph_utils.h"
 #include "kernels/nn/rms_norm_impl.h"
+#include "kernels/shared_inc/blas_utils.h"
 #include "kernels/shared_inc/op_kernel_common.h"
 
 namespace {
@@ -105,6 +108,97 @@ bool IsRmsNormStorageType(ONNXTensorElementDataType elem_type) {
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE;
 }
 
+class DeviceTempBuffer {
+ public:
+  DeviceTempBuffer(size_t bytes, musaStream_t stream)
+      : bytes_(bytes), stream_(stream) {
+    if (bytes_ != 0) {
+      ptr_ = AllocateDeviceMemoryOnStream(bytes_, stream_);
+      status_ = ptr_ != nullptr ? musaSuccess : musaErrorMemoryAllocation;
+    }
+  }
+  ~DeviceTempBuffer() {
+    if (ptr_ != nullptr) {
+      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
+    }
+  }
+  DeviceTempBuffer(const DeviceTempBuffer&) = delete;
+  DeviceTempBuffer& operator=(const DeviceTempBuffer&) = delete;
+
+  bool OK() const { return bytes_ == 0 || status_ == musaSuccess; }
+  void* Get() const { return ptr_; }
+
+ private:
+  void* ptr_ = nullptr;
+  size_t bytes_ = 0;
+  musaStream_t stream_ = nullptr;
+  musaError_t status_ = musaSuccess;
+};
+
+std::vector<int64_t> RmsNormInvVarShape(
+    const std::vector<int64_t>& input_shape) {
+  std::vector<int64_t> inv_var_shape = input_shape;
+  inv_var_shape.back() = 1;
+  return inv_var_shape;
+}
+
+bool TryMudnnRmsNorm(Ort::ConstValue input, const void* gamma_data,
+                     Ort::UnownedValue output,
+                     const std::vector<int64_t>& input_shape,
+                     const std::vector<int64_t>& gamma_shape,
+                     ONNXTensorElementDataType elem_type, float epsilon,
+                     musaStream_t stream) {
+  if (!IsGpuMemory(input.GetTensorMemoryInfo()) ||
+      !IsGpuMemory(output.GetTensorMemoryInfo()) || gamma_data == nullptr ||
+      input_shape.empty() ||
+      elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) {
+    return false;
+  }
+
+  ::musa::dnn::Handle* handle = nullptr;
+  OrtStatus* handle_status = EnsureMudnnHandle(&handle, stream);
+  if (handle_status != nullptr) {
+    Ort::GetApi().ReleaseStatus(handle_status);
+    return false;
+  }
+
+  std::vector<int64_t> inv_var_shape = RmsNormInvVarShape(input_shape);
+  const int64_t inv_var_count =
+      std::accumulate(inv_var_shape.begin(), inv_var_shape.end(), int64_t{1},
+                      std::multiplies<int64_t>());
+  DeviceTempBuffer inv_var_tmp(
+      static_cast<size_t>(inv_var_count) * sizeof(float), stream);
+  if (!inv_var_tmp.OK() || inv_var_tmp.Get() == nullptr) {
+    return false;
+  }
+
+  ::musa::dnn::Tensor input_tensor;
+  ::musa::dnn::Tensor output_tensor;
+  ::musa::dnn::Tensor gamma_tensor;
+  ::musa::dnn::Tensor inv_var_tensor;
+  if (!SetMudnnTensor(input_tensor, input.GetTensorRawData(), input_shape,
+                      elem_type) ||
+      !SetMudnnTensor(output_tensor, output.GetTensorMutableRawData(),
+                      input_shape, elem_type) ||
+      !SetMudnnTensor(gamma_tensor, gamma_data, gamma_shape, elem_type) ||
+      !SetMudnnFloatTensor(inv_var_tensor, inv_var_tmp.Get(), inv_var_shape)) {
+    return false;
+  }
+
+  const int axis = static_cast<int>(input_shape.size() - 1);
+  ::musa::dnn::RMSNorm op;
+  if (op.SetEpsilon(static_cast<double>(epsilon)) !=
+          ::musa::dnn::Status::SUCCESS ||
+      op.SetVarMode(::musa::dnn::RMSNorm::VarMode::DIRECT) !=
+          ::musa::dnn::Status::SUCCESS ||
+      op.SetAxis(1, &axis) != ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+
+  return op.Run(*handle, output_tensor, inv_var_tensor, input_tensor,
+                gamma_tensor) == ::musa::dnn::Status::SUCCESS;
+}
+
 }  // namespace
 
 struct RmsNormFusionCompute : FusionNodeCompute {
@@ -169,6 +263,11 @@ struct RmsNormFusionCompute : FusionNodeCompute {
       const musaStream_t stream = GetComputeStream(ctx);
       DeviceInputBuffer gamma_buffer;
       RETURN_IF_ERROR(gamma_buffer.Bind(gamma, stream));
+      if (TryMudnnRmsNorm(input, gamma_buffer.data(), output, input_shape,
+                          gamma_shape, input_info.GetElementType(), epsilon,
+                          stream)) {
+        return nullptr;
+      }
       return LaunchStatus(
           LaunchMusaRmsNormKernel(input.GetTensorRawData(), gamma_buffer.data(),
                                   output.GetTensorMutableRawData(), rows,
@@ -248,6 +347,11 @@ struct CastRmsNormFusionCompute : FusionNodeCompute {
       const musaStream_t stream = GetComputeStream(ctx);
       DeviceInputBuffer gamma_buffer;
       RETURN_IF_ERROR(gamma_buffer.Bind(gamma, stream));
+      if (TryMudnnRmsNorm(input, gamma_buffer.data(), output, input_shape,
+                          gamma_shape, input_info.GetElementType(), epsilon,
+                          stream)) {
+        return nullptr;
+      }
       return LaunchStatus(LaunchMusaCastRmsNormBf16Kernel(
           input.GetTensorRawData(), gamma_buffer.data(),
           output.GetTensorMutableRawData(), rows, norm_size, epsilon, stream));

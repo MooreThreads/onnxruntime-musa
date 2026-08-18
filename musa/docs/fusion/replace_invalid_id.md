@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **17**
+- GetCapability priority: **18**
 - Finder: `FindReplaceInvalidIdFusions`
 - Finder implementation: `musa/ep/src/fusion/replace_invalid_id_fusion_matcher.cc`
 - Compile detector: `IsReplaceInvalidIdFusionGraph`

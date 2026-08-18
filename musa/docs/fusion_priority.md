@@ -22,23 +22,24 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 13 | Masked Embedding Lookup Fusion | `FindMaskedEmbeddingLookupFusions` | `false` | [masked_embedding_lookup.md](fusion/masked_embedding_lookup.md) |
 | 14 | Sparse Id To Mask Fusion | `FindSparseIdToMaskFusions` | `false` | [sparse_id_to_mask.md](fusion/sparse_id_to_mask.md) |
 | 15 | Bucketize Gather Fusion | `FindBucketizeGatherFusions` | `false` | [bucketize_gather.md](fusion/bucketize_gather.md) |
-| 16 | Modulo Gather Fusion | `FindModuloGatherFusions` | `false` | [modulo_gather.md](fusion/modulo_gather.md) |
-| 17 | Replace Invalid Id Fusion | `FindReplaceInvalidIdFusions` | `true` | [replace_invalid_id.md](fusion/replace_invalid_id.md) |
-| 18 | Math Concat Log Fusion | `FindMathConcatLogFusions` | `false` | [math_concat_log.md](fusion/math_concat_log.md) |
-| 19 | Split Unsqueeze Concat Fusion | `FindSplitUnsqueezeConcatFusions` | `false` | [split_unsqueeze_concat.md](fusion/split_unsqueeze_concat.md) |
-| 20 | Split Reduce Fusion | `FindSplitReduceFusions` | `false` | [split_reduce.md](fusion/split_reduce.md) |
-| 21 | Concat MatMul Fusion | `FindConcatMatMulFusions` | `false` | [concat_matmul.md](fusion/concat_matmul.md) |
-| 22 | Concat Split Fusion | `FindConcatSplitFusions` | `false` | [concat_split.md](fusion/concat_split.md) |
-| 23 | Split Concat Fusion | `FindSplitConcatFusions` | `false` | [split_concat.md](fusion/split_concat.md) |
-| 24 | Parallel MatMul Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
-| 25 | Parallel Linear Fusion | `FindParallelLinearFusions` | `false` | [parallel_linear.md](fusion/parallel_linear.md) |
-| 26 | Strided View Fusion | `FindStridedViewFusions` | `true` | [strided_view.md](fusion/strided_view.md) |
-| 27 | Shape Reshape Fusion | `FindShapeReshapeFusions` | `true` | [shape_reshape.md](fusion/shape_reshape.md) |
-| 28 | Tile Concat Fusion | `FindTileConcatFusions` | `false` | [tile_concat.md](fusion/tile_concat.md) |
-| 29 | Slice Concat Fusion | `FindSliceConcatFusions` | `false` | [slice_concat.md](fusion/slice_concat.md) |
-| 30 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
-| 31 | Gemm Activation Fusion | `FindGemmActivationFusions` | `false` | [gemm_activation.md](fusion/gemm_activation.md) |
-| 32 | Fused Gemm Fusion | `FindFusedGemmFusions` | `false` | [fused_gemm.md](fusion/fused_gemm.md) |
+| 16 | Log Bucketize Gather Fusion | `FindLogBucketizeGatherFusions` | `false` | [log_bucketize_gather.md](fusion/log_bucketize_gather.md) |
+| 17 | Modulo Gather Fusion | `FindModuloGatherFusions` | `false` | [modulo_gather.md](fusion/modulo_gather.md) |
+| 18 | Replace Invalid Id Fusion | `FindReplaceInvalidIdFusions` | `true` | [replace_invalid_id.md](fusion/replace_invalid_id.md) |
+| 19 | Math Concat Log Fusion | `FindMathConcatLogFusions` | `false` | [math_concat_log.md](fusion/math_concat_log.md) |
+| 20 | Split Unsqueeze Concat Fusion | `FindSplitUnsqueezeConcatFusions` | `false` | [split_unsqueeze_concat.md](fusion/split_unsqueeze_concat.md) |
+| 21 | Split Reduce Fusion | `FindSplitReduceFusions` | `false` | [split_reduce.md](fusion/split_reduce.md) |
+| 22 | Concat MatMul Fusion | `FindConcatMatMulFusions` | `false` | [concat_matmul.md](fusion/concat_matmul.md) |
+| 23 | Concat Split Fusion | `FindConcatSplitFusions` | `false` | [concat_split.md](fusion/concat_split.md) |
+| 24 | Split Concat Fusion | `FindSplitConcatFusions` | `false` | [split_concat.md](fusion/split_concat.md) |
+| 25 | Parallel MatMul Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
+| 26 | Parallel Linear Fusion | `FindParallelLinearFusions` | `false` | [parallel_linear.md](fusion/parallel_linear.md) |
+| 27 | Strided View Fusion | `FindStridedViewFusions` | `true` | [strided_view.md](fusion/strided_view.md) |
+| 28 | Shape Reshape Fusion | `FindShapeReshapeFusions` | `true` | [shape_reshape.md](fusion/shape_reshape.md) |
+| 29 | Tile Concat Fusion | `FindTileConcatFusions` | `false` | [tile_concat.md](fusion/tile_concat.md) |
+| 30 | Slice Concat Fusion | `FindSliceConcatFusions` | `false` | [slice_concat.md](fusion/slice_concat.md) |
+| 31 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
+| 32 | Gemm Activation Fusion | `FindGemmActivationFusions` | `false` | [gemm_activation.md](fusion/gemm_activation.md) |
+| 33 | Fused Gemm Fusion | `FindFusedGemmFusions` | `false` | [fused_gemm.md](fusion/fused_gemm.md) |
 
 ## Compile Dispatch Order
 
@@ -59,20 +60,21 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 13 | `IsMaskedEmbeddingLookupFusionGraph` | `CreateMaskedEmbeddingLookupFusion` | [masked_embedding_lookup](fusion/masked_embedding_lookup.md) |
 | 14 | `IsSparseIdToMaskFusionGraph` | `CreateSparseIdToMaskFusion` | [sparse_id_to_mask](fusion/sparse_id_to_mask.md) |
 | 15 | `IsBucketizeGatherFusionGraph` | `CreateBucketizeGatherFusion` | [bucketize_gather](fusion/bucketize_gather.md) |
-| 16 | `IsModuloGatherFusionGraph` | `CreateModuloGatherFusion` | [modulo_gather](fusion/modulo_gather.md) |
-| 17 | `IsReplaceInvalidIdFusionGraph` | `CreateReplaceInvalidIdFusion` | [replace_invalid_id](fusion/replace_invalid_id.md) |
-| 18 | `IsMathConcatLogFusionGraph` | `CreateMathConcatLogFusion` | [math_concat_log](fusion/math_concat_log.md) |
-| 19 | `IsSplitUnsqueezeConcatFusionGraph` | `CreateSplitUnsqueezeConcatFusion` | [split_unsqueeze_concat](fusion/split_unsqueeze_concat.md) |
-| 20 | `IsSplitReduceFusionGraph` | `CreateSplitReduceFusion` | [split_reduce](fusion/split_reduce.md) |
-| 21 | `IsConcatMatMulFusionGraph` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
-| 22 | `IsConcatSplitFusionGraph` | `CreateConcatSplitFusion` | [concat_split](fusion/concat_split.md) |
-| 23 | `IsSplitConcatFusionGraph` | `CreateSplitConcatFusion` | [split_concat](fusion/split_concat.md) |
-| 24 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
-| 25 | `IsParallelLinearFusionGraph` | `CreateParallelLinearFusion` | [parallel_linear](fusion/parallel_linear.md) |
-| 26 | `IsStridedViewFusionGraph` | `CreateStridedViewFusion` | [strided_view](fusion/strided_view.md) |
-| 27 | `IsShapeReshapeFusionGraph` | `CreateShapeReshapeFusion` | [shape_reshape](fusion/shape_reshape.md) |
-| 28 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
-| 29 | `IsSliceConcatFusionGraph` | `CreateSliceConcatFusion` | [slice_concat](fusion/slice_concat.md) |
-| 30 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
-| 31 | `IsGemmActivationFusionGraph` | `CreateGemmActivationFusion` | [gemm_activation](fusion/gemm_activation.md) |
-| 32 | `IsFusedGemmFusionGraph` | `CreateFusedGemmFusion` | [fused_gemm](fusion/fused_gemm.md) |
+| 16 | `IsLogBucketizeGatherFusionGraph` | `CreateLogBucketizeGatherFusion` | [log_bucketize_gather](fusion/log_bucketize_gather.md) |
+| 17 | `IsModuloGatherFusionGraph` | `CreateModuloGatherFusion` | [modulo_gather](fusion/modulo_gather.md) |
+| 18 | `IsReplaceInvalidIdFusionGraph` | `CreateReplaceInvalidIdFusion` | [replace_invalid_id](fusion/replace_invalid_id.md) |
+| 19 | `IsMathConcatLogFusionGraph` | `CreateMathConcatLogFusion` | [math_concat_log](fusion/math_concat_log.md) |
+| 20 | `IsSplitUnsqueezeConcatFusionGraph` | `CreateSplitUnsqueezeConcatFusion` | [split_unsqueeze_concat](fusion/split_unsqueeze_concat.md) |
+| 21 | `IsSplitReduceFusionGraph` | `CreateSplitReduceFusion` | [split_reduce](fusion/split_reduce.md) |
+| 22 | `IsConcatMatMulFusionGraph` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
+| 23 | `IsConcatSplitFusionGraph` | `CreateConcatSplitFusion` | [concat_split](fusion/concat_split.md) |
+| 24 | `IsSplitConcatFusionGraph` | `CreateSplitConcatFusion` | [split_concat](fusion/split_concat.md) |
+| 25 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
+| 26 | `IsParallelLinearFusionGraph` | `CreateParallelLinearFusion` | [parallel_linear](fusion/parallel_linear.md) |
+| 27 | `IsStridedViewFusionGraph` | `CreateStridedViewFusion` | [strided_view](fusion/strided_view.md) |
+| 28 | `IsShapeReshapeFusionGraph` | `CreateShapeReshapeFusion` | [shape_reshape](fusion/shape_reshape.md) |
+| 29 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
+| 30 | `IsSliceConcatFusionGraph` | `CreateSliceConcatFusion` | [slice_concat](fusion/slice_concat.md) |
+| 31 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
+| 32 | `IsGemmActivationFusionGraph` | `CreateGemmActivationFusion` | [gemm_activation](fusion/gemm_activation.md) |
+| 33 | `IsFusedGemmFusionGraph` | `CreateFusedGemmFusion` | [fused_gemm](fusion/fused_gemm.md) |

@@ -238,6 +238,11 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindBucketizeGatherFusions", false,
                  std::move(bucketize_gather_fusions), accepted_node_ids);
 
+  auto log_bucketize_gather_fusions = FindLogBucketizeGatherFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindLogBucketizeGatherFusions", false,
+                 std::move(log_bucketize_gather_fusions), accepted_node_ids);
+
   auto modulo_gather_fusions =
       FindModuloGatherFusions(all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindModuloGatherFusions", false,

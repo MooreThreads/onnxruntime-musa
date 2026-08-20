@@ -16,6 +16,7 @@ import json
 import os
 
 import numpy as np
+import onnx
 import onnxruntime as ort
 import pytest
 from onnx import helper, numpy_helper
@@ -303,10 +304,9 @@ def test_segment_max_broadcast_accuracy(ids, values, rename_values):
     np.testing.assert_array_equal(actual, _expected(ids, values))
 
 
-def _profile_op_names(model, feeds, tmp_path, prefix, *, disable_cpu_fallback=True):
+def _profile_op_names(model, feeds, tmp_path, prefix):
     so = ort.SessionOptions()
-    if disable_cpu_fallback:
-        so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
     so.enable_profiling = True
     so.profile_file_prefix = str(tmp_path / prefix)
     so.add_provider_for_devices(musa_devices(), {})
@@ -324,6 +324,16 @@ def _profile_op_names(model, feeds, tmp_path, prefix, *, disable_cpu_fallback=Tr
         for event in events
         if event.get("cat") == "Node" and event.get("name", "").endswith("_kernel_time")
     }
+
+
+def _optimized_op_names(model, tmp_path, prefix):
+    optimized_model_path = tmp_path / f"{prefix}.optimized.onnx"
+    so = ort.SessionOptions()
+    so.optimized_model_filepath = str(optimized_model_path)
+    so.add_provider_for_devices(musa_devices(), {})
+    ort.InferenceSession(model, sess_options=so)
+    optimized_model = onnx.load(optimized_model_path, load_external_data=False)
+    return {node.op_type for node in optimized_model.graph.node}
 
 
 @pytest.mark.parametrize("rename_values", [False, True])
@@ -355,46 +365,25 @@ def test_segment_max_broadcast_fusion_assignment(
 
 @pytest.mark.parametrize("rename_values", [False, True])
 def test_segment_max_broadcast_rejects_broken_final_edge(tmp_path, rename_values):
-    model, names = _build_segment_max_broadcast_model(
+    model, _ = _build_segment_max_broadcast_model(
         detached_final_indices=True,
         rename_values=rename_values,
     )
-    ids = np.array([0, 1, 0], dtype=np.int64)
-    values = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    feeds = {
-        names["segment_ids"]: ids,
-        names["values"]: np.concatenate(
-            [values, np.array([np.finfo(np.float32).min], dtype=np.float32)]
-        ),
-        names["detached_indices"]: np.array([0, 1, 0], dtype=np.int64),
-    }
-    op_names = _profile_op_names(
+    op_names = _optimized_op_names(
         model,
-        feeds,
         tmp_path,
         f"segment_max_rejected_{rename_values}",
-        disable_cpu_fallback=False,
     )
     assert "Unique" in op_names
     assert not any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)
 
 
 def test_segment_max_broadcast_rejects_unsupported_id_type(tmp_path):
-    model, names = _build_segment_max_broadcast_model(segment_id_type=TensorProto.INT32)
-    ids = np.array([0, 1, 0], dtype=np.int32)
-    values = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    feeds = {
-        names["segment_ids"]: ids,
-        names["values"]: np.concatenate(
-            [values, np.array([np.finfo(np.float32).min], dtype=np.float32)]
-        ),
-    }
-    op_names = _profile_op_names(
+    model, _ = _build_segment_max_broadcast_model(segment_id_type=TensorProto.INT32)
+    op_names = _optimized_op_names(
         model,
-        feeds,
         tmp_path,
         "segment_max_unsupported_id_type",
-        disable_cpu_fallback=False,
     )
     assert "Unique" in op_names
     assert not any(str(op).startswith("MUSAExecutionProvider_") for op in op_names)

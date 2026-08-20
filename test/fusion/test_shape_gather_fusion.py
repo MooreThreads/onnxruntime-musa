@@ -147,6 +147,39 @@ def _build_shape_mul_expand_shape_model() -> bytes:
     return model.SerializeToString()
 
 
+def _build_device_shape_metadata_model() -> bytes:
+    dim_index = numpy_helper.from_array(np.array(1, dtype=np.int64), name="dim_index")
+    dim_vector_index = numpy_helper.from_array(
+        np.array([1], dtype=np.int64), name="dim_vector_index"
+    )
+    zero = numpy_helper.from_array(np.array(0, dtype=np.int64), name="zero")
+    one = numpy_helper.from_array(np.array(1, dtype=np.int64), name="one")
+    axes = numpy_helper.from_array(np.array([1], dtype=np.int64), name="axes")
+    starts = numpy_helper.from_array(np.array([0], dtype=np.int64), name="starts")
+    nodes = [
+        helper.make_node("Shape", ["X"], ["shape"]),
+        helper.make_node("Gather", ["shape", "dim_index"], ["limit"], axis=0),
+        helper.make_node(
+            "Gather", ["shape", "dim_vector_index"], ["ends"], axis=0
+        ),
+        helper.make_node("Slice", ["X", "starts", "ends", "axes"], ["Sliced"]),
+        helper.make_node("Range", ["zero", "limit", "one"], ["positions"]),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "device_shape_metadata",
+        [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", "M"])],
+        [
+            helper.make_tensor_value_info("Sliced", TensorProto.FLOAT, None),
+            helper.make_tensor_value_info("positions", TensorProto.INT64, None),
+        ],
+        initializer=[dim_index, dim_vector_index, zero, one, axes, starts],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
+
+
 def test_large_cast_stays_on_musa(tmp_path):
     model = _build_large_cast_model()
     x = np.arange(1024 * 60, dtype=np.int32).reshape(1024, 60, 1)
@@ -223,3 +256,24 @@ def test_int32_shape_mul_feeding_expand_shape_stays_on_cpu_metadata(tmp_path):
     assert "Mul" in cpu_ops
     assert "Mul" not in musa_ops
     assert "Expand" in musa_ops
+
+
+def test_device_shape_metadata_avoids_device_wide_d2h_sync(tmp_path):
+    model = _build_device_shape_metadata_model()
+    feeds = {"X": np.arange(15, dtype=np.float32).reshape(3, 5)}
+
+    cpu_session = ort.InferenceSession(model, providers=["CPUExecutionProvider"])
+    expected = cpu_session.run(None, feeds)
+
+    actual, events = _profile_musa_session(
+        model, feeds, tmp_path, "device_shape_metadata"
+    )
+    for actual_value, expected_value in zip(actual, expected):
+        np.testing.assert_array_equal(actual_value, expected_value)
+
+    ops_by_provider = _ops_by_provider(events)
+    musa_ops = ops_by_provider.get("MUSAExecutionProvider", set())
+    all_ops = set().union(*ops_by_provider.values())
+    assert "Slice" in musa_ops
+    assert "Range" in musa_ops
+    assert "MemcpyToHost" not in all_ops

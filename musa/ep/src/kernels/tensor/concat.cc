@@ -40,10 +40,12 @@ constexpr int64_t kMaxCpuMetadataConcatElements = kMusaMaxBroadcastRank;
   return ::musa::dnn::Tensor::Format::NCHW;
 }
 
-bool SetupMudnnFloatTensor(::musa::dnn::Tensor& tensor, const void* data,
-                           const std::vector<int64_t>& shape) {
-  if (tensor.SetType(::musa::dnn::Tensor::Type::FLOAT) !=
-      ::musa::dnn::Status::SUCCESS) {
+bool SetupMudnnConcatTensor(::musa::dnn::Tensor& tensor, const void* data,
+                            const std::vector<int64_t>& shape,
+                            ONNXTensorElementDataType elem_type) {
+  ::musa::dnn::Tensor::Type mudnn_type;
+  if (!MudnnTensorType(elem_type, mudnn_type) ||
+      tensor.SetType(mudnn_type) != ::musa::dnn::Status::SUCCESS) {
     return false;
   }
   if (tensor.SetAddr(data) != ::musa::dnn::Status::SUCCESS) {
@@ -61,10 +63,10 @@ bool SetupMudnnFloatTensor(::musa::dnn::Tensor& tensor, const void* data,
                           strides.data()) == ::musa::dnn::Status::SUCCESS;
 }
 
-bool TryMudnnConcatFloat(Ort::KernelContext& ctx,
-                         const std::vector<std::vector<int64_t>>& shapes,
-                         const std::vector<int64_t>& out_shape, int64_t axis,
-                         Ort::UnownedValue y) {
+bool TryMudnnConcat(Ort::KernelContext& ctx,
+                    const std::vector<std::vector<int64_t>>& shapes,
+                    const std::vector<int64_t>& out_shape, int64_t axis,
+                    ONNXTensorElementDataType elem_type, Ort::UnownedValue y) {
   if (NumElements(out_shape) == 0) {
     return false;
   }
@@ -83,16 +85,16 @@ bool TryMudnnConcatFloat(Ort::KernelContext& ctx,
 
   std::vector<::musa::dnn::Tensor> input_tensors(shapes.size());
   for (size_t i = 0; i < shapes.size(); ++i) {
-    if (!SetupMudnnFloatTensor(input_tensors[i],
-                               ctx.GetInput(i).GetTensorData<float>(),
-                               shapes[i])) {
+    if (!SetupMudnnConcatTensor(input_tensors[i],
+                                ctx.GetInput(i).GetTensorRawData(), shapes[i],
+                                elem_type)) {
       return false;
     }
   }
 
   ::musa::dnn::Tensor output_tensor;
-  if (!SetupMudnnFloatTensor(output_tensor, y.GetTensorMutableData<float>(),
-                             out_shape)) {
+  if (!SetupMudnnConcatTensor(output_tensor, y.GetTensorMutableRawData(),
+                              out_shape, elem_type)) {
     return false;
   }
 
@@ -320,6 +322,14 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
     const size_t element_descriptor_bytes =
         static_cast<size_t>(output_row_elements) *
         sizeof(MusaConcatElementDesc);
+    // Preserve the established FP32 small-row dispatch while routing other
+    // fixed-size tensor types through muDNN before the custom copy kernels.
+    if (!output_overlaps_input &&
+        elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+        TryMudnnConcat(ctx, shapes, out_shape, axis, elem_type, y)) {
+      return nullptr;
+    }
+
     if (ShouldUseConcatSmallRows(input_data.size(), kConcatManySmallInputCount,
                                  max_width_bytes, kConcatManySmallMaxWidthBytes,
                                  output_row_elements,
@@ -340,7 +350,7 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
 
     if (!output_overlaps_input &&
         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
-        TryMudnnConcatFloat(ctx, shapes, out_shape, axis, y)) {
+        TryMudnnConcat(ctx, shapes, out_shape, axis, elem_type, y)) {
       return nullptr;
     }
 

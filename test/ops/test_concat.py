@@ -130,6 +130,40 @@ def test_concat_bfloat16():
     )
     np.testing.assert_array_equal(actual, np.concatenate([a, b], axis=0))
 
+
+def test_concat_bfloat16_unirank_many_small_rows():
+    rng = np.random.default_rng(17)
+    float_inputs = {
+        "X0": rng.standard_normal((1, 3, 256)).astype(np.float32),
+        **{
+            f"X{i}": rng.standard_normal((1, 3, 128)).astype(np.float32)
+            for i in range(1, 8)
+        },
+    }
+    inputs = {
+        name: float32_to_bfloat16_bits(value)
+        for name, value in float_inputs.items()
+    }
+    input_types = {name: TensorProto.BFLOAT16 for name in inputs}
+    model = build_model_with_input_types(
+        "Concat",
+        inputs=inputs,
+        input_types=input_types,
+        outputs=[("Y", TensorProto.BFLOAT16)],
+        attrs={"axis": -1},
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        inputs,
+        input_types,
+        [("Y", TensorProto.BFLOAT16, (1, 3, 1152))],
+        use_musa=True,
+    )
+    np.testing.assert_array_equal(
+        actual, np.concatenate(list(inputs.values()), axis=-1)
+    )
+
+
 def test_concat_many_small_inputs_axis1():
     inputs = {}
     rng = np.random.default_rng(6)

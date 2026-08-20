@@ -2,10 +2,18 @@
 
 #include <musa_runtime.h>
 
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <span>
 #include <string_view>
+
+#if defined(__linux__) || defined(__APPLE__)
+#include <execinfo.h>
+#include <unistd.h>
+#endif
 
 namespace {
 OrtStatus* MusaStatus(const OrtApi& api, musaError_t status) {
@@ -65,6 +73,38 @@ size_t EnvSizeOrDefault(const char* name, size_t default_value) {
     return default_value;
   }
   return static_cast<size_t>(parsed);
+}
+
+// The plugin data-transfer ABI deliberately exposes OrtValue storage and
+// memory devices, but not the producing node/value-info names. Keep this
+// diagnostic opt-in and print stable pointer/size keys that can be joined
+// with an ORT/MTTX trace. The backtrace identifies the exact transfer path.
+void TraceD2hDeviceSynchronize(const OrtValue* src_tensor,
+                               const OrtValue* dst_tensor, const void* src_data,
+                               void* dst_data, size_t bytes,
+                               size_t tensor_index, size_t tensor_count) {
+  if (!EnvFlagEnabled("ORT_MUSA_TRACE_D2H_SYNC", false)) return;
+  static std::atomic<uint64_t> sequence{0};
+  const uint64_t id = ++sequence;
+  std::fprintf(stderr,
+               "MUSA_D2H_DEVICE_SYNC id=%llu src_value=%p dst_value=%p "
+               "src_data=%p dst_data=%p bytes=%zu stream=null "
+               "tensor_index=%zu tensor_count=%zu "
+               "node=<data-transfer-abi-no-node-name>\n",
+               static_cast<unsigned long long>(id),
+               static_cast<const void*>(src_tensor),
+               static_cast<const void*>(dst_tensor), src_data, dst_data, bytes,
+               tensor_index, tensor_count);
+#if defined(__linux__) || defined(__APPLE__)
+  void* frames[32];
+  const int count = ::backtrace(frames, 32);
+  std::fprintf(stderr, "MUSA_D2H_DEVICE_SYNC_BACKTRACE id=%llu frames=%d\n",
+               static_cast<unsigned long long>(id), count);
+  ::backtrace_symbols_fd(frames, count, STDERR_FILENO);
+#else
+  std::fprintf(stderr, "MUSA_D2H_DEVICE_SYNC_BACKTRACE id=%llu unavailable\n",
+               static_cast<unsigned long long>(id));
+#endif
 }
 
 OrtStatus* CopyPageableHostToDevice(MusaDataTransfer& impl,
@@ -216,6 +256,13 @@ OrtStatus* ORT_API_CALL MusaDataTransfer::CopyTensorsImpl(
     if (streams_ptr != nullptr && streams_ptr[i] != nullptr) {
       stream = static_cast<musaStream_t>(
           impl.ort_api_.SyncStream_GetHandle(streams_ptr[i]));
+    }
+
+    if (bytes != 0 && src_data != dst_data && stream == nullptr &&
+        IsGpuDefault(impl.ep_api_, src_device, impl.vendor_id_) &&
+        !IsGpuDefault(impl.ep_api_, dst_device, impl.vendor_id_)) {
+      TraceD2hDeviceSynchronize(src_tensors[i], dst_tensors[i], src_data,
+                                dst_data, bytes, i, num_tensors);
     }
 
     RETURN_IF_ERROR(CopyImpl(impl, src_device, dst_device, src_data, dst_data,

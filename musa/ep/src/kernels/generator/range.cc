@@ -103,11 +103,6 @@ OrtStatus* Range::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
-ONNX_OPERATOR_VERSIONED_KERNEL_EX(Range, kOnnxDomain, 11, 19,
-                                  (Ort::KernelDefBuilder()
-                                       .AddTypeConstraint("T",
-                                                          RangeTensorTypes())
-                                       .SetInputMemType(0, OrtMemTypeCPUInput)
-                                       .SetInputMemType(1, OrtMemTypeCPUInput)
-                                       .SetInputMemType(2, OrtMemTypeCPUInput)),
-                                  Range)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Range, kOnnxDomain, 11, 19,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", RangeTensorTypes())), Range)

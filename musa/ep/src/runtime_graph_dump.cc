@@ -206,28 +206,54 @@ void WriteEdge(std::ostream& out, std::unordered_set<std::string>& seen_edges,
   out << " " << to << "\n";
 }
 
-void RecordValueDTypes(const std::vector<std::string>& names,
-                       const std::vector<std::string>& dtypes,
-                       std::unordered_map<std::string, std::string>& by_name) {
+void RecordValueMetadata(
+    const std::vector<std::string>& names,
+    const std::vector<std::string>& values,
+    std::unordered_map<std::string, std::string>& by_name) {
   for (size_t i = 0; i < names.size(); ++i) {
-    if (names[i].empty() || i >= dtypes.size() || dtypes[i].empty()) {
+    if (names[i].empty() || i >= values.size() || values[i].empty()) {
       continue;
     }
-    by_name.emplace(names[i], dtypes[i]);
+    by_name.emplace(names[i], values[i]);
   }
 }
 
 std::string ValueLabel(
     const std::string& value_name,
-    const std::unordered_map<std::string, std::string>& dtypes_by_value) {
+    const std::unordered_map<std::string, std::string>& dtypes_by_value,
+    const std::unordered_map<std::string, std::string>& shapes_by_value) {
   if (value_name.empty()) {
     return "";
   }
+
+  std::string label;
   auto dtype_it = dtypes_by_value.find(value_name);
-  if (dtype_it == dtypes_by_value.end() || dtype_it->second.empty()) {
-    return "";
+  if (dtype_it != dtypes_by_value.end() && !dtype_it->second.empty()) {
+    label = dtype_it->second;
   }
-  return dtype_it->second;
+  auto shape_it = shapes_by_value.find(value_name);
+  if (shape_it != shapes_by_value.end() && !shape_it->second.empty()) {
+    if (!label.empty()) {
+      label += "<br/>";
+    }
+    label += "shape=";
+    label += shape_it->second;
+  }
+  return label;
+}
+
+std::string ExternalValueLabel(
+    const std::string& value_name,
+    const std::unordered_map<std::string, std::string>& dtypes_by_value,
+    const std::unordered_map<std::string, std::string>& shapes_by_value) {
+  std::string label = value_name;
+  const std::string type_and_shape =
+      ValueLabel(value_name, dtypes_by_value, shapes_by_value);
+  if (!type_and_shape.empty()) {
+    label += "<br/>";
+    label += type_and_shape;
+  }
+  return label;
 }
 
 uint64_t FindProducerForInput(
@@ -290,13 +316,18 @@ void DumpRuntimeGraphAtExit() {
   std::unordered_map<std::string, std::vector<uint64_t>> producers_by_value;
   std::unordered_set<std::string> consumed_values;
   std::unordered_map<std::string, std::string> dtypes_by_value;
+  std::unordered_map<std::string, std::string> shapes_by_value;
   std::unordered_map<uint64_t, const RuntimeExecNode*> nodes_by_id;
   for (const RuntimeExecNode& node : nodes) {
     nodes_by_id.emplace(node.id, &node);
-    RecordValueDTypes(node.metadata.inputs, node.metadata.input_dtypes,
-                      dtypes_by_value);
-    RecordValueDTypes(node.metadata.outputs, node.metadata.output_dtypes,
-                      dtypes_by_value);
+    RecordValueMetadata(node.metadata.inputs, node.metadata.input_dtypes,
+                        dtypes_by_value);
+    RecordValueMetadata(node.metadata.outputs, node.metadata.output_dtypes,
+                        dtypes_by_value);
+    RecordValueMetadata(node.metadata.inputs, node.metadata.input_shapes,
+                        shapes_by_value);
+    RecordValueMetadata(node.metadata.outputs, node.metadata.output_shapes,
+                        shapes_by_value);
     for (const std::string& output : node.metadata.outputs) {
       if (!output.empty()) {
         producers_by_value[output].push_back(node.id);
@@ -327,7 +358,9 @@ void DumpRuntimeGraphAtExit() {
 
   for (const auto& [value_name, value_index] : external_values) {
     out << "  " << ValueMermaidId(value_index) << "[\""
-        << EscapeLabel(ValueLabel(value_name, dtypes_by_value)) << "\"]\n";
+        << EscapeLabel(
+               ExternalValueLabel(value_name, dtypes_by_value, shapes_by_value))
+        << "\"]\n";
   }
 
   for (const RuntimeExecNode& node : nodes) {
@@ -346,14 +379,14 @@ void DumpRuntimeGraphAtExit() {
           FindProducerForInput(producers_by_value, nodes_by_id, node, input);
       if (producer_id != 0) {
         WriteEdge(out, seen_edges, NodeMermaidId(producer_id), to,
-                  ValueLabel(input, dtypes_by_value));
+                  ValueLabel(input, dtypes_by_value, shapes_by_value));
         continue;
       }
 
       auto external_it = external_values.find(input);
       if (external_it != external_values.end()) {
         WriteEdge(out, seen_edges, ValueMermaidId(external_it->second), to,
-                  ValueLabel(input, dtypes_by_value));
+                  ValueLabel(input, dtypes_by_value, shapes_by_value));
       }
     }
 
@@ -364,7 +397,7 @@ void DumpRuntimeGraphAtExit() {
       auto external_it = external_values.find(output);
       if (external_it != external_values.end()) {
         WriteEdge(out, seen_edges, to, ValueMermaidId(external_it->second),
-                  ValueLabel(output, dtypes_by_value));
+                  ValueLabel(output, dtypes_by_value, shapes_by_value));
       }
     }
   }

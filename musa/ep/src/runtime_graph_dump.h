@@ -29,6 +29,8 @@ struct RuntimeGraphNodeMetadata {
   std::vector<std::string> outputs;
   std::vector<std::string> input_dtypes;
   std::vector<std::string> output_dtypes;
+  std::vector<std::string> input_shapes;
+  std::vector<std::string> output_shapes;
   std::string dtype_storage_types;
   std::string dtype_accumulator_type;
   std::string dtype_output_policy;

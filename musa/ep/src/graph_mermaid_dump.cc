@@ -124,11 +124,54 @@ std::string DTypeLabel(Ort::ConstValueInfo value_info) {
   return "dtype=?";
 }
 
+std::string ShapeLabel(Ort::ConstValueInfo value_info) {
+  try {
+    const auto type_info = value_info.TypeInfo();
+    if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
+      return "shape=?";
+    }
+
+    const auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
+    const std::vector<int64_t> shape = tensor_info.GetShape();
+    const std::vector<const char*> symbolic_dims =
+        tensor_info.GetSymbolicDimensions();
+    std::string label = "shape=[";
+    for (size_t i = 0; i < shape.size(); ++i) {
+      if (i != 0) {
+        label += ", ";
+      }
+      if (shape[i] >= 0) {
+        label += std::to_string(shape[i]);
+      } else if (i < symbolic_dims.size() && symbolic_dims[i] != nullptr &&
+                 symbolic_dims[i][0] != '\0') {
+        label += symbolic_dims[i];
+      } else {
+        label += "?";
+      }
+    }
+    label += "]";
+    return label;
+  } catch (...) {
+    return "shape=?";
+  }
+}
+
 std::string ValueLabel(Ort::ConstValueInfo value_info) {
   if (value_info == nullptr) {
     return "";
   }
-  return DTypeLabel(value_info);
+  return DTypeLabel(value_info) + "<br/>" + ShapeLabel(value_info);
+}
+
+std::string ExternalValueLabel(const std::string& value_name,
+                               Ort::ConstValueInfo value_info) {
+  std::string label = value_name;
+  const std::string type_and_shape = ValueLabel(value_info);
+  if (!type_and_shape.empty()) {
+    label += "<br/>";
+    label += type_and_shape;
+  }
+  return label;
 }
 
 void WriteEdge(std::ostream& out, std::unordered_set<std::string>& seen,
@@ -199,8 +242,8 @@ void WriteGraph(std::ostream& out, const OrtGraph& ort_graph,
     const std::string value_id =
         node_prefix + "_value_" + std::to_string(value_index++);
     external_value_ids.emplace(value_name, value_id);
-    out << "    " << value_id << "[\"" << EscapeLabel(ValueLabel(value_info))
-        << "\"]\n";
+    out << "    " << value_id << "[\""
+        << EscapeLabel(ExternalValueLabel(value_name, value_info)) << "\"]\n";
   }
 
   for (const Ort::ConstNode& node : nodes) {

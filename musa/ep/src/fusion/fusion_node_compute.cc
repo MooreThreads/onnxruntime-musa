@@ -114,6 +114,40 @@ std::vector<std::string> ValueInfoDTypes(
   return dtypes;
 }
 
+std::vector<std::string> ValueInfoShapes(
+    const std::vector<Ort::ConstValueInfo>& value_infos) {
+  std::vector<std::string> shapes;
+  shapes.reserve(value_infos.size());
+  for (Ort::ConstValueInfo value_info : value_infos) {
+    try {
+      const auto tensor_info =
+          value_info.TypeInfo().GetTensorTypeAndShapeInfo();
+      const std::vector<int64_t> shape = tensor_info.GetShape();
+      const std::vector<const char*> symbolic_dims =
+          tensor_info.GetSymbolicDimensions();
+      std::string label = "[";
+      for (size_t i = 0; i < shape.size(); ++i) {
+        if (i != 0) {
+          label += ", ";
+        }
+        if (shape[i] >= 0) {
+          label += std::to_string(shape[i]);
+        } else if (i < symbolic_dims.size() && symbolic_dims[i] != nullptr &&
+                   symbolic_dims[i][0] != '\0') {
+          label += symbolic_dims[i];
+        } else {
+          label += "?";
+        }
+      }
+      label += "]";
+      shapes.push_back(std::move(label));
+    } catch (...) {
+      shapes.push_back("?");
+    }
+  }
+  return shapes;
+}
+
 RuntimeGraphNodeMetadata CreateFusionRuntimeMetadata(
     const Ort::ConstGraph& graph, const Ort::ConstNode& fused_node,
     const std::string& display_type, const char* finder_name) {
@@ -129,6 +163,8 @@ RuntimeGraphNodeMetadata CreateFusionRuntimeMetadata(
   metadata.outputs = ValueInfoNames(outputs);
   metadata.input_dtypes = ValueInfoDTypes(inputs);
   metadata.output_dtypes = ValueInfoDTypes(outputs);
+  metadata.input_shapes = ValueInfoShapes(inputs);
+  metadata.output_shapes = ValueInfoShapes(outputs);
 
   const musa_ep::FusionDTypeContract& contract =
       musa_ep::FusionDTypeContractForFinder(finder_name);

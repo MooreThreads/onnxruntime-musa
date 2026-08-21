@@ -128,9 +128,9 @@ ORT_MUSA_DISABLE_ALL_FUSIONS=1 ./.venv/bin/python your_script.py
 - 用途：在 `MusaEp::GetCapabilityImpl()` 入口处，将 ORT 传入 MUSA EP 之前的 graph dump 成 Mermaid `.mmd`。
 - 默认值：未设置时关闭。
 - 关闭值：空值、`0`、`false`、`off`、`no`。
-- 输出内容：ONNX 算子节点、外部输入/输出 value 节点和依赖边；节点文本使用
-  `op type | node name`，value 节点和边标签只显示 dtype，便于检查 `Cast`
-  边界和 matcher dtype 条件，同时避免暴露冗长的 input/output value name。
+- 输出内容：ONNX 算子节点、外部输入/输出 value 节点和依赖边；算子节点文本使用
+  `op type | node name`，外部 value 节点显示 value name、dtype 和 shape，边标签
+  显示 dtype 和 shape。动态维优先显示符号名，没有符号名的未知维显示 `?`。
 - 示例：
 
 ```bash
@@ -160,7 +160,8 @@ ORT_MUSA_DUMP_GET_CAPABILITY_GRAPH_MERMAID_PATH=/tmp/musa_get_capability_graph_{
 - 默认值：未设置时关闭。
 - 关闭值：空值、`0`、`false`、`off`、`no`。
 - 输出内容：普通 MUSA kernel 和 MUSA EP fused node 的最终拓扑，边由 tensor
-  value name 建立；边和外部 value 节点只显示 dtype。fusion 节点会显示
+  value name 建立；外部 value 节点显示 value name、dtype 和 shape，边标签显示
+  dtype 和 shape。动态维优先显示符号名，没有符号名的未知维显示 `?`。fusion 节点会显示
   实际 dispatch 到的 `*FusionCompute`，例如 `TileConcatFusionCompute`、
   `LinearFusionCompute`，并附带 fused node 的输入/输出 dtype list、storage
   contract、accumulator policy、output policy 和 Cast policy。

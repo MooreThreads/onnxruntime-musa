@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **11**
+- GetCapability priority: **12**
 - Finder: `FindRecRankCalibrationFusions`
 - Finder implementation: `musa/ep/src/fusion/rec_rank_calibration_fusion_matcher.cc`
 - Compile detector: `IsRecRankCalibrationFusionGraph`

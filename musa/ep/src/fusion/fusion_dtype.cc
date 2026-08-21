@@ -38,6 +38,13 @@ constexpr FusionDTypeContract kIntegerMaskDTypeContract = {
     "none", "preserve graph output dtype",
     "Cast nodes are not part of this fusion", FusionFloatPolicy::kNoFloatGate};
 
+constexpr FusionDTypeContract kGenerateMTGRCustomMaskDTypeContract = {
+    "shape-only tensor inputs of any dtype; bool/int32 mask and int64 "
+    "metadata outputs",
+    "none", "preserve matched graph output dtype",
+    "CroppedInt32 absorbs the final bool-to-int32 Cast",
+    FusionFloatPolicy::kNoFloatGate};
+
 constexpr FusionDTypeContract kMhtaSdpaDTypeContract = {
     "float32/float16/bfloat16/float64", "float32 workspace", "same as Q/K/V",
     "Cast nodes are not part of this fusion", FusionFloatPolicy::kAnyFloat};
@@ -119,6 +126,9 @@ const FusionDTypeContract& FusionDTypeContractForFinder(const char* finder) {
   const std::string name = finder == nullptr ? "" : finder;
   if (name == "FindMhtaScaledDotProductAttentionFusions") {
     return kMhtaSdpaDTypeContract;
+  }
+  if (name == "FindGenerateMTGRCustomMaskFusions") {
+    return kGenerateMTGRCustomMaskDTypeContract;
   }
   if (name == "FindRecRankCalibrationFusions") {
     return kRecRankDTypeContract;

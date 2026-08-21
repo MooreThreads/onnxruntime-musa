@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **34**
+- GetCapability priority: **35**
 - Finder: `FindSiluFusions`
 - Finder implementation: `musa/ep/src/fusion/silu_fusion_matcher.cc`
 - Compile detector: `IsSiluFusionGraph`

@@ -32,6 +32,7 @@
 #include "fusion/concat_matmul_fusion.h"
 #include "fusion/concat_reshape_fusion.h"
 #include "fusion/concat_split_fusion.h"
+#include "fusion/generate_mtgr_custom_mask_fusion.h"
 #include "fusion/linear_fusion.h"
 #include "fusion/log_bucketize_gather_fusion.h"
 #include "fusion/masked_embedding_lookup_fusion.h"
@@ -62,9 +63,11 @@
 #include "plugin_ep_utils.h"
 #include "runtime_graph_dump.h"
 
+using musa_ep::CreateGenerateMTGRCustomMaskFusion;
 using musa_ep::CreateMultiKqvMhaOutputProjectionFusion;
 using musa_ep::CreateRecRankCalibrationFusion;
 using musa_ep::CreateSiluFusion;
+using musa_ep::IsGenerateMTGRCustomMaskFusionGraph;
 using musa_ep::IsMultiKqvMhaOutputProjectionFusionGraph;
 using musa_ep::IsRecRankCalibrationFusionGraph;
 using musa_ep::IsSiluFusionGraph;
@@ -331,6 +334,9 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute =
             CreateQkvAttentionOutputProjectionFusion(graph, fused_node);
         finder_name = "FindQkvAttentionOutputProjectionFusions";
+      } else if (IsGenerateMTGRCustomMaskFusionGraph(graph)) {
+        fusion_compute = CreateGenerateMTGRCustomMaskFusion(graph, fused_node);
+        finder_name = "FindGenerateMTGRCustomMaskFusions";
       } else if (IsMoEFusionGraph(graph)) {
         fusion_compute = CreateMoEFusion(graph, fused_node);
         finder_name = "FindMoEFusions";

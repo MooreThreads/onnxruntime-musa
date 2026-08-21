@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **24**
+- GetCapability priority: **25**
 - Finder: `FindSplitConcatFusions`
 - Finder implementation: `musa/ep/src/fusion/split_concat_fusion_matcher.cc`
 - Compile detector: `IsSplitConcatFusionGraph`

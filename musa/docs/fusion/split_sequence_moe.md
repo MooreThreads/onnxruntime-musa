@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **5**
+- GetCapability priority: **6**
 - Finder: `FindSplitSequenceMoEFusions`
 - Finder implementation: `musa/ep/src/fusion/split_sequence_moe_fusion_matcher.cc`
 - Compile detector: `IsSplitSequenceMoEFusionGraph`

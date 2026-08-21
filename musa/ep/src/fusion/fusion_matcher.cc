@@ -176,6 +176,12 @@ std::vector<FusionMatch> FindFusionMatches(
                  std::move(mhta_scaled_dot_product_attention_fusions),
                  accepted_node_ids);
 
+  auto generate_mtgr_custom_mask_fusions = FindGenerateMTGRCustomMaskFusions(
+      all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindGenerateMTGRCustomMaskFusions", true,
+                 std::move(generate_mtgr_custom_mask_fusions),
+                 accepted_node_ids);
+
   auto moe_fusions =
       FindMoEFusions(all_nodes, graph_output_names, accepted_node_ids);
   AddFusionMatch(matches, "FindMoEFusions", true, std::move(moe_fusions),

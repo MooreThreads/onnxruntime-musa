@@ -224,7 +224,8 @@ class DeviceBuffer {
 struct MhtaMaskCacheEntry {
   DeviceBuffer buffer;
   const void* mask_data = nullptr;
-  ONNXTensorElementDataType elem_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  ONNXTensorElementDataType mask_elem_type =
+      ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
   std::vector<int64_t> active_mask_shape;
   int64_t mask_b = 0;
   int64_t mask_h = 0;
@@ -250,11 +251,11 @@ MhtaMaskCacheEntry& MhtaMaskCacheForStream(musaStream_t stream) {
 
 bool MhtaMaskCacheMatches(const MhtaMaskCacheEntry& cache,
                           const void* mask_data,
-                          ONNXTensorElementDataType elem_type,
+                          ONNXTensorElementDataType mask_elem_type,
                           const std::vector<int64_t>& active_mask_shape,
                           const MusaMhtaSdpaFp32Params& params, size_t bytes) {
   return cache.valid && cache.mask_data == mask_data &&
-         cache.elem_type == elem_type &&
+         cache.mask_elem_type == mask_elem_type &&
          cache.active_mask_shape == active_mask_shape &&
          cache.mask_b == params.mask_b && cache.mask_h == params.mask_h &&
          cache.mask_q == params.mask_q && cache.mask_k == params.mask_k &&
@@ -263,12 +264,12 @@ bool MhtaMaskCacheMatches(const MhtaMaskCacheEntry& cache,
 }
 
 void UpdateMhtaMaskCacheKey(MhtaMaskCacheEntry& cache, const void* mask_data,
-                            ONNXTensorElementDataType elem_type,
+                            ONNXTensorElementDataType mask_elem_type,
                             std::vector<int64_t> active_mask_shape,
                             const MusaMhtaSdpaFp32Params& params, size_t bytes,
                             int64_t reuse_limit) {
   cache.mask_data = mask_data;
-  cache.elem_type = elem_type;
+  cache.mask_elem_type = mask_elem_type;
   cache.active_mask_shape = std::move(active_mask_shape);
   cache.mask_b = params.mask_b;
   cache.mask_h = params.mask_h;
@@ -333,16 +334,6 @@ void WriteMhtaSdpaScalar(void* dst, float value,
         static_cast<uint16_t>((bits + 0x7fff + ((bits >> 16) & 1)) >> 16);
     std::memcpy(dst, &bf16, sizeof(bf16));
   }
-}
-
-MusaElementType MhtaSdpaMusaElementType(ONNXTensorElementDataType elem_type) {
-  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
-    return MusaElementType::Float16;
-  }
-  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
-    return MusaElementType::BFloat16;
-  }
-  throw std::runtime_error("unsupported MHTA SDPA mask materialization dtype");
 }
 
 bool SetupMhtaSdpaMaskParams(const std::vector<int64_t>& mask_shape,
@@ -553,7 +544,7 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
 
     DeviceBuffer q_transposed;
     DeviceBuffer k_transposed;
-    DeviceBuffer mask_scaled;
+    DeviceBuffer mask_materialized;
     DeviceBuffer scalar;
     const void* q_data = q_buffer.data();
     const void* k_data = k_buffer.data();
@@ -614,36 +605,37 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
     const void* mask_data = mask_buffer.data();
     std::vector<int64_t> active_mask_shape = mask_shape;
+    ONNXTensorElementDataType active_mask_type = elem_type;
     if (boolean_mask_) {
       active_mask_shape = {mask_params.mask_b, mask_params.mask_h,
                            mask_params.mask_q,
                            boolean_mask_int32_ ? seqlen_k : mask_params.mask_k};
-      const size_t mask_bytes =
-          static_cast<size_t>(NumElements(active_mask_shape)) *
-          MhtaSdpaElementSize(elem_type);
+      active_mask_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
       bool mask_cache_hit = false;
       if (boolean_mask_int32_) {
         constexpr int64_t kInt32MaskCacheReuseLimit = 8;
+        const size_t mask_bytes =
+            static_cast<size_t>(NumElements(active_mask_shape)) * sizeof(bool);
         MhtaMaskCacheEntry& cache = MhtaMaskCacheForStream(stream);
-        if (MhtaMaskCacheMatches(cache, mask_data, elem_type, active_mask_shape,
-                                 mask_params, mask_bytes)) {
+        if (MhtaMaskCacheMatches(cache, mask_data, active_mask_type,
+                                 active_mask_shape, mask_params, mask_bytes)) {
           ++cache.reuse_count;
           mask_data = cache.buffer.data();
           mask_cache_hit = true;
         } else {
           cache.buffer.Resize(mask_bytes);
           const musaError_t launch_status =
-              LaunchMusaMhtaSdpaKeepMaskToAdditiveKernel(
-                  mask_data, cache.buffer.data(), mask_params,
-                  MhtaSdpaMusaElementType(elem_type), stream);
+              LaunchMusaMhtaSdpaInt32KeepMaskToBoolKernel(
+                  static_cast<const int32_t*>(mask_data),
+                  static_cast<bool*>(cache.buffer.data()), mask_params, stream);
           if (launch_status != musaSuccess) {
             cache.valid = false;
             throw std::runtime_error(
-                std::string("MHTA SDPA keep-mask materialization failed: ") +
+                std::string("MHTA SDPA bool mask materialization failed: ") +
                 MusaErrorString(launch_status));
           }
-          UpdateMhtaMaskCacheKey(cache, mask_data, elem_type, active_mask_shape,
-                                 mask_params, mask_bytes,
+          UpdateMhtaMaskCacheKey(cache, mask_data, active_mask_type,
+                                 active_mask_shape, mask_params, mask_bytes,
                                  kInt32MaskCacheReuseLimit);
           mask_data = cache.buffer.data();
         }
@@ -653,25 +645,13 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                     << (mask_cache_hit ? "hit" : "miss")
                     << " reuse_count=" << cache.reuse_count
                     << " reuse_limit=" << cache.reuse_limit
-                    << " cached_mask=" << mask_data << '\n';
+                    << " cached_bool_mask=" << mask_data << '\n';
         }
-      } else {
-        mask_scaled.Resize(mask_bytes);
-        const musaError_t launch_status =
-            LaunchMusaMhtaSdpaKeepMaskToAdditiveKernel(
-                mask_data, mask_scaled.data(), mask_params,
-                MhtaSdpaMusaElementType(elem_type), stream);
-        if (launch_status != musaSuccess) {
-          throw std::runtime_error(
-              std::string("MHTA SDPA keep-mask materialization failed: ") +
-              MusaErrorString(launch_status));
-        }
-        mask_data = mask_scaled.data();
       }
     } else if (mask_scale_ != 1.0f) {
       const size_t mask_bytes = static_cast<size_t>(NumElements(mask_shape)) *
                                 MhtaSdpaElementSize(elem_type);
-      mask_scaled.Resize(mask_bytes);
+      mask_materialized.Resize(mask_bytes);
       scalar.Resize(MhtaSdpaElementSize(elem_type));
       uint8_t scalar_host[sizeof(double)] = {};
       WriteMhtaSdpaScalar(scalar_host, mask_scale_, elem_type);
@@ -683,14 +663,14 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       ::musa::dnn::Tensor mask_tensor, scalar_tensor, scaled_tensor;
       SetupTensor(mask_tensor, mask_data, mask_shape, elem_type, "mask");
       SetupTensor(scalar_tensor, scalar.data(), {1}, elem_type, "mask scale");
-      SetupTensor(scaled_tensor, mask_scaled.data(), mask_shape, elem_type,
-                  "scaled mask");
+      SetupTensor(scaled_tensor, mask_materialized.data(), mask_shape,
+                  elem_type, "scaled mask");
       ::musa::dnn::Binary mul;
       CheckStatus(mul.SetMode(::musa::dnn::Binary::Mode::MUL),
                   "failed to set MHTA SDPA mask scale mode");
       CheckStatus(mul.Run(*handle, scaled_tensor, mask_tensor, scalar_tensor),
                   "MHTA SDPA mask scale failed");
-      mask_data = mask_scaled.data();
+      mask_data = mask_materialized.data();
     }
 
     ::musa::dnn::Tensor q_tensor, k_tensor, v_tensor, mask_tensor, out_tensor,
@@ -698,7 +678,8 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     SetupTensor(q_tensor, q_data, sdpa_q_shape, elem_type, "Q");
     SetupTensor(k_tensor, k_data, sdpa_k_shape, elem_type, "K");
     SetupTensor(v_tensor, v_buffer.data(), v_shape, elem_type, "V");
-    SetupTensor(mask_tensor, mask_data, active_mask_shape, elem_type, "mask");
+    SetupTensor(mask_tensor, mask_data, active_mask_shape, active_mask_type,
+                "mask");
     SetupTensor(out_tensor, output.GetTensorMutableData<void>(),
                 sim_rank3 ? sdpa_q_shape : output_shape, elem_type, "output");
     DeviceBuffer lse;

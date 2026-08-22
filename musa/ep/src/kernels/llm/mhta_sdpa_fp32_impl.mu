@@ -20,16 +20,6 @@ MaskOffset(const MusaMhtaSdpaFp32Params& params, int64_t b, int64_t h,
          mask_k;
 }
 
-__device__ __forceinline__ int64_t AdditiveMaskK(
-    const MusaMhtaSdpaFp32Params& params) {
-  return params.boolean_mask_int32 ? params.seqlen_k : params.mask_k;
-}
-
-template <typename T>
-__device__ __forceinline__ T MhtaSdpaMaskValue(bool keep) {
-  return MusaScalarFromFloat<T>(keep ? 0.0f : -INFINITY);
-}
-
 __device__ __forceinline__ float Score(const float* q, const float* k,
                                        const void* mask,
                                        const MusaMhtaSdpaFp32Params& params,
@@ -63,34 +53,27 @@ __device__ __forceinline__ float Score(const float* q, const float* k,
          static_cast<const float*>(mask)[mask_offset] * params.mask_scale;
 }
 
-template <typename T>
-__global__ void MhtaKeepMaskToAdditiveKernel(
-    const void* mask, T* additive_mask, MusaMhtaSdpaFp32Params params) {
-  const int64_t out_mask_k = AdditiveMaskK(params);
+__global__ void MhtaInt32KeepMaskToBoolKernel(
+    const int32_t* mask, bool* bool_mask, MusaMhtaSdpaFp32Params params) {
   const int64_t count =
-      params.mask_b * params.mask_h * params.mask_q * out_mask_k;
+      params.mask_b * params.mask_h * params.mask_q * params.seqlen_k;
   const int64_t stride = static_cast<int64_t>(blockDim.x) * gridDim.x;
   int64_t index =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   for (; index < count; index += stride) {
-    const int64_t k = index % out_mask_k;
-    const int64_t q_index = index / out_mask_k;
+    const int64_t k = index % params.seqlen_k;
+    const int64_t q_index = index / params.seqlen_k;
     const int64_t q = q_index % params.mask_q;
     const int64_t h_index = q_index / params.mask_q;
     const int64_t h = h_index % params.mask_h;
     const int64_t b = h_index / params.mask_h;
     const int64_t mask_offset = MaskOffset(params, b, h, q, k);
-    const bool keep =
-        params.boolean_mask_int32
-            ? static_cast<const int32_t*>(mask)[mask_offset] == 1
-            : static_cast<const uint8_t*>(mask)[mask_offset] != 0;
-    additive_mask[index] = MhtaSdpaMaskValue<T>(keep);
+    bool_mask[index] = mask[mask_offset] == 1;
   }
 }
 
-template <typename T>
-__global__ void MhtaInt32KeepMaskToAdditiveB1H1Kernel(
-    const int32_t* mask, T* additive_mask, int32_t mask_q, int32_t mask_k,
+__global__ void MhtaInt32KeepMaskToBoolB1H1Kernel(
+    const int32_t* mask, bool* bool_mask, int32_t mask_q, int32_t mask_k,
     int32_t seqlen_k) {
   const int32_t q = static_cast<int32_t>(blockIdx.y);
   if (q >= mask_q) {
@@ -99,8 +82,7 @@ __global__ void MhtaInt32KeepMaskToAdditiveB1H1Kernel(
   const int32_t k_stride = static_cast<int32_t>(blockDim.x * gridDim.x);
   for (int32_t k = static_cast<int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
        k < seqlen_k; k += k_stride) {
-    const bool keep = mask[q * mask_k + k] == 1;
-    additive_mask[q * seqlen_k + k] = MhtaSdpaMaskValue<T>(keep);
+    bool_mask[q * seqlen_k + k] = mask[q * mask_k + k] == 1;
   }
 }
 
@@ -200,49 +182,28 @@ bool CanUseInt32KeepMaskB1H1FastPath(const MusaMhtaSdpaFp32Params& params) {
          params.mask_k <= INT32_MAX && params.seqlen_k <= INT32_MAX;
 }
 
-template <typename T>
-musaError_t LaunchMusaMhtaSdpaKeepMaskToAdditiveTyped(
-    const void* mask, void* additive_mask, MusaMhtaSdpaFp32Params params,
+musaError_t LaunchMusaMhtaSdpaInt32KeepMaskToBoolKernel(
+    const int32_t* mask, bool* bool_mask, MusaMhtaSdpaFp32Params params,
     musaStream_t stream) {
-  const int64_t out_mask_k = params.boolean_mask_int32 ? params.seqlen_k
-                                                       : params.mask_k;
+  if (!params.boolean_mask || !params.boolean_mask_int32) {
+    return musaErrorInvalidValue;
+  }
   if (params.mask_b <= 0 || params.mask_h <= 0 || params.mask_q <= 0 ||
-      out_mask_k <= 0) {
+      params.seqlen_k <= 0) {
     return musaSuccess;
   }
   const int64_t count =
-      params.mask_b * params.mask_h * params.mask_q * out_mask_k;
+      params.mask_b * params.mask_h * params.mask_q * params.seqlen_k;
   if (CanUseInt32KeepMaskB1H1FastPath(params)) {
     const dim3 grid(BlocksForCount(params.seqlen_k),
                     static_cast<unsigned int>(params.mask_q));
-    MhtaInt32KeepMaskToAdditiveB1H1Kernel<T>
-        <<<grid, kThreadsPerBlock, 0, stream>>>(
-            static_cast<const int32_t*>(mask), static_cast<T*>(additive_mask),
-            static_cast<int32_t>(params.mask_q),
-            static_cast<int32_t>(params.mask_k),
-            static_cast<int32_t>(params.seqlen_k));
+    MhtaInt32KeepMaskToBoolB1H1Kernel<<<grid, kThreadsPerBlock, 0, stream>>>(
+        mask, bool_mask, static_cast<int32_t>(params.mask_q),
+        static_cast<int32_t>(params.mask_k),
+        static_cast<int32_t>(params.seqlen_k));
   } else {
-    MhtaKeepMaskToAdditiveKernel<<<BlocksForCount(count), kThreadsPerBlock, 0,
-                                   stream>>>(
-        mask, static_cast<T*>(additive_mask), params);
+    MhtaInt32KeepMaskToBoolKernel<<<BlocksForCount(count), kThreadsPerBlock, 0,
+                                    stream>>>(mask, bool_mask, params);
   }
   return musaGetLastError();
-}
-
-musaError_t LaunchMusaMhtaSdpaKeepMaskToAdditiveKernel(
-    const void* mask, void* additive_mask, MusaMhtaSdpaFp32Params params,
-    MusaElementType output_elem_type, musaStream_t stream) {
-  if (!params.boolean_mask) {
-    return musaErrorInvalidValue;
-  }
-  switch (output_elem_type) {
-    case MusaElementType::Float16:
-      return LaunchMusaMhtaSdpaKeepMaskToAdditiveTyped<__half>(
-          mask, additive_mask, params, stream);
-    case MusaElementType::BFloat16:
-      return LaunchMusaMhtaSdpaKeepMaskToAdditiveTyped<__mt_bfloat16>(
-          mask, additive_mask, params, stream);
-    default:
-      return musaErrorNotSupported;
-  }
 }

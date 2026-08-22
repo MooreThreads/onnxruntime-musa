@@ -46,8 +46,11 @@ constexpr FusionDTypeContract kGenerateMTGRCustomMaskDTypeContract = {
     FusionFloatPolicy::kNoFloatGate};
 
 constexpr FusionDTypeContract kMhtaSdpaDTypeContract = {
-    "float32/float16/bfloat16/float64", "float32 workspace", "same as Q/K/V",
-    "Cast nodes are not part of this fusion", FusionFloatPolicy::kAnyFloat};
+    "float32/float16/bfloat16 Q/K/V with bool or absorbed int32 keep-mask; "
+    "float32/float16/bfloat16/float64 additive-mask path",
+    "float32 workspace", "same as Q/K/V",
+    "absorbs the UniRank Slice/Cast/Equal int32 keep-mask tail where matched",
+    FusionFloatPolicy::kAnyFloat};
 
 constexpr FusionDTypeContract kAttentionProjectionDTypeContract = {
     "float32", "float32",

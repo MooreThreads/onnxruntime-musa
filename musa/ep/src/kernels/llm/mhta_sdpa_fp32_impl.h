@@ -38,6 +38,6 @@ musaError_t LaunchMusaMhtaSdpaFp32Kernel(const float* q, const float* k,
                                          MusaMhtaSdpaFp32Params params,
                                          musaStream_t stream);
 
-musaError_t LaunchMusaMhtaSdpaKeepMaskToAdditiveKernel(
-    const void* mask, void* additive_mask, MusaMhtaSdpaFp32Params params,
-    MusaElementType output_elem_type, musaStream_t stream);
+musaError_t LaunchMusaMhtaSdpaInt32KeepMaskToBoolKernel(
+    const int32_t* mask, bool* bool_mask, MusaMhtaSdpaFp32Params params,
+    musaStream_t stream);

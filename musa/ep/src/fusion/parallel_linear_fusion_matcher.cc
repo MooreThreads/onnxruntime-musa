@@ -31,7 +31,21 @@ struct ParallelLinearBranch {
   Ort::ConstNode add{nullptr};
   Ort::ConstNode activation{nullptr};
   Ort::ConstValueInfo output{nullptr};
+  ONNXTensorElementDataType elem_type{ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED};
 };
+
+bool IsParallelLinearStorageType(ONNXTensorElementDataType elem_type) {
+  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+}
+
+bool RequireSameParallelLinearStorageType(
+    const std::vector<Ort::ConstValueInfo>& values,
+    ONNXTensorElementDataType& elem_type) {
+  return RequireSameElementType(values, elem_type) &&
+         IsParallelLinearStorageType(elem_type);
+}
 
 int64_t ReadIntAttribute(Ort::ConstNode node, const char* name,
                          int64_t default_value) {
@@ -67,9 +81,12 @@ bool ParseBranch(Ort::ConstNode matmul,
   auto matmul_outputs = matmul.GetOutputs();
   if ((is_matmul && matmul_inputs.size() != 2) ||
       (is_gemm && matmul_inputs.size() != 2 && matmul_inputs.size() != 3) ||
-      matmul_outputs.size() != 1 || !IsFloatTensorValueInfo(matmul_inputs[0]) ||
-      !IsFloatTensorValueInfo(matmul_inputs[1]) ||
-      !matmul_inputs[1].IsConstantInitializer()) {
+      matmul_outputs.size() != 1 || !matmul_inputs[1].IsConstantInitializer()) {
+    return false;
+  }
+  ONNXTensorElementDataType elem_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  if (!RequireSameParallelLinearStorageType(
+          {matmul_inputs[0], matmul_inputs[1], matmul_outputs[0]}, elem_type)) {
     return false;
   }
   if (is_gemm && (ReadIntAttribute(matmul, "transA", 0) != 0 ||
@@ -106,7 +123,7 @@ bool ParseBranch(Ort::ConstNode matmul,
       const bool candidate_bias_valid =
           add_inputs.size() == 2 && add_outputs.size() == 1 &&
           accepted_node_ids.count(candidate_add.GetId()) == 0 &&
-          IsFloatTensorValueInfo(candidate_bias) &&
+          GetTensorElementType(candidate_bias) == elem_type &&
           candidate_bias.IsConstantInitializer() &&
           candidate_bias_shape.has_value() &&
           ((candidate_bias_shape->size() == 1 &&
@@ -124,8 +141,8 @@ bool ParseBranch(Ort::ConstNode matmul,
     bias = matmul_inputs[2];
   }
   const bool has_bias = bias != nullptr;
-  if (has_bias &&
-      (!IsFloatTensorValueInfo(bias) || !bias.IsConstantInitializer())) {
+  if (has_bias && (GetTensorElementType(bias) != elem_type ||
+                   !bias.IsConstantInitializer())) {
     return false;
   }
   const auto bias_shape = has_bias ? GetStaticShape(bias) : std::nullopt;
@@ -155,7 +172,14 @@ bool ParseBranch(Ort::ConstNode matmul,
   if (activation) {
     linear_output = activation.GetOutputs()[0];
   }
-  branch = {matmul, add, activation, linear_output};
+  // The non-FP32 runtime path is deliberately a raw projection/split path.
+  // Bias and activation require dtype-specific arithmetic and must remain on
+  // the existing kernels until those epilogues are implemented.
+  if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+      (has_bias || activation)) {
+    return false;
+  }
+  branch = {matmul, add, activation, linear_output, elem_type};
   group_key = std::string("Linear|") + Name(matmul_inputs[0]) + "|" +
               std::to_string((*weight_shape)[0]) + "|" +
               std::to_string((*weight_shape)[1]) + "|" + activation_name;
@@ -278,6 +302,10 @@ std::vector<std::vector<Ort::ConstNode>> FindParallelLinearFusions(
     if (branches.size() < 2) {
       continue;
     }
+    if (branches[0].elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+        branches.size() > 3) {
+      continue;
+    }
     std::vector<Ort::ConstNode> nodes;
     nodes.reserve(branches.size() * 3);
     for (const auto& branch : branches) {
@@ -289,8 +317,10 @@ std::vector<std::vector<Ort::ConstNode>> FindParallelLinearFusions(
         nodes.push_back(branch.activation);
       }
     }
-    TryAppendGatedMlpNodes(branches, graph_output_names, accepted_node_ids,
-                           nodes);
+    if (branches[0].elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+      TryAppendGatedMlpNodes(branches, graph_output_names, accepted_node_ids,
+                             nodes);
+    }
     fusions.push_back(std::move(nodes));
   }
   return fusions;

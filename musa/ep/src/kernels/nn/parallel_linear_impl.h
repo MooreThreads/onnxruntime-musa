@@ -14,6 +14,11 @@ musaError_t LaunchParallelLinearPostDirectFloatKernel(
     int64_t branch_count, int64_t branch_width, MusaUnaryOp activation,
     bool has_activation, float activation_alpha, musaStream_t stream);
 
+musaError_t LaunchParallelLinearPostDirectCopy16Kernel(
+    const void* merged, void* output0, void* output1, void* output2,
+    int64_t rows, int64_t branch_count, int64_t branch_width,
+    musaStream_t stream);
+
 musaError_t LaunchParallelLinearGatedMlpPostFloatKernel(
     const float* merged, float* output, const float* gate_bias,
     const float* up_bias, int64_t rows, int64_t branch_width,

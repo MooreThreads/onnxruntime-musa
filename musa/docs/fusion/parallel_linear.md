@@ -12,7 +12,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 - Runtime factory: `CreateParallelLinearFusion`
 - Runtime compute: `ParallelLinearFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/parallel_linear_fusion.cc`
-- `drop_constant_initializers`: `false`
+- `drop_constant_initializers`: `true`
 - Before-graph topology source: `musa/ep/src/fusion/parallel_linear_fusion_matcher.cc` finder source
 
 ## Extracted ONNX Ops

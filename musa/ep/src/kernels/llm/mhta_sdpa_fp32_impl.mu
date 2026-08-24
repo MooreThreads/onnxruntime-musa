@@ -86,6 +86,20 @@ __global__ void MhtaInt32KeepMaskToBoolB1H1Kernel(
   }
 }
 
+__global__ void MhtaLseqLastKeyKeepMask2DKernel(bool* bool_mask,
+                                                int64_t seqlen_q,
+                                                int64_t seqlen_k) {
+  const int64_t count = seqlen_q * seqlen_k;
+  const int64_t keep_limit = seqlen_k > 1 ? seqlen_k - 1 : 1;
+  const int64_t stride = static_cast<int64_t>(blockDim.x) * gridDim.x;
+  int64_t index =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  for (; index < count; index += stride) {
+    const int64_t k = index % seqlen_k;
+    bool_mask[index] = k < keep_limit;
+  }
+}
+
 __global__ void MhtaSdpaFp32Kernel(const float* q, const float* k,
                                    const float* v, const void* mask,
                                    float* output,
@@ -172,6 +186,17 @@ musaError_t LaunchMusaMhtaSdpaFp32Kernel(const float* q, const float* k,
   const int64_t rows = params.batch * params.heads * params.seqlen_q;
   MhtaSdpaFp32Kernel<<<static_cast<unsigned int>(rows), kMhtaSdpaThreads,
                        shared_bytes, stream>>>(q, k, v, mask, output, params);
+  return musaGetLastError();
+}
+
+musaError_t LaunchMusaMhtaSdpaLseqLastKeyKeepMask2DKernel(
+    bool* bool_mask, int64_t seqlen_q, int64_t seqlen_k, musaStream_t stream) {
+  if (seqlen_q <= 0 || seqlen_k <= 0) {
+    return musaSuccess;
+  }
+  const int64_t count = seqlen_q * seqlen_k;
+  MhtaLseqLastKeyKeepMask2DKernel<<<BlocksForCount(count), kThreadsPerBlock, 0,
+                                    stream>>>(bool_mask, seqlen_q, seqlen_k);
   return musaGetLastError();
 }
 

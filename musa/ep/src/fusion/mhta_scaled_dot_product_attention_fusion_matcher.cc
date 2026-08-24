@@ -108,6 +108,12 @@ bool IsInt64TensorValueInfo(Ort::ConstValueInfo value_info) {
              ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
 }
 
+bool IsFloat32TensorValueInfo(Ort::ConstValueInfo value_info) {
+  return value_info.TypeInfo().GetONNXType() == ONNX_TYPE_TENSOR &&
+         value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
+             ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
+}
+
 bool IsCastTo(Ort::ConstNode node, ONNXTensorElementDataType elem_type) {
   return IsOnnxOp(node, "Cast") &&
          GetIntAttribute(node, "to").value_or(-1) == elem_type;
@@ -231,6 +237,14 @@ bool IsUnsqueezeAxis2(Ort::ConstNode unsqueeze_node) {
   return axis.has_value() && *axis == 2;
 }
 
+std::optional<int64_t> UnsqueezeAxis(Ort::ConstNode unsqueeze_node) {
+  auto inputs = unsqueeze_node.GetInputs();
+  if (inputs.size() != 2) {
+    return std::nullopt;
+  }
+  return ReadScalarIntInitializer(inputs[1]);
+}
+
 bool ShapesAreSupportedForSimRank3(Ort::ConstValueInfo q, Ort::ConstValueInfo k,
                                    Ort::ConstValueInfo v,
                                    Ort::ConstValueInfo output) {
@@ -281,6 +295,34 @@ bool ShapesAreSupportedForSimRank3(Ort::ConstValueInfo q, Ort::ConstValueInfo k,
   }
 
   return true;
+}
+
+bool ShapesAreSupportedForFoldedHeadRank3(Ort::ConstValueInfo q,
+                                          Ort::ConstValueInfo k,
+                                          Ort::ConstValueInfo v,
+                                          Ort::ConstValueInfo output) {
+  if (!IsFloat32TensorValueInfo(q) || !HasSameMhtaSdpaDataType(q, k) ||
+      !HasSameMhtaSdpaDataType(q, v) || !HasSameMhtaSdpaDataType(q, output)) {
+    return false;
+  }
+  auto q_shape = GetTensorShape(q);
+  auto k_shape = GetTensorShape(k);
+  auto v_shape = GetTensorShape(v);
+  auto output_shape = GetTensorShape(output);
+  if (!q_shape.has_value() || !k_shape.has_value() || !v_shape.has_value() ||
+      !output_shape.has_value() || q_shape->size() != 3 ||
+      k_shape->size() != 3 || v_shape->size() != 3 ||
+      output_shape->size() != 3) {
+    return false;
+  }
+  return KnownDimsEqual((*q_shape)[0], (*k_shape)[0]) &&
+         KnownDimsEqual((*q_shape)[0], (*v_shape)[0]) &&
+         KnownDimsEqual((*q_shape)[2], (*k_shape)[1]) &&
+         KnownDimsEqual((*q_shape)[2], (*v_shape)[2]) &&
+         KnownDimsEqual((*k_shape)[2], (*v_shape)[1]) &&
+         KnownDimsEqual((*output_shape)[0], (*q_shape)[0]) &&
+         KnownDimsEqual((*output_shape)[1], (*q_shape)[1]) &&
+         KnownDimsEqual((*output_shape)[2], (*v_shape)[2]);
 }
 
 bool CanFuseMhtaScaledDotProductAttention(
@@ -640,6 +682,183 @@ bool CanFuseBooleanMhtaScaledDotProductAttention(
   return FusionHasNoExternalPathBetweenSelectedNodes(fusion_nodes, selected);
 }
 
+bool CanFuseLseqPreMaskMhtaScaledDotProductAttention(
+    Ort::ConstNode value_matmul,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& accepted_node_ids,
+    std::vector<Ort::ConstNode>& fusion_nodes) {
+  if (!IsOnnxOp(value_matmul, "MatMul") ||
+      accepted_node_ids.count(value_matmul.GetId()) != 0)
+    return false;
+  const auto value_inputs = value_matmul.GetInputs();
+  const auto value_outputs = value_matmul.GetOutputs();
+  if (value_inputs.size() != 2 || value_outputs.size() != 1) return false;
+
+  Ort::ConstNode softmax{nullptr};
+  if (!GetProducer(value_inputs[0], softmax) || !IsOnnxOp(softmax, "Softmax") ||
+      accepted_node_ids.count(softmax.GetId()) != 0)
+    return false;
+  const auto softmax_inputs = softmax.GetInputs();
+  const auto softmax_outputs = softmax.GetOutputs();
+  if (softmax_inputs.size() != 1 || softmax_outputs.size() != 1 ||
+      Name(softmax_outputs[0]) != Name(value_inputs[0]) ||
+      !HasSingleConsumer(softmax_outputs[0], graph_output_names) ||
+      !IsLastAxisSoftmax(softmax, softmax_inputs[0]))
+    return false;
+
+  Ort::ConstNode pre_where{nullptr};
+  if (!GetProducer(softmax_inputs[0], pre_where) ||
+      !IsOnnxOp(pre_where, "Where") ||
+      accepted_node_ids.count(pre_where.GetId()) != 0)
+    return false;
+  const auto where_inputs = pre_where.GetInputs();
+  const auto where_outputs = pre_where.GetOutputs();
+  if (where_inputs.size() != 3 || where_outputs.size() != 1 ||
+      Name(where_outputs[0]) != Name(softmax_inputs[0]) ||
+      !HasSingleConsumer(where_outputs[0], graph_output_names) ||
+      !IsBoolTensorValueInfo(where_inputs[0]) ||
+      !IsScalarFloatValue(where_inputs[2], -INFINITY))
+    return false;
+
+  Ort::ConstNode scale_mul{nullptr};
+  if (!GetProducer(where_inputs[1], scale_mul) || !IsOnnxOp(scale_mul, "Mul") ||
+      accepted_node_ids.count(scale_mul.GetId()) != 0)
+    return false;
+  const auto scale_inputs = scale_mul.GetInputs();
+  const auto scale_outputs = scale_mul.GetOutputs();
+  if (scale_inputs.size() != 2 || scale_outputs.size() != 1 ||
+      Name(scale_outputs[0]) != Name(where_inputs[1]))
+    return false;
+  size_t scale_index = 0;
+  const auto scale = ScalarInputValue(scale_mul, 0, &scale_index);
+  if (!scale.has_value() || scale_index != 1 || !std::isfinite(*scale))
+    return false;
+
+  Ort::ConstNode score_matmul{nullptr};
+  if (!GetProducer(scale_inputs[0], score_matmul) ||
+      !IsOnnxOp(score_matmul, "MatMul") ||
+      accepted_node_ids.count(score_matmul.GetId()) != 0)
+    return false;
+  const auto score_inputs = score_matmul.GetInputs();
+  const auto score_outputs = score_matmul.GetOutputs();
+  if (score_inputs.size() != 2 || score_outputs.size() != 1 ||
+      Name(score_outputs[0]) != Name(scale_inputs[0]) ||
+      !HasSingleConsumer(score_outputs[0], graph_output_names) ||
+      !ShapesAreSupportedForFoldedHeadRank3(score_inputs[0], score_inputs[1],
+                                            value_inputs[1], value_outputs[0]))
+    return false;
+
+  Ort::ConstNode unsqueeze_1{nullptr};
+  Ort::ConstNode unsqueeze_0{nullptr};
+  if (!GetProducer(where_inputs[0], unsqueeze_1) ||
+      !IsOnnxOp(unsqueeze_1, "Unsqueeze") ||
+      accepted_node_ids.count(unsqueeze_1.GetId()) != 0)
+    return false;
+  const auto unsqueeze_1_inputs = unsqueeze_1.GetInputs();
+  const auto unsqueeze_1_outputs = unsqueeze_1.GetOutputs();
+  const auto axis_1 = UnsqueezeAxis(unsqueeze_1);
+  if (unsqueeze_1_inputs.size() != 2 || unsqueeze_1_outputs.size() != 1 ||
+      Name(unsqueeze_1_outputs[0]) != Name(where_inputs[0]) ||
+      !HasSingleConsumer(unsqueeze_1_outputs[0], graph_output_names) ||
+      !axis_1.has_value() || *axis_1 != 1 ||
+      !GetProducer(unsqueeze_1_inputs[0], unsqueeze_0) ||
+      !IsOnnxOp(unsqueeze_0, "Unsqueeze") ||
+      accepted_node_ids.count(unsqueeze_0.GetId()) != 0)
+    return false;
+  const auto unsqueeze_0_inputs = unsqueeze_0.GetInputs();
+  const auto unsqueeze_0_outputs = unsqueeze_0.GetOutputs();
+  const auto axis_0 = UnsqueezeAxis(unsqueeze_0);
+  if (unsqueeze_0_inputs.size() != 2 || unsqueeze_0_outputs.size() != 1 ||
+      Name(unsqueeze_0_outputs[0]) != Name(unsqueeze_1_inputs[0]) ||
+      !HasSingleConsumer(unsqueeze_0_outputs[0], graph_output_names) ||
+      !axis_0.has_value() || *axis_0 != 0)
+    return false;
+
+  Ort::ConstNode less{nullptr};
+  if (!GetProducer(unsqueeze_0_inputs[0], less) || !IsOnnxOp(less, "Less") ||
+      accepted_node_ids.count(less.GetId()) != 0)
+    return false;
+  const auto less_inputs = less.GetInputs();
+  const auto less_outputs = less.GetOutputs();
+  if (less_inputs.size() != 2 || less_outputs.size() != 1 ||
+      Name(less_outputs[0]) != Name(unsqueeze_0_inputs[0]) ||
+      !HasSingleConsumer(less_outputs[0], graph_output_names))
+    return false;
+
+  Ort::ConstNode range{nullptr};
+  Ort::ConstNode clip{nullptr};
+  if (!GetProducer(less_inputs[0], range) || !IsOnnxOp(range, "Range") ||
+      !GetProducer(less_inputs[1], clip) || !IsOnnxOp(clip, "Clip") ||
+      accepted_node_ids.count(range.GetId()) != 0 ||
+      accepted_node_ids.count(clip.GetId()) != 0)
+    return false;
+  const auto range_inputs = range.GetInputs();
+  const auto range_outputs = range.GetOutputs();
+  if (range_inputs.size() != 3 || range_outputs.size() != 1 ||
+      Name(range_outputs[0]) != Name(less_inputs[0]) ||
+      !HasSingleConsumer(range_outputs[0], graph_output_names) ||
+      ReadScalarIntInitializer(range_inputs[0]).value_or(-1) != 0 ||
+      ReadScalarIntInitializer(range_inputs[2]).value_or(-1) != 1)
+    return false;
+
+  const auto clip_inputs = clip.GetInputs();
+  const auto clip_outputs = clip.GetOutputs();
+  if (clip_inputs.size() < 2 || clip_outputs.size() != 1 ||
+      Name(clip_outputs[0]) != Name(less_inputs[1]) ||
+      !HasSingleConsumer(clip_outputs[0], graph_output_names) ||
+      ReadScalarIntInitializer(clip_inputs[1]).value_or(-1) != 1)
+    return false;
+
+  Ort::ConstNode sub{nullptr};
+  if (!GetProducer(clip_inputs[0], sub) || !IsOnnxOp(sub, "Sub") ||
+      accepted_node_ids.count(sub.GetId()) != 0)
+    return false;
+  const auto sub_inputs = sub.GetInputs();
+  const auto sub_outputs = sub.GetOutputs();
+  if (sub_inputs.size() != 2 || sub_outputs.size() != 1 ||
+      Name(sub_outputs[0]) != Name(clip_inputs[0]) ||
+      !HasSingleConsumer(sub_outputs[0], graph_output_names) ||
+      ReadScalarIntInitializer(sub_inputs[1]).value_or(-1) != 1)
+    return false;
+
+  Ort::ConstNode gather{nullptr};
+  if (!GetProducer(sub_inputs[0], gather) || !IsOnnxOp(gather, "Gather") ||
+      accepted_node_ids.count(gather.GetId()) != 0 ||
+      Name(range_inputs[1]) != Name(sub_inputs[0]))
+    return false;
+  const auto gather_inputs = gather.GetInputs();
+  const auto gather_outputs = gather.GetOutputs();
+  if (gather_inputs.size() != 2 || gather_outputs.size() != 1 ||
+      !HasOnlyConsumers(gather_outputs[0], {sub, range}) ||
+      GetIntAttribute(gather, "axis").value_or(0) != 0 ||
+      ReadScalarIntInitializer(gather_inputs[1]).value_or(-1) != 2)
+    return false;
+
+  Ort::ConstNode shape{nullptr};
+  if (!GetProducer(gather_inputs[0], shape) || !IsOnnxOp(shape, "Shape") ||
+      accepted_node_ids.count(shape.GetId()) != 0)
+    return false;
+  const auto shape_inputs = shape.GetInputs();
+  const auto shape_outputs = shape.GetOutputs();
+  if (shape_inputs.size() != 1 || shape_outputs.size() != 1 ||
+      Name(shape_inputs[0]) != Name(scale_outputs[0]) ||
+      Name(shape_outputs[0]) != Name(gather_inputs[0]) ||
+      !HasSingleConsumer(shape_outputs[0], graph_output_names) ||
+      !HasOnlyConsumers(scale_outputs[0], {shape, pre_where}))
+    return false;
+
+  std::unordered_set<size_t> selected;
+  for (Ort::ConstNode node :
+       {score_matmul, scale_mul, shape, gather, sub, clip, range, less,
+        unsqueeze_0, unsqueeze_1, pre_where, softmax, value_matmul}) {
+    if (!AddFusionNode(node, accepted_node_ids, selected, fusion_nodes))
+      return false;
+  }
+  if (!FusionHasNoExternalPathBetweenSelectedNodes(fusion_nodes, selected))
+    return false;
+  return true;
+}
+
 bool CanFuseSimRank3MhtaScaledDotProductAttention(
     Ort::ConstNode output_reshape,
     const std::unordered_set<std::string>& graph_output_names,
@@ -833,6 +1052,8 @@ FindMhtaScaledDotProductAttentionFusions(
   for (Ort::ConstNode node : all_nodes) {
     std::vector<Ort::ConstNode> fusion_nodes;
     if (CanFuseBooleanMhtaScaledDotProductAttention(
+            node, graph_output_names, accepted_node_ids, fusion_nodes) ||
+        CanFuseLseqPreMaskMhtaScaledDotProductAttention(
             node, graph_output_names, accepted_node_ids, fusion_nodes) ||
         CanFuseMhtaScaledDotProductAttention(node, graph_output_names,
                                              accepted_node_ids, fusion_nodes) ||

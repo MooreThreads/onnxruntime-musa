@@ -158,6 +158,18 @@ def _reference_boolean_sdpa(q, k, v, mask, scale):
     return np.matmul(prob, v)
 
 
+def _reference_lseq_sdpa(q, k, v, scale):
+    score = np.matmul(q, k) * scale
+    seqlen_k = k.shape[-1]
+    keep_limit = max(seqlen_k - 1, 1)
+    mask = (np.arange(seqlen_k) < keep_limit).reshape(1, 1, seqlen_k)
+    masked_score = np.where(mask, score, -np.inf)
+    masked_score = masked_score - np.max(masked_score, axis=-1, keepdims=True)
+    prob = np.exp(masked_score)
+    prob /= np.sum(prob, axis=-1, keepdims=True)
+    return np.matmul(prob, v)
+
+
 def test_mhta_scaled_dot_product_attention_fusion(tmp_path):
     rng = np.random.default_rng(41)
     batch, heads, seqlen, head_dim = 2, 3, 4, 5
@@ -302,6 +314,79 @@ def test_mhta_absorbs_ranking_gr_int32_mask_preprocessing(tmp_path):
     musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
     assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
     assert not {"Slice", "Cast", "Equal", "Where", "Softmax", "Mul"} & musa_ops
+
+
+def test_mhta_unirank_lseq_materialized_bool_mask_runmath(tmp_path):
+    """Fold UniRank lseq rank-3 pre-mask SDPA and materialize its BOOL keep mask."""
+    rng = np.random.default_rng(57)
+    folded_heads, seqlen_q, seqlen_k, head_dim = 4, 3, 5, 8
+    feeds = {
+        "Q": rng.standard_normal((folded_heads, seqlen_q, head_dim)).astype(np.float32),
+        "K": rng.standard_normal((folded_heads, head_dim, seqlen_k)).astype(np.float32),
+        "V": rng.standard_normal((folded_heads, seqlen_k, head_dim)).astype(np.float32),
+    }
+    scale = np.array(1.0 / np.sqrt(head_dim), dtype=np.float32)
+    neg_inf = np.array(-np.inf, dtype=np.float32)
+    zero_i64 = np.array(0, dtype=np.int64)
+    one_i64 = np.array(1, dtype=np.int64)
+    two_i64 = np.array(2, dtype=np.int64)
+    axis0 = np.array([0], dtype=np.int64)
+    axis1 = np.array([1], dtype=np.int64)
+    graph = helper.make_graph(
+        [
+            helper.make_node("MatMul", ["Q", "K"], ["Score"]),
+            helper.make_node("Mul", ["Score", "scale"], ["Scaled"]),
+            helper.make_node("Shape", ["Scaled"], ["ScoreShape"]),
+            helper.make_node("Gather", ["ScoreShape", "two_i64"], ["Sk"], axis=0),
+            helper.make_node("Sub", ["Sk", "one_i64"], ["SkMinusOne"]),
+            helper.make_node("Clip", ["SkMinusOne", "one_i64"], ["KeepLimit"]),
+            helper.make_node("Range", ["zero_i64", "Sk", "one_i64"], ["KeyIndex"]),
+            helper.make_node("Less", ["KeyIndex", "KeepLimit"], ["Keep1D"]),
+            helper.make_node("Unsqueeze", ["Keep1D", "axis0"], ["Keep2D"]),
+            helper.make_node("Unsqueeze", ["Keep2D", "axis1"], ["Keep3D"]),
+            helper.make_node("Where", ["Keep3D", "Scaled", "neg_inf"], ["MaskedScore"]),
+            helper.make_node("Softmax", ["MaskedScore"], ["Prob"], axis=-1),
+            helper.make_node("MatMul", ["Prob", "V"], ["Y"]),
+        ],
+        "mhta_unirank_lseq_materialized_bool_mask_runmath_graph",
+        [
+            helper.make_tensor_value_info("Q", TensorProto.FLOAT, ["BH", "Sq", "D"]),
+            helper.make_tensor_value_info("K", TensorProto.FLOAT, ["BH", "D", "Sk"]),
+            helper.make_tensor_value_info("V", TensorProto.FLOAT, ["BH", "Sk", "D"]),
+        ],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["BH", "Sq", "D"])],
+        initializer=[
+            numpy_helper.from_array(scale, name="scale"),
+            numpy_helper.from_array(neg_inf, name="neg_inf"),
+            numpy_helper.from_array(zero_i64, name="zero_i64"),
+            numpy_helper.from_array(one_i64, name="one_i64"),
+            numpy_helper.from_array(two_i64, name="two_i64"),
+            numpy_helper.from_array(axis0, name="axis0"),
+            numpy_helper.from_array(axis1, name="axis1"),
+        ],
+    )
+    model_proto = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model_proto.ir_version = min(model_proto.ir_version, 10)
+    model = model_proto.SerializeToString()
+
+    outputs = run_model_and_compare(model, feeds, rtol=1e-4, atol=1e-4)
+    expected = _reference_lseq_sdpa(feeds["Q"], feeds["K"], feeds["V"], float(scale))
+    np.testing.assert_allclose(outputs[0], expected, rtol=1e-4, atol=1e-4)
+    _, events = _profile_musa_session(model, feeds, tmp_path, "mhta_unirank_lseq_runmath")
+    musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+    assert not {
+        "Shape",
+        "Gather",
+        "Sub",
+        "Clip",
+        "Range",
+        "Less",
+        "Unsqueeze",
+        "Where",
+        "Softmax",
+        "Mul",
+    } & musa_ops
 
 
 def test_mhta_bfloat16_raw_int32_mask_runflash(tmp_path):

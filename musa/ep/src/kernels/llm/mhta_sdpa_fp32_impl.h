@@ -41,3 +41,8 @@ musaError_t LaunchMusaMhtaSdpaFp32Kernel(const float* q, const float* k,
 musaError_t LaunchMusaMhtaSdpaInt32KeepMaskToBoolKernel(
     const int32_t* mask, bool* bool_mask, MusaMhtaSdpaFp32Params params,
     musaStream_t stream);
+
+musaError_t LaunchMusaMhtaSdpaLseqLastKeyKeepMask2DKernel(bool* bool_mask,
+                                                          int64_t seqlen_q,
+                                                          int64_t seqlen_k,
+                                                          musaStream_t stream);

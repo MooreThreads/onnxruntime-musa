@@ -16,14 +16,11 @@
 #include <mudnncxx/mudnn.h>
 #include <musa_runtime.h>
 
+#include <cmath>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -49,25 +46,6 @@ bool IsOnnxDomain(const std::string& domain) {
 
 bool IsOnnxOp(Ort::ConstNode node, const char* op_type) {
   return node.GetOperatorType() == op_type && IsOnnxDomain(node.GetDomain());
-}
-
-bool EnvFlagEnabled(const char* name) {
-  const char* value = std::getenv(name);
-  if (value == nullptr || value[0] == '\0') return false;
-  return std::strcmp(value, "0") != 0 && std::strcmp(value, "false") != 0 &&
-         std::strcmp(value, "FALSE") != 0 && std::strcmp(value, "off") != 0 &&
-         std::strcmp(value, "OFF") != 0;
-}
-
-std::string ShapeString(const std::vector<int64_t>& shape) {
-  std::ostringstream oss;
-  oss << '[';
-  for (size_t i = 0; i < shape.size(); ++i) {
-    if (i != 0) oss << ',';
-    oss << shape[i];
-  }
-  oss << ']';
-  return oss.str();
 }
 
 bool IsCastTo(Ort::ConstNode node, ONNXTensorElementDataType elem_type) {
@@ -140,6 +118,7 @@ bool ValueComesFromSoftmaxThroughOptionalCasts(
 enum class MhtaSdpaLayout {
   kBhsd,
   kSimRank3,
+  kFoldedHeadRank3,
 };
 
 constexpr size_t kNoInputIndex = std::numeric_limits<size_t>::max();
@@ -151,7 +130,8 @@ class MhtaScaledDotProductAttentionFusionCompute final
       size_t q_index, size_t k_index, size_t v_index, size_t mask_index,
       float scale, float mask_scale, MhtaSdpaLayout layout,
       bool boolean_mask = false, bool boolean_mask_int32 = false,
-      size_t mask_end_index = kNoInputIndex, int64_t static_mask_end = -1)
+      size_t mask_end_index = kNoInputIndex, int64_t static_mask_end = -1,
+      bool lseq_last_key_mask = false)
       : q_index_(q_index),
         k_index_(k_index),
         v_index_(v_index),
@@ -162,7 +142,8 @@ class MhtaScaledDotProductAttentionFusionCompute final
         boolean_mask_(boolean_mask),
         boolean_mask_int32_(boolean_mask_int32),
         mask_end_index_(mask_end_index),
-        static_mask_end_(static_mask_end) {}
+        static_mask_end_(static_mask_end),
+        lseq_last_key_mask_(lseq_last_key_mask) {}
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override;
 
@@ -178,6 +159,7 @@ class MhtaScaledDotProductAttentionFusionCompute final
   bool boolean_mask_int32_;
   size_t mask_end_index_;
   int64_t static_mask_end_;
+  bool lseq_last_key_mask_;
 };
 
 bool IsMhtaSdpaTensorType(ONNXTensorElementDataType elem_type) {
@@ -376,20 +358,28 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     Ort::ConstValue q = ctx.GetInput(q_index_);
     Ort::ConstValue k = ctx.GetInput(k_index_);
     Ort::ConstValue v = ctx.GetInput(v_index_);
-    Ort::ConstValue mask = ctx.GetInput(mask_index_);
+    const bool has_external_mask = mask_index_ != kNoInputIndex;
+    Ort::ConstValue mask{nullptr};
+    if (has_external_mask) {
+      mask = ctx.GetInput(mask_index_);
+    } else if (!lseq_last_key_mask_) {
+      return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                        "MHTA SDPA is missing mask input");
+    }
     ValidateMhtaSdpaTensor(q, "Q");
     ValidateMhtaSdpaTensor(k, "K");
     ValidateMhtaSdpaTensor(v, "V");
     const ONNXTensorElementDataType elem_type =
         q.GetTensorTypeAndShapeInfo().GetElementType();
     const ONNXTensorElementDataType mask_type =
-        mask.GetTensorTypeAndShapeInfo().GetElementType();
+        has_external_mask ? mask.GetTensorTypeAndShapeInfo().GetElementType()
+                          : ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
     if (k.GetTensorTypeAndShapeInfo().GetElementType() != elem_type ||
         v.GetTensorTypeAndShapeInfo().GetElementType() != elem_type ||
-        (!boolean_mask_ && mask_type != elem_type) ||
-        (boolean_mask_ && !boolean_mask_int32_ &&
+        (has_external_mask && !boolean_mask_ && mask_type != elem_type) ||
+        (has_external_mask && boolean_mask_ && !boolean_mask_int32_ &&
          mask_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL) ||
-        (boolean_mask_int32_ &&
+        (has_external_mask && boolean_mask_int32_ &&
          mask_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32)) {
       return Ort::GetApi().CreateStatus(
           ORT_NOT_IMPLEMENTED,
@@ -403,18 +393,25 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
           ORT_NOT_IMPLEMENTED,
           "MHTA boolean-mask SDPA supports FP32/FP16/BF16 Q/K/V only");
     }
+    if (lseq_last_key_mask_ &&
+        elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+      return Ort::GetApi().CreateStatus(
+          ORT_NOT_IMPLEMENTED,
+          "MHTA lseq materialized-mask SDPA supports FP32 Q/K/V only");
+    }
 
     std::vector<int64_t> q_shape = Shape(q);
     std::vector<int64_t> k_shape = Shape(k);
     std::vector<int64_t> v_shape = Shape(v);
-    if (q_shape.size() != 4 || k_shape.size() != 4 || v_shape.size() != 4) {
-      return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
-                                        "MHTA SDPA requires 4D Q/K/V inputs");
-    }
 
     const bool sim_rank3 = layout_ == MhtaSdpaLayout::kSimRank3;
+    const bool folded_rank3 = layout_ == MhtaSdpaLayout::kFoldedHeadRank3;
     std::vector<int64_t> output_shape;
     if (sim_rank3) {
+      if (q_shape.size() != 4 || k_shape.size() != 4 || v_shape.size() != 4) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT, "MHTA SDPA sim layout requires 4D Q/K/V");
+      }
       if (q_shape[1] != 1 || k_shape[0] != q_shape[0] ||
           v_shape[0] != q_shape[0] || k_shape[2] != q_shape[2] ||
           v_shape[1] != q_shape[2] || k_shape[3] != q_shape[3] ||
@@ -424,7 +421,26 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
             "MHTA SDPA sim layout expects Q[B,1,H,D], K[B,S,H,D], V[B,H,S,D]");
       }
       output_shape = {q_shape[0], q_shape[1], q_shape[2] * q_shape[3]};
+    } else if (folded_rank3) {
+      if (q_shape.size() != 3 || k_shape.size() != 3 || v_shape.size() != 3) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT,
+            "MHTA SDPA folded-head layout requires 3D Q/K/V");
+      }
+      if (q_shape[0] != k_shape[0] || q_shape[0] != v_shape[0] ||
+          q_shape[2] != k_shape[1] || q_shape[2] != v_shape[2] ||
+          k_shape[2] != v_shape[1]) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT,
+            "MHTA SDPA folded-head layout expects Q[BH,Sq,D], K[BH,D,Sk], "
+            "V[BH,Sk,D]");
+      }
+      output_shape = {q_shape[0], q_shape[1], v_shape[2]};
     } else {
+      if (q_shape.size() != 4 || k_shape.size() != 4 || v_shape.size() != 4) {
+        return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                          "MHTA SDPA requires 4D Q/K/V inputs");
+      }
       if (q_shape[0] != k_shape[0] || q_shape[0] != v_shape[0] ||
           q_shape[1] != k_shape[1] || q_shape[1] != v_shape[1] ||
           q_shape[2] != k_shape[3] || q_shape[2] != v_shape[2] ||
@@ -442,10 +458,14 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     }
 
     const int64_t batch = q_shape[0];
-    const int64_t heads = sim_rank3 ? q_shape[2] : q_shape[1];
-    const int64_t seqlen_q = sim_rank3 ? q_shape[1] : q_shape[2];
-    const int64_t seqlen_k = sim_rank3 ? k_shape[1] : k_shape[3];
-    const int64_t head_dim = q_shape[3];
+    const int64_t heads =
+        sim_rank3 ? q_shape[2] : (folded_rank3 ? 1 : q_shape[1]);
+    const int64_t seqlen_q =
+        sim_rank3 ? q_shape[1] : (folded_rank3 ? q_shape[1] : q_shape[2]);
+    const int64_t seqlen_k =
+        sim_rank3 ? k_shape[1] : (folded_rank3 ? k_shape[2] : k_shape[3]);
+    const int64_t head_dim =
+        sim_rank3 ? q_shape[3] : (folded_rank3 ? q_shape[2] : q_shape[3]);
     if (batch <= 0 || heads <= 0 || seqlen_q <= 0 || seqlen_k <= 0 ||
         head_dim <= 0) {
       return nullptr;
@@ -482,8 +502,11 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     RETURN_IF_ERROR(q_buffer.Bind(q, stream));
     RETURN_IF_ERROR(k_buffer.Bind(k, stream));
     RETURN_IF_ERROR(v_buffer.Bind(v, stream));
-    RETURN_IF_ERROR(mask_buffer.Bind(mask, stream));
-    const std::vector<int64_t> mask_shape = Shape(mask);
+    if (has_external_mask) {
+      RETURN_IF_ERROR(mask_buffer.Bind(mask, stream));
+    }
+    const std::vector<int64_t> mask_shape =
+        has_external_mask ? Shape(mask) : std::vector<int64_t>{};
     MusaMhtaSdpaFp32Params mask_params{batch,
                                        heads,
                                        seqlen_q,
@@ -499,37 +522,22 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                                        sim_rank3,
                                        boolean_mask_,
                                        boolean_mask_int32_};
-    if (!SetupMhtaSdpaMaskParams(mask_shape, batch, heads, seqlen_q, seqlen_k,
-                                 boolean_mask_int32_, &mask_params)) {
-      return Ort::GetApi().CreateStatus(
-          ORT_NOT_IMPLEMENTED,
-          "MHTA SDPA requires a broadcastable rank-1 to rank-4 mask");
-    }
-    if (EnvFlagEnabled("ORT_MUSA_DEBUG_MHTA_SDPA_SHAPES")) {
-      std::cerr << "[ORT_MUSA_DEBUG_MHTA_SDPA_SHAPES] "
-                << "layout=" << (sim_rank3 ? "sim_rank3" : "bhsd")
-                << " elem_type=" << static_cast<int>(elem_type)
-                << " mask_type=" << static_cast<int>(mask_type)
-                << " boolean_mask=" << (boolean_mask_ ? 1 : 0)
-                << " boolean_mask_int32=" << (boolean_mask_int32_ ? 1 : 0)
-                << " q_shape=" << ShapeString(q_shape)
-                << " k_shape=" << ShapeString(k_shape)
-                << " v_shape=" << ShapeString(v_shape)
-                << " mask_shape=" << ShapeString(mask_shape)
-                << " output_shape=" << ShapeString(output_shape)
-                << " batch=" << batch << " heads=" << heads
-                << " seqlen_q=" << seqlen_q << " seqlen_k=" << seqlen_k
-                << " head_dim=" << head_dim << " mask_b=" << mask_params.mask_b
-                << " mask_h=" << mask_params.mask_h
-                << " mask_q=" << mask_params.mask_q
-                << " mask_k=" << mask_params.mask_k << " scale=" << scale_
-                << " mask_scale=" << mask_scale_ << " q_index=" << q_index_
-                << " k_index=" << k_index_ << " v_index=" << v_index_
-                << " mask_index=" << mask_index_
-                << " mask_data=" << mask_buffer.data() << '\n';
+    if (has_external_mask) {
+      if (!SetupMhtaSdpaMaskParams(mask_shape, batch, heads, seqlen_q, seqlen_k,
+                                   boolean_mask_int32_, &mask_params)) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "MHTA SDPA requires a broadcastable rank-1 to rank-4 mask");
+      }
+    } else {
+      mask_params.mask_b = 1;
+      mask_params.mask_h = 1;
+      mask_params.mask_q = 1;
+      mask_params.mask_k = seqlen_k;
     }
 
-    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+        !lseq_last_key_mask_) {
       musaError_t launch_status = LaunchMusaMhtaSdpaFp32Kernel(
           static_cast<const float*>(q_buffer.data()),
           static_cast<const float*>(k_buffer.data()),
@@ -550,6 +558,8 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     const void* k_data = k_buffer.data();
     std::vector<int64_t> sdpa_q_shape = q_shape;
     std::vector<int64_t> sdpa_k_shape = k_shape;
+    std::vector<int64_t> sdpa_v_shape = v_shape;
+    bool sdpa_key_format_bhds = false;
     if (sim_rank3) {
       sdpa_q_shape = {batch, heads, seqlen_q, head_dim};
       sdpa_k_shape = {batch, heads, seqlen_k, head_dim};
@@ -580,6 +590,11 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                   "MHTA SDPA K permute failed");
       q_data = q_transposed.data();
       k_data = k_transposed.data();
+    } else if (folded_rank3) {
+      sdpa_q_shape = {batch, heads, seqlen_q, head_dim};
+      sdpa_k_shape = {batch, heads, head_dim, seqlen_k};
+      sdpa_v_shape = {batch, heads, seqlen_k, head_dim};
+      sdpa_key_format_bhds = true;
     } else {
       // FlashAttention consumes K in BHSD.  The MatMul graph provides BHDS.
       sdpa_k_shape = {batch, heads, seqlen_k, head_dim};
@@ -603,15 +618,32 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
 
     ::musa::dnn::Handle* handle = nullptr;
     RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
-    const void* mask_data = mask_buffer.data();
-    std::vector<int64_t> active_mask_shape = mask_shape;
-    ONNXTensorElementDataType active_mask_type = elem_type;
-    if (boolean_mask_) {
+    const void* mask_data = has_external_mask ? mask_buffer.data() : nullptr;
+    std::vector<int64_t> active_mask_shape =
+        has_external_mask ? mask_shape : std::vector<int64_t>{};
+    ONNXTensorElementDataType active_mask_type =
+        has_external_mask ? elem_type : ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+    if (lseq_last_key_mask_) {
+      const size_t mask_bytes =
+          static_cast<size_t>(seqlen_q * seqlen_k) * sizeof(bool);
+      mask_materialized.Resize(mask_bytes);
+      const musaError_t launch_status =
+          LaunchMusaMhtaSdpaLseqLastKeyKeepMask2DKernel(
+              static_cast<bool*>(mask_materialized.data()), seqlen_q, seqlen_k,
+              stream);
+      if (launch_status != musaSuccess) {
+        throw std::runtime_error(
+            std::string("MHTA SDPA lseq bool mask materialization failed: ") +
+            MusaErrorString(launch_status));
+      }
+      mask_data = mask_materialized.data();
+      active_mask_shape = {seqlen_q, seqlen_k};
+      active_mask_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
+    } else if (boolean_mask_) {
       active_mask_shape = {mask_params.mask_b, mask_params.mask_h,
                            mask_params.mask_q,
                            boolean_mask_int32_ ? seqlen_k : mask_params.mask_k};
       active_mask_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
-      bool mask_cache_hit = false;
       if (boolean_mask_int32_) {
         constexpr int64_t kInt32MaskCacheReuseLimit = 8;
         const size_t mask_bytes =
@@ -621,7 +653,6 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                                  active_mask_shape, mask_params, mask_bytes)) {
           ++cache.reuse_count;
           mask_data = cache.buffer.data();
-          mask_cache_hit = true;
         } else {
           cache.buffer.Resize(mask_bytes);
           const musaError_t launch_status =
@@ -638,14 +669,6 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                                  active_mask_shape, mask_params, mask_bytes,
                                  kInt32MaskCacheReuseLimit);
           mask_data = cache.buffer.data();
-        }
-        if (EnvFlagEnabled("ORT_MUSA_DEBUG_MHTA_SDPA_SHAPES")) {
-          const MhtaMaskCacheEntry& cache = MhtaMaskCacheForStream(stream);
-          std::cerr << "[ORT_MUSA_DEBUG_MHTA_MASK_CACHE] "
-                    << (mask_cache_hit ? "hit" : "miss")
-                    << " reuse_count=" << cache.reuse_count
-                    << " reuse_limit=" << cache.reuse_limit
-                    << " cached_bool_mask=" << mask_data << '\n';
         }
       }
     } else if (mask_scale_ != 1.0f) {
@@ -677,11 +700,12 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
         lse_tensor, dropout_tensor;
     SetupTensor(q_tensor, q_data, sdpa_q_shape, elem_type, "Q");
     SetupTensor(k_tensor, k_data, sdpa_k_shape, elem_type, "K");
-    SetupTensor(v_tensor, v_buffer.data(), v_shape, elem_type, "V");
+    SetupTensor(v_tensor, v_buffer.data(), sdpa_v_shape, elem_type, "V");
     SetupTensor(mask_tensor, mask_data, active_mask_shape, active_mask_type,
                 "mask");
     SetupTensor(out_tensor, output.GetTensorMutableData<void>(),
-                sim_rank3 ? sdpa_q_shape : output_shape, elem_type, "output");
+                (sim_rank3 || folded_rank3) ? sdpa_q_shape : output_shape,
+                elem_type, "output");
     DeviceBuffer lse;
     lse.Resize(static_cast<size_t>(batch * heads * seqlen_q) * sizeof(float));
     SetupTensor(lse_tensor, lse.data(), {batch, heads, seqlen_q},
@@ -705,7 +729,8 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                 "failed to set MHTA SDPA scale");
     CheckStatus(sdpa.SetTraining(false), "failed to set MHTA SDPA training");
     CheckStatus(sdpa.SetMaskMode(false), "failed to set MHTA SDPA mask mode");
-    CheckStatus(sdpa.SetKeyFormat(false), "failed to set MHTA SDPA key format");
+    CheckStatus(sdpa.SetKeyFormat(sdpa_key_format_bhds),
+                "failed to set MHTA SDPA key format");
     CheckStatus(sdpa.SetCausal(false), "failed to set MHTA SDPA causal");
     CheckStatus(sdpa.SetIsDeterministic(true),
                 "failed to set MHTA SDPA deterministic");
@@ -763,6 +788,12 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
   size_t equal_count = 0;
   size_t unsqueeze_count = 0;
   size_t reshape_count = 0;
+  size_t shape_count = 0;
+  size_t gather_count = 0;
+  size_t sub_count = 0;
+  size_t clip_count = 0;
+  size_t range_count = 0;
+  size_t less_count = 0;
   for (Ort::ConstNode node : graph.GetNodes()) {
     if (IsOnnxOp(node, "MatMul")) {
       ++matmul_count;
@@ -788,29 +819,54 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
       ++unsqueeze_count;
     } else if (IsOnnxOp(node, "Reshape")) {
       ++reshape_count;
+    } else if (IsOnnxOp(node, "Shape")) {
+      ++shape_count;
+    } else if (IsOnnxOp(node, "Gather")) {
+      ++gather_count;
+    } else if (IsOnnxOp(node, "Sub")) {
+      ++sub_count;
+    } else if (IsOnnxOp(node, "Clip")) {
+      ++clip_count;
+    } else if (IsOnnxOp(node, "Range")) {
+      ++range_count;
+    } else if (IsOnnxOp(node, "Less")) {
+      ++less_count;
     } else {
       return false;
     }
   }
-  const bool simple_bhsd = matmul_count == 2 && einsum_count == 0 &&
-                           mul_count == 1 && add_count == 1 && div_count == 1 &&
-                           softmax_count == 1 && unsqueeze_count == 0 &&
-                           reshape_count == 0 && where_count == 0;
+  const bool simple_bhsd =
+      matmul_count == 2 && einsum_count == 0 && mul_count == 1 &&
+      add_count == 1 && div_count == 1 && softmax_count == 1 &&
+      unsqueeze_count == 0 && reshape_count == 0 && where_count == 0 &&
+      shape_count == 0 && gather_count == 0 && sub_count == 0 &&
+      clip_count == 0 && range_count == 0 && less_count == 0;
   const bool boolean_mask_nodes = (slice_count == 0 && equal_count == 0 &&
                                    (cast_count == 0 || cast_count == 2)) ||
                                   (slice_count == 1 && equal_count == 1 &&
                                    (cast_count == 1 || cast_count == 3));
-  const bool boolean_bhsd = matmul_count == 2 && einsum_count == 0 &&
-                            mul_count == 1 && add_count == 0 &&
-                            div_count == 0 && softmax_count == 1 &&
-                            where_count == 2 && unsqueeze_count == 0 &&
-                            reshape_count == 0 && boolean_mask_nodes;
-  const bool sim_rank3 = matmul_count == 1 && einsum_count == 1 &&
-                         add_count == 1 && softmax_count == 1 &&
-                         unsqueeze_count == 1 && reshape_count == 1 &&
-                         ((mul_count == 2 && div_count == 0) ||
-                          (mul_count == 1 && div_count == 1));
-  return simple_bhsd || boolean_bhsd || sim_rank3;
+  const bool boolean_bhsd =
+      matmul_count == 2 && einsum_count == 0 && mul_count == 1 &&
+      add_count == 0 && div_count == 0 && softmax_count == 1 &&
+      where_count == 2 && unsqueeze_count == 0 && reshape_count == 0 &&
+      shape_count == 0 && gather_count == 0 && sub_count == 0 &&
+      clip_count == 0 && range_count == 0 && less_count == 0 &&
+      boolean_mask_nodes;
+  const bool sim_rank3 =
+      matmul_count == 1 && einsum_count == 1 && add_count == 1 &&
+      softmax_count == 1 && unsqueeze_count == 1 && reshape_count == 1 &&
+      shape_count == 0 && gather_count == 0 && sub_count == 0 &&
+      clip_count == 0 && range_count == 0 && less_count == 0 &&
+      ((mul_count == 2 && div_count == 0) ||
+       (mul_count == 1 && div_count == 1));
+  const bool lseq_premask_rank3 =
+      matmul_count == 2 && einsum_count == 0 && mul_count == 1 &&
+      add_count == 0 && div_count == 0 && softmax_count == 1 &&
+      where_count == 1 && slice_count == 0 && equal_count == 0 &&
+      cast_count == 0 && unsqueeze_count == 2 && reshape_count == 0 &&
+      shape_count == 1 && gather_count == 1 && sub_count == 1 &&
+      clip_count == 1 && range_count == 1 && less_count == 1;
+  return simple_bhsd || boolean_bhsd || sim_rank3 || lseq_premask_rank3;
 }
 
 std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
@@ -947,6 +1003,69 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
         InputIndex(fused_indices, mask_input), scale, 0.0f,
         MhtaSdpaLayout::kBhsd, true, boolean_mask_int32, mask_end_index,
         static_mask_end);
+  }
+
+  if (where_nodes.size() == 1 && !add_node && !div_node && !einsum_node &&
+      !reshape_node) {
+    Ort::ConstNode pre_where = where_nodes[0];
+    const auto softmax_inputs = softmax_node.GetInputs();
+    const auto softmax_outputs = softmax_node.GetOutputs();
+    if (softmax_inputs.size() != 1 || softmax_outputs.size() != 1) {
+      throw std::runtime_error("invalid MHTA lseq Softmax topology");
+    }
+
+    auto pre_where_it = producers.find(Name(softmax_inputs[0]));
+    if (pre_where_it == producers.end() ||
+        pre_where_it->second.GetId() != pre_where.GetId()) {
+      throw std::runtime_error("invalid MHTA lseq pre-mask topology");
+    }
+
+    for (Ort::ConstNode node : graph.GetNodes()) {
+      if (!IsOnnxOp(node, "MatMul")) continue;
+      const auto inputs = node.GetInputs();
+      if (inputs.size() == 2 && Name(inputs[0]) == Name(softmax_outputs[0])) {
+        value_matmul = node;
+        break;
+      }
+    }
+    if (!value_matmul) {
+      throw std::runtime_error("invalid MHTA lseq value MatMul topology");
+    }
+
+    const auto where_inputs = pre_where.GetInputs();
+    if (where_inputs.size() != 3) {
+      throw std::runtime_error("invalid MHTA lseq Where topology");
+    }
+    auto scale_mul_it = producers.find(Name(where_inputs[1]));
+    if (scale_mul_it == producers.end() ||
+        !IsOnnxOp(scale_mul_it->second, "Mul")) {
+      throw std::runtime_error("invalid MHTA lseq scale topology");
+    }
+    Ort::ConstNode scale_mul = scale_mul_it->second;
+    const auto scale_inputs = scale_mul.GetInputs();
+    if (scale_inputs.size() != 2) {
+      throw std::runtime_error("invalid MHTA lseq scale inputs");
+    }
+    auto score_it = producers.find(Name(scale_inputs[0]));
+    if (score_it == producers.end() || !IsOnnxOp(score_it->second, "MatMul")) {
+      throw std::runtime_error("invalid MHTA lseq score MatMul topology");
+    }
+    score_matmul = score_it->second;
+    const auto score_inputs = score_matmul.GetInputs();
+    const auto value_inputs = value_matmul.GetInputs();
+    if (score_inputs.size() != 2 || value_inputs.size() != 2) {
+      throw std::runtime_error("invalid MHTA lseq inputs");
+    }
+    const float scale = ReadScalarFloatAttributeInput(scale_inputs[1]);
+    if (!std::isfinite(scale)) {
+      throw std::runtime_error("MHTA lseq SDPA scale must be finite");
+    }
+
+    return std::make_unique<MhtaScaledDotProductAttentionFusionCompute>(
+        InputIndex(fused_indices, score_inputs[0]),
+        InputIndex(fused_indices, score_inputs[1]),
+        InputIndex(fused_indices, value_inputs[1]), kNoInputIndex, scale, 0.0f,
+        MhtaSdpaLayout::kFoldedHeadRank3, true, false, kNoInputIndex, -1, true);
   }
 
   if (!add_node) {

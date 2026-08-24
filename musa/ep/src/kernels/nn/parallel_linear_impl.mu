@@ -78,6 +78,55 @@ __global__ void ParallelLinearPostDirectKernel(
   }
 }
 
+template <int BranchCount>
+__global__ void ParallelLinearPostDirectCopy16Kernel(
+    const uint16_t* merged, uint16_t* output0, uint16_t* output1,
+    uint16_t* output2, int64_t rows, int64_t branch_width) {
+  const int64_t row_branch = blockIdx.x;
+  const int64_t row = row_branch / BranchCount;
+  if (row >= rows) {
+    return;
+  }
+  const int branch = static_cast<int>(row_branch % BranchCount);
+  uint16_t* output =
+      branch == 0 ? output0 : (branch == 1 ? output1 : output2);
+  const uint16_t* src =
+      merged + (row * BranchCount + branch) * branch_width;
+  uint16_t* dst = output + row * branch_width;
+
+  constexpr int64_t kElementsPerVector = sizeof(uint4) / sizeof(uint16_t);
+  const int64_t vector_count = branch_width / kElementsPerVector;
+  const auto* vector_src = reinterpret_cast<const uint4*>(src);
+  auto* vector_dst = reinterpret_cast<uint4*>(dst);
+  for (int64_t i = threadIdx.x; i < vector_count; i += blockDim.x) {
+    vector_dst[i] = vector_src[i];
+  }
+  for (int64_t i = vector_count * kElementsPerVector + threadIdx.x;
+       i < branch_width; i += blockDim.x) {
+    dst[i] = src[i];
+  }
+}
+
+template <int BranchCount>
+__global__ void ParallelLinearPostDirectCopyScalarKernel(
+    const uint16_t* merged, uint16_t* output0, uint16_t* output1,
+    uint16_t* output2, int64_t rows, int64_t branch_width) {
+  const int64_t row_branch = blockIdx.x;
+  const int64_t row = row_branch / BranchCount;
+  if (row >= rows) {
+    return;
+  }
+  const int branch = static_cast<int>(row_branch % BranchCount);
+  uint16_t* output =
+      branch == 0 ? output0 : (branch == 1 ? output1 : output2);
+  const uint16_t* src =
+      merged + (row * BranchCount + branch) * branch_width;
+  uint16_t* dst = output + row * branch_width;
+  for (int64_t i = threadIdx.x; i < branch_width; i += blockDim.x) {
+    dst[i] = src[i];
+  }
+}
+
 __global__ void ParallelLinearGatedMlpPostKernel(
     const float* merged, float* output, const float* gate_bias,
     const float* up_bias, int64_t rows, int64_t branch_width) {
@@ -139,6 +188,58 @@ musaError_t LaunchParallelLinearPostDirectFloatKernel(
         <<<BlocksForCount(total), kThreadsPerBlock, 0, stream>>>(
             merged, output0, output1, output2, bias0, bias1, bias2, rows,
             branch_width, activation, has_activation, activation_alpha);
+  } else {
+    return musaErrorInvalidValue;
+  }
+  return musaGetLastError();
+}
+
+musaError_t LaunchParallelLinearPostDirectCopy16Kernel(
+    const void* merged, void* output0, void* output1, void* output2,
+    int64_t rows, int64_t branch_count, int64_t branch_width,
+    musaStream_t stream) {
+  if (rows == 0 || branch_width == 0) {
+    return musaSuccess;
+  }
+  const int64_t blocks = rows * branch_count;
+  if (blocks > INT32_MAX) {
+    return musaErrorInvalidValue;
+  }
+  const bool can_vectorize =
+      branch_width % (sizeof(uint4) / sizeof(uint16_t)) == 0 &&
+      (reinterpret_cast<uintptr_t>(merged) % alignof(uint4)) == 0 &&
+      (reinterpret_cast<uintptr_t>(output0) % alignof(uint4)) == 0 &&
+      (reinterpret_cast<uintptr_t>(output1) % alignof(uint4)) == 0 &&
+      (branch_count != 3 ||
+       (reinterpret_cast<uintptr_t>(output2) % alignof(uint4)) == 0);
+  if (branch_count == 2) {
+    if (can_vectorize) {
+      ParallelLinearPostDirectCopy16Kernel<2>
+          <<<static_cast<int>(blocks), kThreadsPerBlock, 0, stream>>>(
+              static_cast<const uint16_t*>(merged),
+              static_cast<uint16_t*>(output0), static_cast<uint16_t*>(output1),
+              nullptr, rows, branch_width);
+    } else {
+      ParallelLinearPostDirectCopyScalarKernel<2>
+          <<<static_cast<int>(blocks), kThreadsPerBlock, 0, stream>>>(
+              static_cast<const uint16_t*>(merged),
+              static_cast<uint16_t*>(output0), static_cast<uint16_t*>(output1),
+              nullptr, rows, branch_width);
+    }
+  } else if (branch_count == 3) {
+    if (can_vectorize) {
+      ParallelLinearPostDirectCopy16Kernel<3>
+          <<<static_cast<int>(blocks), kThreadsPerBlock, 0, stream>>>(
+              static_cast<const uint16_t*>(merged),
+              static_cast<uint16_t*>(output0), static_cast<uint16_t*>(output1),
+              static_cast<uint16_t*>(output2), rows, branch_width);
+    } else {
+      ParallelLinearPostDirectCopyScalarKernel<3>
+          <<<static_cast<int>(blocks), kThreadsPerBlock, 0, stream>>>(
+              static_cast<const uint16_t*>(merged),
+              static_cast<uint16_t*>(output0), static_cast<uint16_t*>(output1),
+              static_cast<uint16_t*>(output2), rows, branch_width);
+    }
   } else {
     return musaErrorInvalidValue;
   }

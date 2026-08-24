@@ -303,7 +303,7 @@ std::vector<FusionMatch> FindFusionMatches(
   // linear matchers below; otherwise those matchers consume its nodes first.
   auto parallel_linear_fusions = FindParallelLinearFusions(
       all_nodes, graph_output_names, accepted_node_ids);
-  AddFusionMatch(matches, "FindParallelLinearFusions", false,
+  AddFusionMatch(matches, "FindParallelLinearFusions", true,
                  std::move(parallel_linear_fusions), accepted_node_ids);
 
   auto strided_view_fusions =

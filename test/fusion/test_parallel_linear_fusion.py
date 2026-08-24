@@ -18,9 +18,16 @@ from pathlib import Path
 import numpy as np
 import onnxruntime as ort
 import pytest
-from onnx import helper, numpy_helper
+from onnx import TensorProto as OnnxTensorProto, helper, numpy_helper
 
-from op_test_utils import TensorProto, musa_devices, run_model_and_compare
+from op_test_utils import (
+    TensorProto,
+    bfloat16_bits_to_float32,
+    float32_to_bfloat16_bits,
+    musa_devices,
+    run_model_and_compare,
+    run_with_iobinding,
+)
 
 
 def _build_model(
@@ -125,6 +132,53 @@ def _build_gated_mlp_model(with_bias):
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
     model.ir_version = min(model.ir_version, 10)
     return model.SerializeToString(), {"X": x}
+
+
+def _bf16_initializer(name, values):
+    return helper.make_tensor(
+        name,
+        OnnxTensorProto.BFLOAT16,
+        values.shape,
+        values.astype(np.uint16).tobytes(),
+        raw=True,
+    )
+
+
+def _build_bfloat16_qkv_model(branch_count=3):
+    rng = np.random.default_rng(4096 + branch_count)
+    x_f32 = rng.standard_normal((1, 5, 8)).astype(np.float32)
+    x = float32_to_bfloat16_bits(x_f32)
+    weights_f32 = [
+        rng.standard_normal((8, 8)).astype(np.float32)
+        for _ in range(branch_count)
+    ]
+    weights = [float32_to_bfloat16_bits(weight) for weight in weights_f32]
+    nodes = [
+        helper.make_node("MatMul", ["X", f"W{i}"], [f"Y{i}"])
+        for i in range(branch_count)
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "parallel_linear_bfloat16_qkv_graph",
+        [helper.make_tensor_value_info("X", TensorProto.BFLOAT16, [1, 5, 8])],
+        [
+            helper.make_tensor_value_info(
+                f"Y{i}", TensorProto.BFLOAT16, [1, 5, 8]
+            )
+            for i in range(branch_count)
+        ],
+        initializer=[
+            _bf16_initializer(f"W{i}", weight)
+            for i, weight in enumerate(weights)
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    expected = [
+        bfloat16_bits_to_float32(x) @ bfloat16_bits_to_float32(weight)
+        for weight in weights
+    ]
+    return model.SerializeToString(), {"X": x}, expected
 
 
 def _profile_node_names(model, feeds):
@@ -241,3 +295,68 @@ def test_parallel_linear_fusion_matches_nine_of_ten_branches():
         name for name in node_names if name.startswith("MatMul_")
     ]
     assert len(remaining_matmuls) == 1
+
+
+def test_parallel_linear_bfloat16_qkv_fusion(tmp_path):
+    model, feeds, expected = _build_bfloat16_qkv_model()
+    outputs = [(f"Y{i}", TensorProto.BFLOAT16, (1, 5, 8)) for i in range(3)]
+    actual = run_with_iobinding(
+        model,
+        feeds,
+        {"X": TensorProto.BFLOAT16},
+        outputs,
+        use_musa=True,
+    )
+    for got, want in zip(actual, expected):
+        np.testing.assert_allclose(
+            bfloat16_bits_to_float32(got), want, rtol=3e-2, atol=3e-2
+        )
+
+    devices = musa_devices()
+    options = ort.SessionOptions()
+    options.enable_profiling = True
+    options.profile_file_prefix = str(tmp_path / "parallel_linear_bfloat16_qkv")
+    options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    options.add_provider_for_devices(devices, {})
+    session = ort.InferenceSession(model, sess_options=options)
+    binding = session.io_binding()
+    x = feeds["X"]
+    binding.bind_input(
+        "X", "cpu", 0, TensorProto.BFLOAT16, x.shape, x.ctypes.data
+    )
+    output_buffers = []
+    for name, elem_type, shape in outputs:
+        output = np.empty(shape, dtype=np.uint16)
+        binding.bind_output(
+            name, "cpu", 0, elem_type, output.shape, output.ctypes.data
+        )
+        output_buffers.append(output)
+    session.run_with_iobinding(binding)
+    path = Path(session.end_profiling())
+    events = json.loads(path.read_text())
+    path.unlink(missing_ok=True)
+    node_names = [
+        event.get("name", "") for event in events if event.get("cat") == "Node"
+    ]
+    assert any(name.startswith("MUSAExecutionProvider_") for name in node_names)
+    assert not any(name.startswith("MatMul_") for name in node_names)
+
+
+@pytest.mark.parametrize("branch_count", [2, 3])
+def test_parallel_linear_bfloat16_grouped_direct_output(branch_count):
+    model, feeds, expected = _build_bfloat16_qkv_model(branch_count)
+    outputs = [
+        (f"Y{i}", TensorProto.BFLOAT16, (1, 5, 8))
+        for i in range(branch_count)
+    ]
+    actual = run_with_iobinding(
+        model,
+        feeds,
+        {"X": TensorProto.BFLOAT16},
+        outputs,
+        use_musa=True,
+    )
+    for got, want in zip(actual, expected):
+        np.testing.assert_allclose(
+            bfloat16_bits_to_float32(got), want, rtol=3e-2, atol=3e-2
+        )

@@ -33,7 +33,7 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 24 | Concat Split Fusion | `FindConcatSplitFusions` | `false` | [concat_split.md](fusion/concat_split.md) |
 | 25 | Split Concat Fusion | `FindSplitConcatFusions` | `false` | [split_concat.md](fusion/split_concat.md) |
 | 26 | Parallel MatMul Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
-| 27 | Parallel Linear Fusion | `FindParallelLinearFusions` | `false` | [parallel_linear.md](fusion/parallel_linear.md) |
+| 27 | Parallel Linear Fusion | `FindParallelLinearFusions` | `true` | [parallel_linear.md](fusion/parallel_linear.md) |
 | 28 | Strided View Fusion | `FindStridedViewFusions` | `true` | [strided_view.md](fusion/strided_view.md) |
 | 29 | Shape Reshape Fusion | `FindShapeReshapeFusions` | `true` | [shape_reshape.md](fusion/shape_reshape.md) |
 | 30 | Tile Concat Fusion | `FindTileConcatFusions` | `false` | [tile_concat.md](fusion/tile_concat.md) |

@@ -146,7 +146,8 @@ const FusionDTypeContract& FusionDTypeContractForFinder(const char* finder) {
     return kSiluDTypeContract;
   }
   if (name == "FindConcatMatMulFusions" ||
-      name == "FindParallelMatMulConcatFusions") {
+      name == "FindParallelMatMulConcatFusions" ||
+      name == "FindParallelLinearFusions") {
     return kMatMulFamilyDTypeContract;
   }
   if (name == "FindRmsNormFusions") {
@@ -188,8 +189,7 @@ const FusionDTypeContract& FusionDTypeContractForFinder(const char* finder) {
       name == "FindTargetIdCountEmbeddingFusions" ||
       name == "FindMathConcatLogFusions" ||
       name == "FindSplitUnsqueezeConcatFusions" ||
-      name == "FindSplitConcatFusions" || name == "FindParallelLinearFusions" ||
-      name == "FindSliceConcatFusions") {
+      name == "FindSplitConcatFusions" || name == "FindSliceConcatFusions") {
     return kFp32OnlyDTypeContract;
   }
   return kNoFusionDTypeContract;

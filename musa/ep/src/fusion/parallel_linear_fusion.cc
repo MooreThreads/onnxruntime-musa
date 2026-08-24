@@ -13,14 +13,17 @@
 
 #include "fusion/parallel_linear_fusion.h"
 
-#include <mudnn.h>
 #include <musa_runtime.h>
 
 #include <algorithm>
+#include <atomic>
 #include <climits>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -28,21 +31,30 @@
 #include <utility>
 #include <vector>
 
+#include "graph/graph_utils.h"
 #include "kernels/math/matmul.h"
 #include "kernels/nn/parallel_linear_impl.h"
 #include "kernels/shared_inc/blas_utils.h"
+#include "kernels/shared_inc/kernel_element_types.h"
 #include "kernels/shared_inc/op_kernel_common.h"
 
 namespace {
 
 struct BranchInfo {
-  size_t weight_input_index;
-  size_t bias_input_index;
+  size_t bias_byte_offset;
+  size_t weight_byte_offset;
   size_t output_index;
 };
 
 constexpr size_t kNoBiasInput = std::numeric_limits<size_t>::max();
 constexpr size_t kNoOutputIndex = std::numeric_limits<size_t>::max();
+constexpr size_t kNoWeightInput = std::numeric_limits<size_t>::max();
+
+bool ParallelLinearGroupedMatMulDisabled() {
+  const char* env =
+      std::getenv("ORT_MUSA_DISABLE_PARALLEL_LINEAR_GROUPED_MATMUL");
+  return env != nullptr && std::strcmp(env, "0") != 0;
+}
 
 struct GatedMlpInfo {
   std::string gate_output;
@@ -93,7 +105,6 @@ class DeviceBuffer {
 };
 
 struct ParallelLinearScratch {
-  DeviceBuffer merged_weights;
   DeviceBuffer merged_output;
   DeviceBuffer pointer_arrays;
 };
@@ -148,65 +159,18 @@ int64_t NumElementsChecked(const std::vector<int64_t>& shape) {
   return empty ? 0 : total;
 }
 
-void ValidateFloat(Ort::ConstValue value, const char* name) {
-  if (value.GetTensorTypeAndShapeInfo().GetElementType() !=
-      ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    throw std::runtime_error(std::string("ParallelLinear requires float ") +
-                             name);
+ONNXTensorElementDataType ValidateParallelLinearTensor(Ort::ConstValue value,
+                                                       const char* name) {
+  const ONNXTensorElementDataType elem_type =
+      value.GetTensorTypeAndShapeInfo().GetElementType();
+  if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
+    throw std::runtime_error(
+        std::string("ParallelLinear only supports float32/float16/bfloat16 ") +
+        name);
   }
-}
-
-std::vector<int64_t> ShapeStrides(const std::vector<int64_t>& shape) {
-  std::vector<int64_t> strides(shape.size(), 1);
-  for (int64_t i = static_cast<int64_t>(shape.size()) - 2; i >= 0; --i) {
-    strides[static_cast<size_t>(i)] =
-        strides[static_cast<size_t>(i + 1)] * shape[static_cast<size_t>(i + 1)];
-  }
-  return strides;
-}
-
-void CheckMudnn(::musa::dnn::Status status, const char* message) {
-  if (status != ::musa::dnn::Status::SUCCESS) {
-    throw std::runtime_error(std::string(message) + ", status=" +
-                             std::to_string(static_cast<int>(status)));
-  }
-}
-
-void SetupTensor(::musa::dnn::Tensor& tensor, const float* data,
-                 const std::vector<int64_t>& shape) {
-  CheckMudnn(tensor.SetType(::musa::dnn::Tensor::Type::FLOAT),
-             "ParallelLinear tensor type failed");
-  CheckMudnn(tensor.SetAddr(data), "ParallelLinear tensor address failed");
-  CheckMudnn(tensor.SetFormat(::musa::dnn::Tensor::Format::NCHW),
-             "ParallelLinear tensor format failed");
-  auto strides = ShapeStrides(shape);
-  CheckMudnn(tensor.SetNdInfo(static_cast<int>(shape.size()), shape.data(),
-                              strides.data()),
-             "ParallelLinear tensor shape failed");
-}
-
-void MergeWeights(const std::vector<const float*>& weights,
-                  const std::vector<int64_t>& weight_shape,
-                  float* merged_weights, musaStream_t stream) {
-  ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* raw_status = EnsureMudnnHandle(&handle, stream);
-  if (raw_status != nullptr) {
-    Ort::Status status(raw_status);
-    throw std::runtime_error(status.GetErrorMessage());
-  }
-  std::vector<::musa::dnn::Tensor> inputs(weights.size());
-  for (size_t i = 0; i < weights.size(); ++i) {
-    SetupTensor(inputs[i], weights[i], weight_shape);
-  }
-  std::vector<int64_t> merged_shape = {
-      weight_shape[0], weight_shape[1] * static_cast<int64_t>(weights.size())};
-  ::musa::dnn::Tensor output;
-  SetupTensor(output, merged_weights, merged_shape);
-  ::musa::dnn::Concat concat;
-  CheckMudnn(concat.SetAxis(1), "ParallelLinear concat axis failed");
-  CheckMudnn(concat.Run(*handle, output, static_cast<int>(inputs.size()),
-                        inputs.data()),
-             "ParallelLinear weight concat failed");
+  return elem_type;
 }
 
 std::unordered_map<std::string, size_t> ValueIndices(
@@ -234,6 +198,27 @@ bool InputsMatch(Ort::ConstNode node, const std::string& lhs,
   return inputs.size() == 2 &&
          ((Name(inputs[0]) == lhs && Name(inputs[1]) == rhs) ||
           (Name(inputs[0]) == rhs && Name(inputs[1]) == lhs));
+}
+
+std::vector<uint8_t> ReadInitializerBytes(
+    Ort::ConstValueInfo value_info, ONNXTensorElementDataType expected_type,
+    const std::vector<int64_t>& expected_shape) {
+  Ort::ConstValue value{nullptr};
+  Ort::Status status = value_info.GetInitializer(value);
+  if (!status.IsOK() || !value) {
+    throw std::runtime_error("ParallelLinear failed to read initializer " +
+                             Name(value_info));
+  }
+  auto info = value.GetTensorTypeAndShapeInfo();
+  if (info.GetElementType() != expected_type ||
+      info.GetShape() != expected_shape) {
+    throw std::runtime_error("ParallelLinear initializer metadata mismatch " +
+                             Name(value_info));
+  }
+  const size_t bytes =
+      static_cast<size_t>(info.GetElementCount()) * ElementSize(expected_type);
+  const auto* data = static_cast<const uint8_t*>(value.GetTensorRawData());
+  return std::vector<uint8_t>(data, data + bytes);
 }
 
 std::optional<GatedMlpInfo> FindGatedMlpInfo(
@@ -305,63 +290,138 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
   ParallelLinearFusionCompute(size_t input_index,
                               std::vector<BranchInfo> branches,
                               bool has_activation, bool gated_mlp,
-                              size_t gated_output_index)
+                              size_t gated_output_index,
+                              ONNXTensorElementDataType elem_type,
+                              std::vector<int64_t> weight_shape,
+                              std::vector<uint8_t> host_constants)
       : input_index(input_index),
         branches(std::move(branches)),
         has_activation(has_activation),
         gated_mlp(gated_mlp),
-        gated_output_index(gated_output_index) {}
+        gated_output_index(gated_output_index),
+        elem_type(elem_type),
+        weight_shape(std::move(weight_shape)),
+        host_constants(std::move(host_constants)) {}
+
+  ~ParallelLinearFusionCompute() override {
+    if (constants_ready_event != nullptr) {
+      (void)musaEventDestroy(constants_ready_event);
+    }
+  }
+
+  OrtStatus* EnsureConstants(musaStream_t stream) const {
+    if (constants_ready.load(std::memory_order_acquire)) {
+      return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(constants_mutex);
+    if (constants_ready.load(std::memory_order_relaxed)) {
+      return nullptr;
+    }
+    RETURN_IF_ERROR(device_constants.Resize(host_constants.size(), stream));
+    RETURN_IF_ERROR(CopyTemporaryHostToDevice(device_constants.data<void>(),
+                                              host_constants.data(),
+                                              host_constants.size(), stream));
+    RETURN_IF_ERROR(LaunchStatus(musaEventCreateWithFlags(
+        &constants_ready_event, musaEventDisableTiming)));
+    RETURN_IF_ERROR(
+        LaunchStatus(musaEventRecord(constants_ready_event, stream)));
+    // Complete the one-time initializer upload before publishing the shared
+    // pointer.  This keeps all later inference streams off the lock/event path.
+    RETURN_IF_ERROR(LaunchStatus(musaEventSynchronize(constants_ready_event)));
+    RETURN_IF_ERROR(LaunchStatus(musaEventDestroy(constants_ready_event)));
+    constants_ready_event = nullptr;
+    std::vector<uint8_t>().swap(host_constants);
+    constants_ready.store(true, std::memory_order_release);
+    return nullptr;
+  }
+
+  bool TryGroupedMatMulDirectOutput(
+      const void* input_data, const std::vector<void*>& raw_output_pointers,
+      const uint8_t* constants, int64_t rows, int64_t input_width,
+      int64_t branch_width, musaStream_t stream) const {
+    if (ParallelLinearGroupedMatMulDisabled() || has_activation || gated_mlp ||
+        (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
+         elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) ||
+        (branches.size() != 2 && branches.size() != 3)) {
+      return false;
+    }
+
+    ::musa::dnn::Handle* handle = nullptr;
+    OrtStatus* handle_status = EnsureMudnnHandle(&handle, stream);
+    if (handle_status != nullptr) {
+      Ort::GetApi().ReleaseStatus(handle_status);
+      return false;
+    }
+
+    const int groups = static_cast<int>(branches.size());
+    std::vector<::musa::dnn::Tensor> a_tensors(groups);
+    std::vector<::musa::dnn::Tensor> b_tensors(groups);
+    std::vector<::musa::dnn::Tensor> c_tensors(groups);
+    std::vector<int64_t> m(groups, rows);
+    std::vector<int64_t> n(groups, branch_width);
+    std::vector<int64_t> k(groups, input_width);
+    std::vector<int64_t> lda(groups, input_width);
+    std::vector<int64_t> ldb(groups, input_width);
+    std::vector<int64_t> ldc(groups, branch_width);
+    for (int index = 0; index < groups; ++index) {
+      const BranchInfo& branch = branches[static_cast<size_t>(index)];
+      if (branch.weight_byte_offset == kNoWeightInput ||
+          !SetMudnnTensor(a_tensors[index], input_data, {rows, input_width},
+                          elem_type) ||
+          !SetMudnnTensor(b_tensors[index],
+                          constants + branch.weight_byte_offset,
+                          {branch_width, input_width}, elem_type) ||
+          !SetMudnnTensor(c_tensors[index], raw_output_pointers[index],
+                          {rows, branch_width}, elem_type)) {
+        return false;
+      }
+    }
+
+    ::musa::dnn::GroupedMatMul op;
+    if (op.SetComputeMode(::musa::dnn::GroupedMatMul::ComputeMode::TENSOR) !=
+            ::musa::dnn::Status::SUCCESS ||
+        op.SetTranspose(false, true) != ::musa::dnn::Status::SUCCESS ||
+        op.SetAlpha(1.0) != ::musa::dnn::Status::SUCCESS ||
+        op.SetBeta(0.0) != ::musa::dnn::Status::SUCCESS) {
+      return false;
+    }
+    ::musa::dnn::MemoryMaintainer maintainer =
+        [stream](size_t bytes) -> ::musa::dnn::MemoryHandler {
+      void* ptr = AllocateDeviceMemoryOnStream(bytes, stream);
+      return ::musa::dnn::MemoryHandler(ptr, [stream, bytes](void* p) {
+        FreeDeviceMemoryOnStream(p, stream, bytes);
+      });
+    };
+    return op.Run(*handle, c_tensors.data(), a_tensors.data(), b_tensors.data(),
+                  m.data(), n.data(), k.data(), lda.data(), ldb.data(),
+                  ldc.data(), groups,
+                  maintainer) == ::musa::dnn::Status::SUCCESS;
+  }
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override {
     try {
       Ort::KernelContext ctx(kernel_context);
       musaStream_t stream = GetComputeStream(ctx);
       Ort::ConstValue input = ctx.GetInput(input_index);
-      ValidateFloat(input, "input");
+      const ONNXTensorElementDataType runtime_elem_type =
+          ValidateParallelLinearTensor(input, "input");
+      if (runtime_elem_type != elem_type) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT,
+            "ParallelLinear input dtype changed after compilation");
+      }
+      if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+          (has_activation || gated_mlp)) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "ParallelLinear non-float projections do not support epilogues");
+      }
       DeviceInputBuffer input_buffer;
       RETURN_IF_ERROR(input_buffer.Bind(input, stream));
       const std::vector<int64_t> input_shape = TensorShape(input);
       if (input_shape.size() < 2) {
         return Ort::GetApi().CreateStatus(
             ORT_INVALID_ARGUMENT, "ParallelLinear input rank must be >= 2");
-      }
-
-      std::vector<std::unique_ptr<DeviceInputBuffer>> weight_buffers;
-      std::vector<std::unique_ptr<DeviceInputBuffer>> bias_buffers;
-      std::vector<const float*> weight_pointers;
-      std::vector<const float*> bias_pointers;
-      weight_buffers.reserve(branches.size());
-      bias_buffers.reserve(branches.size());
-      weight_pointers.reserve(branches.size());
-      bias_pointers.reserve(branches.size());
-
-      std::vector<int64_t> weight_shape;
-      for (const BranchInfo& branch : branches) {
-        Ort::ConstValue weight = ctx.GetInput(branch.weight_input_index);
-        ValidateFloat(weight, "weight");
-        if (weight_shape.empty()) {
-          weight_shape = TensorShape(weight);
-        } else if (TensorShape(weight) != weight_shape) {
-          return Ort::GetApi().CreateStatus(
-              ORT_INVALID_ARGUMENT,
-              "ParallelLinear weights must have identical shapes");
-        }
-        auto weight_buffer = std::make_unique<DeviceInputBuffer>();
-        RETURN_IF_ERROR(weight_buffer->Bind(weight, stream));
-        weight_pointers.push_back(
-            static_cast<const float*>(weight_buffer->data()));
-        weight_buffers.push_back(std::move(weight_buffer));
-        if (branch.bias_input_index == kNoBiasInput) {
-          bias_pointers.push_back(nullptr);
-        } else {
-          Ort::ConstValue bias = ctx.GetInput(branch.bias_input_index);
-          ValidateFloat(bias, "bias");
-          auto bias_buffer = std::make_unique<DeviceInputBuffer>();
-          RETURN_IF_ERROR(bias_buffer->Bind(bias, stream));
-          bias_pointers.push_back(
-              static_cast<const float*>(bias_buffer->data()));
-          bias_buffers.push_back(std::move(bias_buffer));
-        }
       }
 
       if (weight_shape.size() != 2 || input_shape.back() != weight_shape[0]) {
@@ -375,6 +435,7 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
       output_shape.back() = branch_width;
 
       std::vector<float*> output_pointers;
+      std::vector<void*> raw_output_pointers;
       float* gated_output = nullptr;
       if (gated_mlp) {
         Ort::UnownedValue output =
@@ -386,6 +447,7 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
         gated_output = output.GetTensorMutableData<float>();
       } else {
         output_pointers.reserve(branches.size());
+        raw_output_pointers.reserve(branches.size());
         for (const BranchInfo& branch : branches) {
           Ort::UnownedValue output =
               ctx.GetOutput(branch.output_index, output_shape);
@@ -393,7 +455,17 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
             return Ort::GetApi().CreateStatus(
                 ORT_NOT_IMPLEMENTED, "ParallelLinear requires MUSA outputs");
           }
-          output_pointers.push_back(output.GetTensorMutableData<float>());
+          if (output.GetTensorTypeAndShapeInfo().GetElementType() !=
+              elem_type) {
+            return Ort::GetApi().CreateStatus(
+                ORT_INVALID_ARGUMENT,
+                "ParallelLinear output dtype must match input");
+          }
+          void* output_data = output.GetTensorMutableRawData();
+          raw_output_pointers.push_back(output_data);
+          if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+            output_pointers.push_back(static_cast<float*>(output_data));
+          }
         }
       }
 
@@ -404,18 +476,27 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
         return nullptr;
       }
 
-      ParallelLinearScratch& scratch = ScratchForStream(this, stream);
-      const size_t merged_weight_bytes =
-          static_cast<size_t>(weight_shape[0] * branch_count * branch_width) *
-          sizeof(float);
-      RETURN_IF_ERROR(
-          scratch.merged_weights.Resize(merged_weight_bytes, stream));
-      MergeWeights(weight_pointers, weight_shape,
-                   scratch.merged_weights.data<float>(), stream);
+      RETURN_IF_ERROR(EnsureConstants(stream));
+      const auto* constants = device_constants.data<uint8_t>();
+      const void* merged_weights = constants;
+      std::vector<const float*> bias_pointers;
+      bias_pointers.reserve(branches.size());
+      for (const BranchInfo& branch : branches) {
+        bias_pointers.push_back(branch.bias_byte_offset == kNoBiasInput
+                                    ? nullptr
+                                    : reinterpret_cast<const float*>(
+                                          constants + branch.bias_byte_offset));
+      }
 
+      ParallelLinearScratch& scratch = ScratchForStream(this, stream);
+      if (TryGroupedMatMulDirectOutput(input_buffer.data(), raw_output_pointers,
+                                       constants, rows, input_shape.back(),
+                                       branch_width, stream)) {
+        return nullptr;
+      }
       const size_t merged_output_bytes =
           static_cast<size_t>(rows * branch_count * branch_width) *
-          sizeof(float);
+          ElementSize(elem_type);
       RETURN_IF_ERROR(
           scratch.merged_output.Resize(merged_output_bytes, stream));
       std::vector<int64_t> flat_input_shape = {rows, input_shape.back()};
@@ -424,13 +505,24 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
       std::vector<int64_t> merged_output_shape = {rows,
                                                   branch_count * branch_width};
       RETURN_IF_ERROR(ComputeMusaMatMulDevice(
-          static_cast<const float*>(input_buffer.data()),
-          scratch.merged_weights.data<float>(),
-          scratch.merged_output.data<float>(), flat_input_shape,
-          merged_weight_shape, merged_output_shape, stream));
+          input_buffer.data(), merged_weights,
+          scratch.merged_output.data<void>(), elem_type, flat_input_shape,
+          merged_weight_shape, merged_output_shape, false, false, false, false,
+          1.0f, stream));
 
       musaError_t post_status = musaSuccess;
-      if (gated_mlp) {
+      if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+        if (branches.size() != 2 && branches.size() != 3) {
+          return Ort::GetApi().CreateStatus(
+              ORT_NOT_IMPLEMENTED,
+              "ParallelLinear non-float path supports 2 or 3 branches");
+        }
+        post_status = LaunchParallelLinearPostDirectCopy16Kernel(
+            scratch.merged_output.data<void>(), raw_output_pointers[0],
+            raw_output_pointers[1],
+            branches.size() == 3 ? raw_output_pointers[2] : nullptr, rows,
+            branch_count, branch_width, stream);
+      } else if (gated_mlp) {
         post_status = LaunchParallelLinearGatedMlpPostFloatKernel(
             scratch.merged_output.data<float>(), gated_output, bias_pointers[0],
             bias_pointers[1], rows, branch_width, stream);
@@ -483,6 +575,13 @@ struct ParallelLinearFusionCompute : FusionNodeCompute {
   bool has_activation;
   bool gated_mlp;
   size_t gated_output_index;
+  ONNXTensorElementDataType elem_type;
+  std::vector<int64_t> weight_shape;
+  mutable std::vector<uint8_t> host_constants;
+  mutable DeviceBuffer device_constants;
+  mutable musaEvent_t constants_ready_event = nullptr;
+  mutable std::atomic<bool> constants_ready{false};
+  mutable std::mutex constants_mutex;
 };
 
 bool IsParallelLinearFusionGraph(Ort::ConstGraph graph) {
@@ -533,8 +632,8 @@ std::unique_ptr<FusionNodeCompute> CreateParallelLinearFusion(
   std::string common_input;
   size_t input_index = 0;
   struct PendingBranch {
-    size_t weight_input_index;
-    size_t bias_input_index;
+    Ort::ConstValueInfo weight{nullptr};
+    Ort::ConstValueInfo bias{nullptr};
     std::string output_name;
   };
   std::vector<PendingBranch> pending_branches;
@@ -575,10 +674,7 @@ std::unique_ptr<FusionNodeCompute> CreateParallelLinearFusion(
       has_activation = true;
       output_name = Name(activation_it->second.GetOutputs()[0]);
     }
-    pending_branches.push_back(
-        {IndexOf(input_indices, Name(matmul_inputs[1])),
-         bias != nullptr ? IndexOf(input_indices, Name(bias)) : kNoBiasInput,
-         output_name});
+    pending_branches.push_back({matmul_inputs[1], bias, output_name});
   }
 
   std::vector<std::string> branch_outputs;
@@ -589,8 +685,8 @@ std::unique_ptr<FusionNodeCompute> CreateParallelLinearFusion(
   std::optional<GatedMlpInfo> gated_info =
       FindGatedMlpInfo(graph, branch_outputs);
 
-  std::vector<BranchInfo> branches;
-  branches.reserve(pending_branches.size());
+  std::vector<PendingBranch> ordered_branches;
+  ordered_branches.reserve(pending_branches.size());
   size_t gated_output_index = kNoOutputIndex;
   if (gated_info.has_value()) {
     for (const std::string& output_name :
@@ -602,17 +698,96 @@ std::unique_ptr<FusionNodeCompute> CreateParallelLinearFusion(
       if (it == pending_branches.end()) {
         throw std::runtime_error("ParallelLinear gated branch is missing");
       }
-      branches.push_back(
-          {it->weight_input_index, it->bias_input_index, kNoOutputIndex});
+      ordered_branches.push_back(*it);
     }
     gated_output_index = IndexOf(output_indices, gated_info->fused_output);
   } else {
-    for (const PendingBranch& branch : pending_branches) {
-      branches.push_back({branch.weight_input_index, branch.bias_input_index,
-                          IndexOf(output_indices, branch.output_name)});
+    ordered_branches = pending_branches;
+  }
+
+  if (ordered_branches.empty()) {
+    throw std::runtime_error("ParallelLinear has no projection branches");
+  }
+  const auto elem_type =
+      musa_ep::GetTensorElementType(ordered_branches.front().weight);
+  const auto weight_shape =
+      musa_ep::GetStaticShape(ordered_branches.front().weight);
+  if (!elem_type.has_value() || !weight_shape.has_value() ||
+      weight_shape->size() != 2 || (*weight_shape)[0] <= 0 ||
+      (*weight_shape)[1] <= 0) {
+    throw std::runtime_error("ParallelLinear weight metadata is invalid");
+  }
+  const size_t element_size = ElementSize(*elem_type);
+  const size_t k = static_cast<size_t>((*weight_shape)[0]);
+  const size_t n = static_cast<size_t>((*weight_shape)[1]);
+  const size_t branch_count = ordered_branches.size();
+  if (n > SIZE_MAX / branch_count || k > SIZE_MAX / (n * branch_count) ||
+      k * n * branch_count > SIZE_MAX / element_size) {
+    throw std::runtime_error("ParallelLinear packed weight size overflowed");
+  }
+  const size_t row_bytes = n * element_size;
+  const size_t merged_row_bytes = branch_count * row_bytes;
+  std::vector<uint8_t> host_constants(k * merged_row_bytes);
+  const bool store_grouped_weights =
+      (*elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+       *elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) &&
+      !has_activation && !gated_info.has_value() &&
+      (branch_count == 2 || branch_count == 3);
+  std::vector<size_t> branch_weight_offsets(branch_count, kNoWeightInput);
+  for (size_t branch_index = 0; branch_index < branch_count; ++branch_index) {
+    const PendingBranch& branch = ordered_branches[branch_index];
+    if (musa_ep::GetTensorElementType(branch.weight) != elem_type ||
+        musa_ep::GetStaticShape(branch.weight) != weight_shape) {
+      throw std::runtime_error("ParallelLinear branch weights differ");
     }
+    const std::vector<uint8_t> weight =
+        ReadInitializerBytes(branch.weight, *elem_type, *weight_shape);
+    for (size_t row = 0; row < k; ++row) {
+      std::memcpy(host_constants.data() + row * merged_row_bytes +
+                      branch_index * row_bytes,
+                  weight.data() + row * row_bytes, row_bytes);
+    }
+    if (store_grouped_weights) {
+      std::vector<uint8_t> transposed_weight(weight.size());
+      for (size_t row = 0; row < k; ++row) {
+        for (size_t column = 0; column < n; ++column) {
+          std::memcpy(
+              transposed_weight.data() + (column * k + row) * element_size,
+              weight.data() + (row * n + column) * element_size, element_size);
+        }
+      }
+      branch_weight_offsets[branch_index] = host_constants.size();
+      host_constants.insert(host_constants.end(), transposed_weight.begin(),
+                            transposed_weight.end());
+    }
+  }
+
+  std::vector<BranchInfo> branches;
+  branches.reserve(branch_count);
+  for (size_t branch_index = 0; branch_index < branch_count; ++branch_index) {
+    const PendingBranch& branch = ordered_branches[branch_index];
+    size_t bias_byte_offset = kNoBiasInput;
+    if (branch.bias != nullptr) {
+      const auto bias_shape = musa_ep::GetStaticShape(branch.bias);
+      if (musa_ep::GetTensorElementType(branch.bias) != elem_type ||
+          !bias_shape.has_value()) {
+        throw std::runtime_error("ParallelLinear bias metadata is invalid");
+      }
+      const std::vector<uint8_t> bias =
+          ReadInitializerBytes(branch.bias, *elem_type, *bias_shape);
+      if (bias.size() != row_bytes ||
+          host_constants.size() > SIZE_MAX - bias.size()) {
+        throw std::runtime_error("ParallelLinear bias size is invalid");
+      }
+      bias_byte_offset = host_constants.size();
+      host_constants.insert(host_constants.end(), bias.begin(), bias.end());
+    }
+    branches.push_back({bias_byte_offset, branch_weight_offsets[branch_index],
+                        gated_info.has_value()
+                            ? kNoOutputIndex
+                            : IndexOf(output_indices, branch.output_name)});
   }
   return std::make_unique<ParallelLinearFusionCompute>(
       input_index, std::move(branches), has_activation, gated_info.has_value(),
-      gated_output_index);
+      gated_output_index, *elem_type, *weight_shape, std::move(host_constants));
 }

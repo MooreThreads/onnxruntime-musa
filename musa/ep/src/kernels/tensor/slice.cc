@@ -26,12 +26,17 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
   auto in0_info = input0.GetTensorTypeAndShapeInfo();
   auto elem_type = in0_info.GetElementType();
   auto shape0 = in0_info.GetShape();
-  std::vector<int64_t> starts = ReadIntTensor(ctx, 1);
-  std::vector<int64_t> ends = ReadIntTensor(ctx, 2);
+  std::vector<size_t> parameter_indices{1, 2};
+  if (ctx.GetInputCount() > 3) parameter_indices.push_back(3);
+  if (ctx.GetInputCount() > 4) parameter_indices.push_back(4);
+  std::vector<std::vector<int64_t>> parameters =
+      ReadIntTensors(ctx, parameter_indices);
+  std::vector<int64_t> starts = std::move(parameters[0]);
+  std::vector<int64_t> ends = std::move(parameters[1]);
   std::vector<int64_t> axes;
   std::vector<int64_t> steps(starts.size(), 1);
-  if (ctx.GetInputCount() > 3) axes = ReadIntTensor(ctx, 3);
-  if (ctx.GetInputCount() > 4) steps = ReadIntTensor(ctx, 4);
+  if (ctx.GetInputCount() > 3) axes = std::move(parameters[2]);
+  if (ctx.GetInputCount() > 4) steps = std::move(parameters[3]);
   if (axes.empty()) {
     axes.resize(starts.size());
     std::iota(axes.begin(), axes.end(), 0);

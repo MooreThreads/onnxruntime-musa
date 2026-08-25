@@ -9,6 +9,7 @@
 #include <cstring>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <execinfo.h>
@@ -200,6 +201,110 @@ OrtStatus* CopyImpl(MusaDataTransfer& impl, const OrtMemoryDevice* src_device,
   return nullptr;
 }
 
+struct TensorCopy {
+  const OrtValue* src_tensor = nullptr;
+  OrtValue* dst_tensor = nullptr;
+  const OrtMemoryDevice* src_device = nullptr;
+  const OrtMemoryDevice* dst_device = nullptr;
+  const void* src_data = nullptr;
+  void* dst_data = nullptr;
+  size_t bytes = 0;
+  musaStream_t stream = nullptr;
+};
+
+bool CanBatchDeviceToHost(const MusaDataTransfer& impl,
+                          std::span<const TensorCopy> copies,
+                          musaStream_t& batch_stream) {
+  size_t active_copies = 0;
+  for (const TensorCopy& copy : copies) {
+    if (copy.bytes == 0 || copy.src_data == copy.dst_data) {
+      continue;
+    }
+    if (!IsGpuDefault(impl.ep_api_, copy.src_device, impl.vendor_id_) ||
+        IsGpuDefault(impl.ep_api_, copy.dst_device, impl.vendor_id_) ||
+        copy.stream == nullptr) {
+      return false;
+    }
+    if (active_copies == 0) {
+      batch_stream = copy.stream;
+    } else if (copy.stream != batch_stream) {
+      return false;
+    }
+    ++active_copies;
+  }
+  return active_copies != 0;
+}
+
+OrtStatus* CopyDeviceToHostBatch(MusaDataTransfer& impl,
+                                 std::span<const TensorCopy> copies,
+                                 musaStream_t stream) {
+  size_t staging_bytes = 0;
+  for (const TensorCopy& copy : copies) {
+    if (copy.bytes != 0 && copy.src_data != copy.dst_data &&
+        !IsHostAccessible(impl.ep_api_, copy.dst_device, impl.vendor_id_)) {
+      staging_bytes += copy.bytes;
+    }
+  }
+
+  void* staging = staging_bytes != 0 && impl.pinned_host_pool_ != nullptr
+                      ? impl.pinned_host_pool_->Allocate(staging_bytes)
+                      : nullptr;
+  auto* staging_data = static_cast<uint8_t*>(staging);
+  std::vector<size_t> staging_offsets(copies.size(), 0);
+  size_t next_offset = 0;
+  size_t enqueued = 0;
+  for (size_t i = 0; i < copies.size(); ++i) {
+    const TensorCopy& copy = copies[i];
+    if (copy.bytes == 0 || copy.src_data == copy.dst_data) {
+      continue;
+    }
+
+    const bool needs_staging =
+        staging != nullptr &&
+        !IsHostAccessible(impl.ep_api_, copy.dst_device, impl.vendor_id_);
+    void* copy_dst = copy.dst_data;
+    if (needs_staging) {
+      staging_offsets[i] = next_offset;
+      copy_dst = staging_data + next_offset;
+      next_offset += copy.bytes;
+    }
+
+    musaError_t status = musaMemcpyAsync(copy_dst, copy.src_data, copy.bytes,
+                                         musaMemcpyDeviceToHost, stream);
+    if (status != musaSuccess) {
+      if (enqueued != 0) {
+        (void)musaStreamSynchronize(stream);
+      }
+      if (staging != nullptr) {
+        impl.pinned_host_pool_->FreeCompleted(staging);
+      }
+      return MusaStatus(impl.ort_api_, status);
+    }
+    ++enqueued;
+  }
+
+  musaError_t status = musaStreamSynchronize(stream);
+  if (status != musaSuccess) {
+    if (staging != nullptr) {
+      impl.pinned_host_pool_->FreeAsync(staging, stream);
+    }
+    return MusaStatus(impl.ort_api_, status);
+  }
+
+  if (staging != nullptr) {
+    for (size_t i = 0; i < copies.size(); ++i) {
+      const TensorCopy& copy = copies[i];
+      if (copy.bytes != 0 && copy.src_data != copy.dst_data &&
+          !IsHostAccessible(impl.ep_api_, copy.dst_device, impl.vendor_id_)) {
+        std::memcpy(copy.dst_data, staging_data + staging_offsets[i],
+                    copy.bytes);
+      }
+    }
+    impl.pinned_host_pool_->FreeCompleted(staging);
+  }
+  return nullptr;
+}
+
 }  // namespace
 
 bool ORT_API_CALL MusaDataTransfer::CanCopyImpl(
@@ -237,36 +342,46 @@ OrtStatus* ORT_API_CALL MusaDataTransfer::CopyTensorsImpl(
       num_tensors >=
       EnvSizeOrDefault("ORT_MUSA_PAGEABLE_H2D_BOUNCE_MIN_TENSORS", 1024);
 
+  std::vector<TensorCopy> copies;
+  copies.reserve(num_tensors);
   for (size_t i = 0; i < num_tensors; ++i) {
-    const OrtMemoryDevice* src_device =
-        impl.ep_api_.Value_GetMemoryDevice(src_tensors[i]);
-    const OrtMemoryDevice* dst_device =
-        impl.ep_api_.Value_GetMemoryDevice(dst_tensors[i]);
+    TensorCopy copy;
+    copy.src_tensor = src_tensors[i];
+    copy.dst_tensor = dst_tensors[i];
+    copy.src_device = impl.ep_api_.Value_GetMemoryDevice(src_tensors[i]);
+    copy.dst_device = impl.ep_api_.Value_GetMemoryDevice(dst_tensors[i]);
 
-    const void* src_data = nullptr;
-    void* dst_data = nullptr;
-    size_t bytes = 0;
-
-    RETURN_IF_ERROR(impl.ort_api_.GetTensorData(src_tensors[i], &src_data));
     RETURN_IF_ERROR(
-        impl.ort_api_.GetTensorMutableData(dst_tensors[i], &dst_data));
-    RETURN_IF_ERROR(impl.ort_api_.GetTensorSizeInBytes(src_tensors[i], &bytes));
+        impl.ort_api_.GetTensorData(src_tensors[i], &copy.src_data));
+    RETURN_IF_ERROR(
+        impl.ort_api_.GetTensorMutableData(dst_tensors[i], &copy.dst_data));
+    RETURN_IF_ERROR(
+        impl.ort_api_.GetTensorSizeInBytes(src_tensors[i], &copy.bytes));
 
-    musaStream_t stream = nullptr;
     if (streams_ptr != nullptr && streams_ptr[i] != nullptr) {
-      stream = static_cast<musaStream_t>(
+      copy.stream = static_cast<musaStream_t>(
           impl.ort_api_.SyncStream_GetHandle(streams_ptr[i]));
     }
 
-    if (bytes != 0 && src_data != dst_data && stream == nullptr &&
-        IsGpuDefault(impl.ep_api_, src_device, impl.vendor_id_) &&
-        !IsGpuDefault(impl.ep_api_, dst_device, impl.vendor_id_)) {
-      TraceD2hDeviceSynchronize(src_tensors[i], dst_tensors[i], src_data,
-                                dst_data, bytes, i, num_tensors);
+    if (copy.bytes != 0 && copy.src_data != copy.dst_data &&
+        copy.stream == nullptr &&
+        IsGpuDefault(impl.ep_api_, copy.src_device, impl.vendor_id_) &&
+        !IsGpuDefault(impl.ep_api_, copy.dst_device, impl.vendor_id_)) {
+      TraceD2hDeviceSynchronize(copy.src_tensor, copy.dst_tensor, copy.src_data,
+                                copy.dst_data, copy.bytes, i, num_tensors);
     }
+    copies.push_back(copy);
+  }
 
-    RETURN_IF_ERROR(CopyImpl(impl, src_device, dst_device, src_data, dst_data,
-                             bytes, stream, allow_pageable_bounce));
+  musaStream_t batch_stream = nullptr;
+  if (CanBatchDeviceToHost(impl, copies, batch_stream)) {
+    return CopyDeviceToHostBatch(impl, copies, batch_stream);
+  }
+
+  for (const TensorCopy& copy : copies) {
+    RETURN_IF_ERROR(CopyImpl(impl, copy.src_device, copy.dst_device,
+                             copy.src_data, copy.dst_data, copy.bytes,
+                             copy.stream, allow_pageable_bounce));
   }
 
   return nullptr;

@@ -60,3 +60,31 @@ inline std::vector<int64_t> ReadIntTensor(Ort::KernelContext& ctx,
   }
   throw std::runtime_error("expected int32/int64 tensor");
 }
+
+inline std::vector<std::vector<int64_t>> ReadIntTensors(
+    Ort::KernelContext& ctx, std::span<const size_t> indices) {
+  std::vector<Ort::ConstValue> values;
+  values.reserve(indices.size());
+  for (size_t index : indices) {
+    values.push_back(ctx.GetInput(index));
+  }
+
+  std::vector<std::vector<uint8_t>> host_bytes;
+  Ort::ThrowOnError(CopyToHostBatch(values, host_bytes, GetComputeStream(ctx)));
+
+  std::vector<std::vector<int64_t>> results;
+  results.reserve(values.size());
+  for (size_t i = 0; i < values.size(); ++i) {
+    auto info = values[i].GetTensorTypeAndShapeInfo();
+    if (info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+      const auto typed = Span<int64_t>(host_bytes[i]);
+      results.emplace_back(typed.begin(), typed.end());
+    } else if (info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+      const auto typed = Span<int32_t>(host_bytes[i]);
+      results.emplace_back(typed.begin(), typed.end());
+    } else {
+      throw std::runtime_error("expected int32/int64 tensor");
+    }
+  }
+  return results;
+}

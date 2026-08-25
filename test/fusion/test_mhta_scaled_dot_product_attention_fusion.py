@@ -106,6 +106,22 @@ def _mhta_bhsd_nodes():
     ]
 
 
+def _mhta_bshd_boundary_nodes():
+    """UniRank-style BSHD boundary around a BHSD/BHDS attention core."""
+    return [
+        helper.make_node("Transpose", ["Q0"], ["Q"], perm=[0, 2, 1, 3]),
+        helper.make_node("Transpose", ["K0"], ["K"], perm=[0, 2, 3, 1]),
+        helper.make_node("Transpose", ["V0"], ["V"], perm=[0, 2, 1, 3]),
+        helper.make_node("MatMul", ["Q", "K"], ["Score"]),
+        helper.make_node("Mul", ["Score", "scale"], ["Scaled"]),
+        helper.make_node("Add", ["Scaled", "zero_mask"], ["Masked"]),
+        helper.make_node("Div", ["Masked", "temperature"], ["TempScaled"]),
+        helper.make_node("Softmax", ["TempScaled"], ["Prob"], axis=-1),
+        helper.make_node("MatMul", ["Prob", "V"], ["Y"]),
+        helper.make_node("Transpose", ["Y"], ["Out"], perm=[0, 2, 1, 3]),
+    ]
+
+
 def _bf16_initializer(name, values):
     values = np.asarray(values, dtype=np.uint16)
     return helper.make_tensor(
@@ -131,6 +147,58 @@ def _build_bfloat16_mhta_model(feeds, scale, temperature, zero_mask):
             _bf16_initializer("scale", scale),
             _bf16_initializer("temperature", temperature),
             _bf16_initializer("zero_mask", zero_mask),
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
+
+
+def _build_bfloat16_mhta_bshd_boundary_model(
+    feeds, scale, temperature, zero_mask
+):
+    input_vis = [
+        helper.make_tensor_value_info(name, TensorProto.BFLOAT16, value.shape)
+        for name, value in feeds.items()
+    ]
+    graph = helper.make_graph(
+        _mhta_bshd_boundary_nodes(),
+        "mhta_scaled_dot_product_attention_bfloat16_bshd_boundary_graph",
+        input_vis,
+        [
+            helper.make_tensor_value_info(
+                "Out", TensorProto.BFLOAT16, list(feeds["Q0"].shape)
+            )
+        ],
+        initializer=[
+            _bf16_initializer("scale", scale),
+            _bf16_initializer("temperature", temperature),
+            _bf16_initializer("zero_mask", zero_mask),
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
+
+
+def _build_float16_mhta_bshd_boundary_model(feeds, scale, temperature, zero_mask):
+    input_vis = [
+        helper.make_tensor_value_info(name, TensorProto.FLOAT16, value.shape)
+        for name, value in feeds.items()
+    ]
+    graph = helper.make_graph(
+        _mhta_bshd_boundary_nodes(),
+        "mhta_scaled_dot_product_attention_float16_bshd_boundary_graph",
+        input_vis,
+        [
+            helper.make_tensor_value_info(
+                "Out", TensorProto.FLOAT16, list(feeds["Q0"].shape)
+            )
+        ],
+        initializer=[
+            numpy_helper.from_array(scale, name="scale"),
+            numpy_helper.from_array(temperature, name="temperature"),
+            numpy_helper.from_array(zero_mask, name="zero_mask"),
         ],
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
@@ -599,6 +667,100 @@ def test_mhta_scaled_dot_product_attention_bfloat16_runflash():
     np.testing.assert_allclose(
         bfloat16_bits_to_float32(outputs[0]), expected, rtol=6e-2, atol=6e-2
     )
+
+
+def test_mhta_scaled_dot_product_attention_bfloat16_bshd_boundary_runflash(tmp_path):
+    """Absorb UniRank's BSHD<->BHSD/BHDS boundary transposes into SDPA."""
+    rng = np.random.default_rng(47)
+    batch, seqlen, heads, head_dim = 1, 4, 2, 8
+    q_f32 = rng.standard_normal((batch, seqlen, heads, head_dim)).astype(np.float32)
+    k_f32 = rng.standard_normal((batch, seqlen, heads, head_dim)).astype(np.float32)
+    v_f32 = rng.standard_normal((batch, seqlen, heads, head_dim)).astype(np.float32)
+    feeds = {
+        "Q0": float32_to_bfloat16_bits(q_f32),
+        "K0": float32_to_bfloat16_bits(k_f32),
+        "V0": float32_to_bfloat16_bits(v_f32),
+    }
+    scale = float32_to_bfloat16_bits(
+        np.array(1.0 / np.sqrt(head_dim), dtype=np.float32)
+    )
+    temperature = float32_to_bfloat16_bits(np.array(2.0, dtype=np.float32))
+    zero_mask = float32_to_bfloat16_bits(
+        np.zeros((batch, heads, seqlen, seqlen), dtype=np.float32)
+    )
+    model = _build_bfloat16_mhta_bshd_boundary_model(
+        feeds, scale, temperature, zero_mask
+    )
+
+    outputs, events = _profile_musa_session_iobinding(
+        model,
+        feeds,
+        {name: TensorProto.BFLOAT16 for name in feeds},
+        [("Out", TensorProto.BFLOAT16, (batch, seqlen, heads, head_dim))],
+        tmp_path,
+        "mhta_bfloat16_bshd_boundary",
+    )
+    q = bfloat16_bits_to_float32(feeds["Q0"])
+    k = bfloat16_bits_to_float32(feeds["K0"])
+    v = bfloat16_bits_to_float32(feeds["V0"])
+    expected_logical = _reference_sdpa(
+        np.transpose(q, (0, 2, 1, 3)),
+        np.transpose(k, (0, 2, 3, 1)),
+        np.transpose(v, (0, 2, 1, 3)),
+        float(bfloat16_bits_to_float32(scale)),
+        float(bfloat16_bits_to_float32(temperature)),
+    )
+    expected = np.transpose(expected_logical, (0, 2, 1, 3))
+    np.testing.assert_allclose(
+        bfloat16_bits_to_float32(outputs[0]), expected, rtol=6e-2, atol=6e-2
+    )
+
+    musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
+    fused_ops = {op for op in musa_ops if str(op).startswith("MUSAExecutionProvider_")}
+    assert fused_ops
+    assert "Transpose" not in musa_ops
+
+
+def test_mhta_scaled_dot_product_attention_float16_bshd_boundary_runflash(tmp_path):
+    """FP16 coverage for the UniRank BSHD boundary strided RunFlash path."""
+    rng = np.random.default_rng(48)
+    batch, seqlen, heads, head_dim = 1, 4, 2, 8
+    feeds = {
+        "Q0": rng.standard_normal((batch, seqlen, heads, head_dim)).astype(np.float16),
+        "K0": rng.standard_normal((batch, seqlen, heads, head_dim)).astype(np.float16),
+        "V0": rng.standard_normal((batch, seqlen, heads, head_dim)).astype(np.float16),
+    }
+    scale = np.array(1.0 / np.sqrt(head_dim), dtype=np.float16)
+    temperature = np.array(2.0, dtype=np.float16)
+    zero_mask = np.zeros((batch, heads, seqlen, seqlen), dtype=np.float16)
+    model = _build_float16_mhta_bshd_boundary_model(
+        feeds, scale, temperature, zero_mask
+    )
+
+    outputs, events = _profile_musa_session_iobinding(
+        model,
+        feeds,
+        {name: TensorProto.FLOAT16 for name in feeds},
+        [("Out", TensorProto.FLOAT16, (batch, seqlen, heads, head_dim))],
+        tmp_path,
+        "mhta_float16_bshd_boundary",
+    )
+    expected_logical = _reference_sdpa(
+        np.transpose(feeds["Q0"].astype(np.float32), (0, 2, 1, 3)),
+        np.transpose(feeds["K0"].astype(np.float32), (0, 2, 3, 1)),
+        np.transpose(feeds["V0"].astype(np.float32), (0, 2, 1, 3)),
+        float(scale.astype(np.float32)),
+        float(temperature.astype(np.float32)),
+    )
+    expected = np.transpose(expected_logical, (0, 2, 1, 3))
+    np.testing.assert_allclose(
+        outputs[0].astype(np.float32), expected, rtol=6e-2, atol=6e-2
+    )
+
+    musa_ops = _ops_by_provider(events).get("MUSAExecutionProvider", set())
+    fused_ops = {op for op in musa_ops if str(op).startswith("MUSAExecutionProvider_")}
+    assert fused_ops
+    assert "Transpose" not in musa_ops
 
 
 def test_mhta_scaled_dot_product_attention_sim_rank3_fusion(tmp_path):

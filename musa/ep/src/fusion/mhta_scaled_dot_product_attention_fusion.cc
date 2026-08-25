@@ -48,6 +48,53 @@ bool IsOnnxOp(Ort::ConstNode node, const char* op_type) {
   return node.GetOperatorType() == op_type && IsOnnxDomain(node.GetDomain());
 }
 
+bool IsExactTranspose(Ort::ConstNode node,
+                      const std::vector<int64_t>& expected_perm) {
+  const auto perm = musa_ep::GetIntsAttribute(node, "perm");
+  return IsOnnxOp(node, "Transpose") && perm.has_value() &&
+         *perm == expected_perm;
+}
+
+struct BshdBoundaryTransposes {
+  Ort::ConstNode q;
+  Ort::ConstNode k;
+  Ort::ConstNode v;
+  Ort::ConstNode output;
+};
+
+std::optional<BshdBoundaryTransposes> FindBshdBoundaryTransposes(
+    Ort::ConstNode score_matmul, Ort::ConstNode value_matmul) {
+  const auto score_inputs = score_matmul.GetInputs();
+  const auto value_inputs = value_matmul.GetInputs();
+  const auto value_outputs = value_matmul.GetOutputs();
+  if (score_inputs.size() != 2 || value_inputs.size() != 2 ||
+      value_outputs.size() != 1) {
+    return std::nullopt;
+  }
+
+  BshdBoundaryTransposes boundary;
+  if (!musa_ep::GetProducer(score_inputs[0], boundary.q) ||
+      !musa_ep::GetProducer(score_inputs[1], boundary.k) ||
+      !musa_ep::GetProducer(value_inputs[1], boundary.v) ||
+      !IsExactTranspose(boundary.q, {0, 2, 1, 3}) ||
+      !IsExactTranspose(boundary.k, {0, 2, 3, 1}) ||
+      !IsExactTranspose(boundary.v, {0, 2, 1, 3}) ||
+      !musa_ep::HasOnlyConsumer(boundary.q.GetOutputs()[0], score_matmul, 0) ||
+      !musa_ep::HasOnlyConsumer(boundary.k.GetOutputs()[0], score_matmul, 1) ||
+      !musa_ep::HasOnlyConsumer(boundary.v.GetOutputs()[0], value_matmul, 1)) {
+    return std::nullopt;
+  }
+
+  const auto consumers = value_outputs[0].GetConsumers();
+  if (consumers.size() != 1 || consumers[0].index != 0 ||
+      !IsExactTranspose(consumers[0].node, {0, 2, 1, 3}) ||
+      consumers[0].node.GetOutputs().size() != 1) {
+    return std::nullopt;
+  }
+  boundary.output = consumers[0].node;
+  return boundary;
+}
+
 bool IsCastTo(Ort::ConstNode node, ONNXTensorElementDataType elem_type) {
   return IsOnnxOp(node, "Cast") &&
          musa_ep::GetIntAttribute(node, "to").value_or(-1) == elem_type;
@@ -117,6 +164,10 @@ bool ValueComesFromSoftmaxThroughOptionalCasts(
 
 enum class MhtaSdpaLayout {
   kBhsd,
+  // The ONNX boundary is contiguous [B,S,H,D], while muDNN sees a logical
+  // [B,H,S,D] tensor through explicit strides. This avoids materializing the
+  // three input transposes, the output transpose, and the internal K permute.
+  kBshdStridedFlash,
   kSimRank3,
   kFoldedHeadRank3,
 };
@@ -320,6 +371,20 @@ void SetupTensor(::musa::dnn::Tensor& tensor, const void* data,
   }
 }
 
+void SetupTensorWithStrides(::musa::dnn::Tensor& tensor, const void* data,
+                            const std::vector<int64_t>& shape,
+                            const std::vector<int64_t>& strides,
+                            ONNXTensorElementDataType elem_type,
+                            const char* name) {
+  if (shape.size() != strides.size() || shape.empty() ||
+      !SetMudnnTensor(tensor, data, shape, elem_type) ||
+      tensor.SetNdInfo(static_cast<int64_t>(shape.size()), shape.data(),
+                       strides.data()) != ::musa::dnn::Status::SUCCESS) {
+    throw std::runtime_error(
+        std::string("failed to set strided MHTA SDPA tensor ") + name);
+  }
+}
+
 uint16_t FloatToHalfBits(float value) {
   uint32_t bits;
   std::memcpy(&bits, &value, sizeof(bits));
@@ -440,6 +505,8 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
 
     const bool sim_rank3 = layout_ == MhtaSdpaLayout::kSimRank3;
     const bool folded_rank3 = layout_ == MhtaSdpaLayout::kFoldedHeadRank3;
+    const bool bshd_strided_flash =
+        layout_ == MhtaSdpaLayout::kBshdStridedFlash;
     std::vector<int64_t> output_shape;
     if (sim_rank3) {
       if (q_shape.size() != 4 || k_shape.size() != 4 || v_shape.size() != 4) {
@@ -470,6 +537,23 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
             "V[BH,Sk,D]");
       }
       output_shape = {q_shape[0], q_shape[1], v_shape[2]};
+    } else if (bshd_strided_flash) {
+      if (q_shape.size() != 4 || k_shape.size() != 4 || v_shape.size() != 4) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT,
+            "MHTA SDPA strided Flash layout requires 4D Q/K/V inputs");
+      }
+      if (q_shape[0] != k_shape[0] || q_shape[0] != v_shape[0] ||
+          q_shape[1] != k_shape[1] || q_shape[1] != v_shape[1] ||
+          q_shape[2] != k_shape[2] || q_shape[2] != v_shape[2] ||
+          q_shape[3] != k_shape[3] || q_shape[3] != v_shape[3]) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT,
+            "MHTA SDPA strided Flash layout expects Q/K/V [B,S,H,D]");
+      }
+      // The fused output is the output of ONNX Transpose [0,2,1,3], hence
+      // remains a normal contiguous [B,S,H,D] OrtValue.
+      output_shape = q_shape;
     } else {
       if (q_shape.size() != 4 || k_shape.size() != 4 || v_shape.size() != 4) {
         return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
@@ -493,11 +577,20 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
 
     const int64_t batch = q_shape[0];
     const int64_t heads =
-        sim_rank3 ? q_shape[2] : (folded_rank3 ? 1 : q_shape[1]);
+        sim_rank3
+            ? q_shape[2]
+            : (folded_rank3 ? 1
+                            : (bshd_strided_flash ? q_shape[2] : q_shape[1]));
     const int64_t seqlen_q =
-        sim_rank3 ? q_shape[1] : (folded_rank3 ? q_shape[1] : q_shape[2]);
+        sim_rank3
+            ? q_shape[1]
+            : (folded_rank3 ? q_shape[1]
+                            : (bshd_strided_flash ? q_shape[1] : q_shape[2]));
     const int64_t seqlen_k =
-        sim_rank3 ? k_shape[1] : (folded_rank3 ? k_shape[2] : k_shape[3]);
+        sim_rank3
+            ? k_shape[1]
+            : (folded_rank3 ? k_shape[2]
+                            : (bshd_strided_flash ? k_shape[1] : k_shape[3]));
     const int64_t head_dim =
         sim_rank3 ? q_shape[3] : (folded_rank3 ? q_shape[2] : q_shape[3]);
     if (batch <= 0 || heads <= 0 || seqlen_q <= 0 || seqlen_k <= 0 ||
@@ -632,6 +725,10 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       sdpa_k_shape = {batch, heads, head_dim, seqlen_k};
       sdpa_v_shape = {batch, heads, seqlen_k, head_dim};
       sdpa_key_format_bhds = true;
+    } else if (bshd_strided_flash) {
+      sdpa_q_shape = {batch, heads, seqlen_q, head_dim};
+      sdpa_k_shape = sdpa_q_shape;
+      sdpa_v_shape = sdpa_q_shape;
     } else {
       // FlashAttention consumes K in BHSD.  The MatMul graph provides BHDS.
       sdpa_k_shape = {batch, heads, seqlen_k, head_dim};
@@ -736,14 +833,32 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
 
     ::musa::dnn::Tensor q_tensor, k_tensor, v_tensor, mask_tensor, out_tensor,
         lse_tensor, dropout_tensor;
-    SetupTensor(q_tensor, q_data, sdpa_q_shape, elem_type, "Q");
-    SetupTensor(k_tensor, k_data, sdpa_k_shape, elem_type, "K");
-    SetupTensor(v_tensor, v_buffer.data(), sdpa_v_shape, elem_type, "V");
+    if (bshd_strided_flash) {
+      const std::vector<int64_t> bshd_strides = {seqlen_q * heads * head_dim,
+                                                 head_dim, heads * head_dim, 1};
+      SetupTensorWithStrides(q_tensor, q_data, sdpa_q_shape, bshd_strides,
+                             elem_type, "Q");
+      SetupTensorWithStrides(k_tensor, k_data, sdpa_k_shape, bshd_strides,
+                             elem_type, "K");
+      SetupTensorWithStrides(v_tensor, v_buffer.data(), sdpa_v_shape,
+                             bshd_strides, elem_type, "V");
+    } else {
+      SetupTensor(q_tensor, q_data, sdpa_q_shape, elem_type, "Q");
+      SetupTensor(k_tensor, k_data, sdpa_k_shape, elem_type, "K");
+      SetupTensor(v_tensor, v_buffer.data(), sdpa_v_shape, elem_type, "V");
+    }
     SetupTensor(mask_tensor, mask_data, active_mask_shape, active_mask_type,
                 "mask");
-    SetupTensor(out_tensor, output.GetTensorMutableData<void>(),
-                (sim_rank3 || folded_rank3) ? sdpa_q_shape : output_shape,
-                elem_type, "output");
+    if (bshd_strided_flash) {
+      const std::vector<int64_t> bshd_strides = {seqlen_q * heads * head_dim,
+                                                 head_dim, heads * head_dim, 1};
+      SetupTensorWithStrides(out_tensor, output.GetTensorMutableData<void>(),
+                             sdpa_q_shape, bshd_strides, elem_type, "output");
+    } else {
+      SetupTensor(out_tensor, output.GetTensorMutableData<void>(),
+                  (sim_rank3 || folded_rank3) ? sdpa_q_shape : output_shape,
+                  elem_type, "output");
+    }
     DeviceBuffer& lse = scratch.lse;
     lse.Resize(static_cast<size_t>(batch * heads * seqlen_q) * sizeof(float),
                stream);
@@ -836,6 +951,9 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
   size_t clip_count = 0;
   size_t range_count = 0;
   size_t less_count = 0;
+  size_t transpose_count = 0;
+  size_t transpose_0213_count = 0;
+  size_t transpose_0231_count = 0;
   for (Ort::ConstNode node : graph.GetNodes()) {
     if (IsOnnxOp(node, "MatMul")) {
       ++matmul_count;
@@ -873,6 +991,17 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
       ++range_count;
     } else if (IsOnnxOp(node, "Less")) {
       ++less_count;
+    } else if (IsOnnxOp(node, "Transpose")) {
+      ++transpose_count;
+      const auto perm = musa_ep::GetIntsAttribute(node, "perm");
+      if (!perm.has_value()) return false;
+      if (*perm == std::vector<int64_t>{0, 2, 1, 3}) {
+        ++transpose_0213_count;
+      } else if (*perm == std::vector<int64_t>{0, 2, 3, 1}) {
+        ++transpose_0231_count;
+      } else {
+        return false;
+      }
     } else {
       return false;
     }
@@ -908,7 +1037,12 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
       cast_count == 0 && unsqueeze_count == 2 && reshape_count == 0 &&
       shape_count == 1 && gather_count == 1 && sub_count == 1 &&
       clip_count == 1 && range_count == 1 && less_count == 1;
-  return simple_bhsd || boolean_bhsd || sim_rank3 || lseq_premask_rank3;
+  const bool no_boundary_transpose = transpose_count == 0;
+  const bool bshd_boundary_transpose = transpose_count == 4 &&
+                                       transpose_0213_count == 3 &&
+                                       transpose_0231_count == 1;
+  return (simple_bhsd || boolean_bhsd || sim_rank3 || lseq_premask_rank3) &&
+         (no_boundary_transpose || bshd_boundary_transpose);
 }
 
 std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
@@ -1038,6 +1172,17 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
       boolean_mask_int32 = true;
     }
     const float scale = ReadScalarFloatAttributeInput(mul_inputs[1]);
+    const auto boundary =
+        FindBshdBoundaryTransposes(score_matmul, value_matmul);
+    if (boundary.has_value()) {
+      return std::make_unique<MhtaScaledDotProductAttentionFusionCompute>(
+          InputIndex(fused_indices, boundary->q.GetInputs()[0]),
+          InputIndex(fused_indices, boundary->k.GetInputs()[0]),
+          InputIndex(fused_indices, boundary->v.GetInputs()[0]),
+          InputIndex(fused_indices, mask_input), scale, 0.0f,
+          MhtaSdpaLayout::kBshdStridedFlash, true, boolean_mask_int32,
+          mask_end_index, static_mask_end);
+    }
     return std::make_unique<MhtaScaledDotProductAttentionFusionCompute>(
         InputIndex(fused_indices, score_inputs[0]),
         InputIndex(fused_indices, score_inputs[1]),
@@ -1261,6 +1406,16 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
   std::vector<Ort::ConstValueInfo> score_inputs = score_matmul.GetInputs();
   std::vector<Ort::ConstValueInfo> value_inputs = value_matmul.GetInputs();
   const size_t mask_input_index = static_cast<size_t>(1 - add_score_index);
+  const auto boundary = FindBshdBoundaryTransposes(score_matmul, value_matmul);
+  if (boundary.has_value()) {
+    return std::make_unique<MhtaScaledDotProductAttentionFusionCompute>(
+        InputIndex(fused_indices, boundary->q.GetInputs()[0]),
+        InputIndex(fused_indices, boundary->k.GetInputs()[0]),
+        InputIndex(fused_indices, boundary->v.GetInputs()[0]),
+        InputIndex(fused_indices, add_inputs[mask_input_index]),
+        scale / temperature, 1.0f / temperature,
+        MhtaSdpaLayout::kBshdStridedFlash);
+  }
   return std::make_unique<MhtaScaledDotProductAttentionFusionCompute>(
       InputIndex(fused_indices, score_inputs[0]),
       InputIndex(fused_indices, score_inputs[1]),

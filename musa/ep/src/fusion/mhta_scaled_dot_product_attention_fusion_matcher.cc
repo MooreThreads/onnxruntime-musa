@@ -114,6 +114,124 @@ bool IsFloat32TensorValueInfo(Ort::ConstValueInfo value_info) {
              ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
 }
 
+bool IsExactTranspose(Ort::ConstNode node,
+                      const std::vector<int64_t>& expected_perm) {
+  const auto perm = GetIntsAttribute(node, "perm");
+  return IsOnnxOp(node, "Transpose") && perm.has_value() &&
+         *perm == expected_perm;
+}
+
+bool IsBshdBoundaryShape(const std::vector<int64_t>& shape) {
+  return shape.size() == 4;
+}
+
+bool BshdBoundaryShapesAreSupported(Ort::ConstValueInfo q,
+                                    Ort::ConstValueInfo k,
+                                    Ort::ConstValueInfo v,
+                                    Ort::ConstValueInfo output) {
+  if (!HasSameMhtaSdpaDataType(q, k) || !HasSameMhtaSdpaDataType(q, v) ||
+      !HasSameMhtaSdpaDataType(q, output)) {
+    return false;
+  }
+  const auto elem_type =
+      q.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType();
+  if (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
+      elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
+    return false;
+  }
+  const auto q_shape = GetTensorShape(q);
+  const auto k_shape = GetTensorShape(k);
+  const auto v_shape = GetTensorShape(v);
+  const auto output_shape = GetTensorShape(output);
+  if (!q_shape.has_value() || !k_shape.has_value() || !v_shape.has_value() ||
+      !output_shape.has_value() || !IsBshdBoundaryShape(*q_shape) ||
+      !IsBshdBoundaryShape(*k_shape) || !IsBshdBoundaryShape(*v_shape) ||
+      !IsBshdBoundaryShape(*output_shape)) {
+    return false;
+  }
+
+  // The four absorbed nodes expose ordinary contiguous [B,S,H,D] buffers at
+  // the fusion boundary. The SDPA core still consumes logical [B,H,S,D].
+  return KnownDimsEqual((*q_shape)[0], (*k_shape)[0]) &&
+         KnownDimsEqual((*q_shape)[0], (*v_shape)[0]) &&
+         KnownDimsEqual((*q_shape)[1], (*k_shape)[1]) &&
+         KnownDimsEqual((*q_shape)[1], (*v_shape)[1]) &&
+         KnownDimsEqual((*q_shape)[2], (*k_shape)[2]) &&
+         KnownDimsEqual((*q_shape)[2], (*v_shape)[2]) &&
+         KnownDimsEqual((*q_shape)[3], (*k_shape)[3]) &&
+         KnownDimsEqual((*q_shape)[3], (*v_shape)[3]) &&
+         KnownDimsEqual((*output_shape)[0], (*q_shape)[0]) &&
+         KnownDimsEqual((*output_shape)[1], (*q_shape)[1]) &&
+         KnownDimsEqual((*output_shape)[2], (*q_shape)[2]) &&
+         KnownDimsEqual((*output_shape)[3], (*q_shape)[3]);
+}
+
+// Absorb the exact UniRank rank-4 boundary layout when all four transposes
+// are private to this attention core. The helper deliberately leaves the
+// existing core-only fusion intact when the bundle is absent or unsupported.
+void TryAppendBshdBoundaryTransposes(
+    Ort::ConstNode score_matmul, Ort::ConstNode value_matmul,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_set<size_t>& accepted_node_ids,
+    std::unordered_set<size_t>& selected_node_ids,
+    std::vector<Ort::ConstNode>& fusion_nodes) {
+  const auto score_inputs = score_matmul.GetInputs();
+  const auto value_inputs = value_matmul.GetInputs();
+  const auto value_outputs = value_matmul.GetOutputs();
+  if (score_inputs.size() != 2 || value_inputs.size() != 2 ||
+      value_outputs.size() != 1 ||
+      graph_output_names.count(Name(value_outputs[0])) != 0) {
+    return;
+  }
+
+  Ort::ConstNode q_transpose{nullptr};
+  Ort::ConstNode k_transpose{nullptr};
+  Ort::ConstNode v_transpose{nullptr};
+  if (!GetProducer(score_inputs[0], q_transpose) ||
+      !GetProducer(score_inputs[1], k_transpose) ||
+      !GetProducer(value_inputs[1], v_transpose) ||
+      !IsExactTranspose(q_transpose, {0, 2, 1, 3}) ||
+      !IsExactTranspose(k_transpose, {0, 2, 3, 1}) ||
+      !IsExactTranspose(v_transpose, {0, 2, 1, 3}) ||
+      graph_output_names.count(Name(q_transpose.GetOutputs()[0])) != 0 ||
+      graph_output_names.count(Name(k_transpose.GetOutputs()[0])) != 0 ||
+      graph_output_names.count(Name(v_transpose.GetOutputs()[0])) != 0 ||
+      !HasOnlyConsumer(q_transpose.GetOutputs()[0], score_matmul, 0) ||
+      !HasOnlyConsumer(k_transpose.GetOutputs()[0], score_matmul, 1) ||
+      !HasOnlyConsumer(v_transpose.GetOutputs()[0], value_matmul, 1)) {
+    return;
+  }
+
+  const auto consumers = value_outputs[0].GetConsumers();
+  if (consumers.size() != 1 || !IsOnnxOp(consumers[0].node, "Transpose") ||
+      !IsExactTranspose(consumers[0].node, {0, 2, 1, 3}) ||
+      consumers[0].index != 0 ||
+      !BshdBoundaryShapesAreSupported(
+          q_transpose.GetInputs()[0], k_transpose.GetInputs()[0],
+          v_transpose.GetInputs()[0], consumers[0].node.GetOutputs()[0])) {
+    return;
+  }
+  Ort::ConstNode output_transpose = consumers[0].node;
+  if (output_transpose.GetOutputs().size() != 1) return;
+
+  std::vector<Ort::ConstNode> candidate_nodes = {q_transpose, k_transpose,
+                                                 v_transpose, output_transpose};
+  std::vector<Ort::ConstNode> expanded_nodes = fusion_nodes;
+  std::unordered_set<size_t> expanded_selected = selected_node_ids;
+  for (Ort::ConstNode node : candidate_nodes) {
+    if (!AddFusionNode(node, accepted_node_ids, expanded_selected,
+                       expanded_nodes)) {
+      return;
+    }
+  }
+  if (!FusionHasNoExternalPathBetweenSelectedNodes(expanded_nodes,
+                                                   expanded_selected)) {
+    return;
+  }
+  fusion_nodes = std::move(expanded_nodes);
+  selected_node_ids = std::move(expanded_selected);
+}
+
 bool IsCastTo(Ort::ConstNode node, ONNXTensorElementDataType elem_type) {
   return IsOnnxOp(node, "Cast") &&
          GetIntAttribute(node, "to").value_or(-1) == elem_type;
@@ -446,6 +564,14 @@ bool CanFuseMhtaScaledDotProductAttention(
 
   fusion_nodes = {score_matmul, mul_node,     add_node,
                   div_node,     softmax_node, value_matmul};
+  std::unordered_set<size_t> selected;
+  for (Ort::ConstNode node : fusion_nodes) selected.insert(node.GetId());
+  TryAppendBshdBoundaryTransposes(score_matmul, value_matmul,
+                                  graph_output_names, accepted_node_ids,
+                                  selected, fusion_nodes);
+  if (!FusionHasNoExternalPathBetweenSelectedNodes(fusion_nodes, selected)) {
+    return false;
+  }
   return true;
 }
 
@@ -679,6 +805,9 @@ bool CanFuseBooleanMhtaScaledDotProductAttention(
                                           selected, fusion_nodes)) {
     return false;
   }
+  TryAppendBshdBoundaryTransposes(score_matmul, value_matmul,
+                                  graph_output_names, accepted_node_ids,
+                                  selected, fusion_nodes);
   return FusionHasNoExternalPathBetweenSelectedNodes(fusion_nodes, selected);
 }
 

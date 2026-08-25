@@ -10,4 +10,6 @@ musaError_t LaunchMusaGemmPostFloatKernel(
 musaError_t LaunchMusaGemmPostKernel(
     void* output, const void* bias, MusaBroadcastParams params, bool has_bias,
     float beta, MusaUnaryOp activation, bool has_activation,
-    float activation_alpha, MusaElementType elem_type, musaStream_t stream);
+    float activation_alpha, MusaElementType elem_type, musaStream_t stream,
+    MusaGemmPostBroadcast broadcast = MusaGemmPostBroadcast::Generic,
+    int64_t broadcast_inner_size = 0);

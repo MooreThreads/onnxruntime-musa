@@ -223,10 +223,14 @@ OrtStatus* RunDeviceFusedGemm(
                                       "unsupported FusedGemm dtype");
   }
 
+  int64_t broadcast_inner_size = 0;
+  const MusaGemmPostBroadcast broadcast =
+      ClassifyGemmPostBroadcast(y_shape, c_shape, broadcast_inner_size);
   MusaBroadcastParams params = MakeBroadcastParams(y_shape, y_shape, c_shape);
   return LaunchStatus(LaunchMusaGemmPostKernel(
       y_data, c_data, params, has_bias, beta, activation_op, has_activation,
-      activation_alpha, musa_elem_type, stream));
+      activation_alpha, musa_elem_type, stream, broadcast,
+      broadcast_inner_size));
 }
 
 struct LinearFusionComputeBase : FusionNodeCompute {

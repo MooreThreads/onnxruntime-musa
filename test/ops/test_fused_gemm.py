@@ -128,6 +128,72 @@ def test_fused_gemm_double_relu():
     np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-10)
 
 
+def test_fused_gemm_double_row_vector_bias_relu():
+    """Exercise the [1, N] GEMM post bias path with the double fallback."""
+    rng = np.random.default_rng(6)
+    a = rng.standard_normal((4, 8)).astype(np.float64)
+    b = rng.standard_normal((8, 5)).astype(np.float64)
+    c = rng.standard_normal((1, 5)).astype(np.float64)
+    expected = np.maximum(a @ b + c, 0.0)
+    model = build_model_with_input_types(
+        "FusedGemm",
+        inputs={"A": a, "B": b, "C": c},
+        input_types={
+            "A": TensorProto.DOUBLE,
+            "B": TensorProto.DOUBLE,
+            "C": TensorProto.DOUBLE,
+        },
+        outputs=[("Y", TensorProto.DOUBLE)],
+        attrs={"alpha": 1.0, "beta": 1.0, "activation": "Relu"},
+        domain="com.microsoft",
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        {"A": a, "B": b, "C": c},
+        {
+            "A": TensorProto.DOUBLE,
+            "B": TensorProto.DOUBLE,
+            "C": TensorProto.DOUBLE,
+        },
+        [("Y", TensorProto.DOUBLE, expected.shape)],
+        use_musa=True,
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-10)
+
+
+def test_fused_gemm_double_full_matrix_bias_relu():
+    """Exercise the [M, N] full-output bias path with the double fallback."""
+    rng = np.random.default_rng(7)
+    a = rng.standard_normal((4, 8)).astype(np.float64)
+    b = rng.standard_normal((8, 5)).astype(np.float64)
+    c = rng.standard_normal((4, 5)).astype(np.float64)
+    expected = np.maximum(a @ b + c, 0.0)
+    model = build_model_with_input_types(
+        "FusedGemm",
+        inputs={"A": a, "B": b, "C": c},
+        input_types={
+            "A": TensorProto.DOUBLE,
+            "B": TensorProto.DOUBLE,
+            "C": TensorProto.DOUBLE,
+        },
+        outputs=[("Y", TensorProto.DOUBLE)],
+        attrs={"alpha": 1.0, "beta": 1.0, "activation": "Relu"},
+        domain="com.microsoft",
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        {"A": a, "B": b, "C": c},
+        {
+            "A": TensorProto.DOUBLE,
+            "B": TensorProto.DOUBLE,
+            "C": TensorProto.DOUBLE,
+        },
+        [("Y", TensorProto.DOUBLE, expected.shape)],
+        use_musa=True,
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-10)
+
+
 def test_fused_gemm_float16_relu():
     rng = np.random.default_rng(6)
     a = rng.standard_normal((4, 8)).astype(np.float16)

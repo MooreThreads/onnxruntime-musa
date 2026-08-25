@@ -61,6 +61,16 @@ enum class MusaElementType : int32_t {
   BFloat16 = 16,
 };
 
+// GEMM post-processing can avoid generic broadcast index resolution for the
+// bias layouts emitted by the GEMM fusions. Keep this separate from
+// MusaBroadcastParams because the latter is shared by all elementwise ops.
+enum class MusaGemmPostBroadcast : int32_t {
+  Generic = 0,
+  Scalar = 1,
+  LastDim = 2,
+  Full = 3,
+};
+
 enum class MusaReduceOp : int32_t {
   Prod = 0,
   Sum = 1,

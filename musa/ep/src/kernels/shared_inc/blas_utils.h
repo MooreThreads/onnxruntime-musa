@@ -604,9 +604,13 @@ inline OrtStatus* GemmCompute(Ort::KernelContext& ctx, bool trans_a,
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "unsupported Gemm dtype");
   }
+  int64_t broadcast_inner_size = 0;
+  const MusaGemmPostBroadcast broadcast =
+      ClassifyGemmPostBroadcast(out_shape, c_shape, broadcast_inner_size);
   MusaBroadcastParams params =
       MakeBroadcastParams(out_shape, out_shape, c_shape);
   return LaunchStatus(LaunchMusaGemmPostKernel(
       y_data, c_data, params, has_bias, beta, activation_op, has_activation,
-      activation_alpha, musa_elem_type, stream));
+      activation_alpha, musa_elem_type, stream, broadcast,
+      broadcast_inner_size));
 }

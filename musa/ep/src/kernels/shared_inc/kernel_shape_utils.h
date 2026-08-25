@@ -178,6 +178,37 @@ inline MusaBroadcastParams MakeBroadcastParams(
   return params;
 }
 
+// Classify the bias layouts produced by Gemm/FusedGemm. These modes let the
+// post kernel use direct indexing for the common [N], [1,N], and full output
+// shapes while retaining the generic broadcast fallback for all other valid
+// ONNX broadcasts.
+inline MusaGemmPostBroadcast ClassifyGemmPostBroadcast(
+    const std::vector<int64_t>& out_shape,
+    const std::vector<int64_t>& bias_shape, int64_t& inner_size) {
+  inner_size = 0;
+  if (bias_shape.empty() || out_shape.empty()) {
+    return MusaGemmPostBroadcast::Generic;
+  }
+
+  const int64_t last_dim = out_shape.back();
+  if (last_dim <= 0) {
+    return MusaGemmPostBroadcast::Generic;
+  }
+  if (NumElements(bias_shape) == 1) {
+    return MusaGemmPostBroadcast::Scalar;
+  }
+  if ((bias_shape.size() == 1 && bias_shape[0] == last_dim) ||
+      (bias_shape.size() == 2 && bias_shape[0] == 1 &&
+       bias_shape[1] == last_dim)) {
+    inner_size = last_dim;
+    return MusaGemmPostBroadcast::LastDim;
+  }
+  if (bias_shape == out_shape) {
+    return MusaGemmPostBroadcast::Full;
+  }
+  return MusaGemmPostBroadcast::Generic;
+}
+
 struct MusaMudnnBroadcastShapes {
   std::vector<int64_t> output;
   std::vector<int64_t> lhs;

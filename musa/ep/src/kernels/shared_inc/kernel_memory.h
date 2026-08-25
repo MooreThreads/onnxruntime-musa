@@ -25,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -374,6 +375,99 @@ class DeviceInputBuffer {
   musaStream_t stream_ = nullptr;
 };
 
+struct DeviceToHostCopy {
+  const void* src = nullptr;
+  void* dst = nullptr;
+  size_t bytes = 0;
+};
+
+inline OrtStatus* CopyDeviceToHostBatch(
+    std::span<const DeviceToHostCopy> copies, musaStream_t stream = nullptr) {
+  if (copies.empty()) {
+    return nullptr;
+  }
+
+  if (stream == nullptr) {
+    for (const DeviceToHostCopy& copy : copies) {
+      musaError_t status =
+          musaMemcpy(copy.dst, copy.src, copy.bytes, musaMemcpyDeviceToHost);
+      if (status != musaSuccess) {
+        return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+      }
+    }
+    return nullptr;
+  }
+
+  size_t staging_bytes = 0;
+  for (const DeviceToHostCopy& copy : copies) {
+    staging_bytes += copy.bytes;
+  }
+
+  PinnedHostPool* pool = GetKernelPinnedHostPool();
+  void* staging = pool != nullptr ? pool->Allocate(staging_bytes) : nullptr;
+  auto* staging_bytes_ptr = static_cast<uint8_t*>(staging);
+  size_t offset = 0;
+  size_t enqueued = 0;
+  for (const DeviceToHostCopy& copy : copies) {
+    void* copy_dst = staging != nullptr ? staging_bytes_ptr + offset : copy.dst;
+    musaError_t status = musaMemcpyAsync(copy_dst, copy.src, copy.bytes,
+                                         musaMemcpyDeviceToHost, stream);
+    if (status != musaSuccess) {
+      if (enqueued != 0) {
+        (void)musaStreamSynchronize(stream);
+      }
+      if (staging != nullptr) {
+        pool->FreeCompleted(staging);
+      }
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+    }
+    ++enqueued;
+    offset += copy.bytes;
+  }
+
+  musaError_t status = musaStreamSynchronize(stream);
+  if (status != musaSuccess) {
+    if (staging != nullptr) {
+      pool->FreeAsync(staging, stream);
+    }
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
+  }
+
+  if (staging != nullptr) {
+    offset = 0;
+    for (const DeviceToHostCopy& copy : copies) {
+      std::memcpy(copy.dst, staging_bytes_ptr + offset, copy.bytes);
+      offset += copy.bytes;
+    }
+    pool->FreeCompleted(staging);
+  }
+  return nullptr;
+}
+
+inline OrtStatus* CopyToHostBatch(std::span<const Ort::ConstValue> values,
+                                  std::vector<std::vector<uint8_t>>& host_bytes,
+                                  musaStream_t stream = nullptr) {
+  host_bytes.clear();
+  host_bytes.resize(values.size());
+  std::vector<DeviceToHostCopy> device_copies;
+  device_copies.reserve(values.size());
+  for (size_t i = 0; i < values.size(); ++i) {
+    const size_t num_bytes = values[i].GetTensorSizeInBytes();
+    host_bytes[i].resize(num_bytes);
+    if (num_bytes == 0) {
+      continue;
+    }
+
+    const void* src = values[i].GetTensorRawData();
+    if (IsGpuMemory(values[i].GetTensorMemoryInfo())) {
+      device_copies.push_back({src, host_bytes[i].data(), num_bytes});
+    } else {
+      std::memcpy(host_bytes[i].data(), src, num_bytes);
+    }
+  }
+  return CopyDeviceToHostBatch(device_copies, stream);
+}
+
 inline OrtStatus* CopyToHost(Ort::ConstValue value, std::vector<uint8_t>& bytes,
                              musaStream_t stream = nullptr) {
   size_t num_bytes = value.GetTensorSizeInBytes();
@@ -384,17 +478,8 @@ inline OrtStatus* CopyToHost(Ort::ConstValue value, std::vector<uint8_t>& bytes,
 
   const void* src = value.GetTensorRawData();
   if (IsGpuMemory(value.GetTensorMemoryInfo())) {
-    musaError_t status =
-        stream != nullptr
-            ? musaMemcpyAsync(bytes.data(), src, num_bytes,
-                              musaMemcpyDeviceToHost, stream)
-            : musaMemcpy(bytes.data(), src, num_bytes, musaMemcpyDeviceToHost);
-    if (status == musaSuccess && stream != nullptr) {
-      status = musaStreamSynchronize(stream);
-    }
-    if (status != musaSuccess) {
-      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
-    }
+    const DeviceToHostCopy copy{src, bytes.data(), num_bytes};
+    RETURN_IF_ERROR(CopyDeviceToHostBatch(std::span{&copy, size_t{1}}, stream));
   } else {
     std::memcpy(bytes.data(), src, num_bytes);
   }
@@ -441,17 +526,8 @@ inline OrtStatus* CopyRawTensor(Ort::ConstValue src_value,
       return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
     }
   } else if (src_gpu) {
-    musaError_t status =
-        stream != nullptr
-            ? musaMemcpyAsync(dst, src, num_bytes, musaMemcpyDeviceToHost,
-                              stream)
-            : musaMemcpy(dst, src, num_bytes, musaMemcpyDeviceToHost);
-    if (status == musaSuccess && stream != nullptr) {
-      status = musaStreamSynchronize(stream);
-    }
-    if (status != musaSuccess) {
-      return Ort::GetApi().CreateStatus(ORT_EP_FAIL, MusaErrorString(status));
-    }
+    const DeviceToHostCopy copy{src, dst, num_bytes};
+    RETURN_IF_ERROR(CopyDeviceToHostBatch(std::span{&copy, size_t{1}}, stream));
   } else if (dst_gpu) {
     RETURN_IF_ERROR(CopyTemporaryHostToDevice(dst, src, num_bytes, stream));
   } else {

@@ -14,8 +14,17 @@
 
 import numpy as np
 import pytest
+from onnx import helper
 
-from op_test_utils import TensorProto, build_model_with_input_types, float32_to_bfloat16_bits, run_and_compare, run_with_iobinding
+from op_test_utils import (
+    TensorProto,
+    build_graph_model,
+    build_model_with_input_types,
+    float32_to_bfloat16_bits,
+    run,
+    run_and_compare,
+    run_with_iobinding,
+)
 
 
 @pytest.mark.parametrize(
@@ -60,6 +69,41 @@ def test_slice_2d():
         inputs={"data": data, "starts": starts, "ends": ends, "axes": axes, "steps": steps},
         outputs=[("Y", TensorProto.FLOAT)],
     )
+
+
+def test_slice_batches_device_produced_parameters():
+    data = np.arange(4 * 8, dtype=np.float32).reshape(4, 8)
+    feeds = {
+        "data": data,
+        "starts": np.array([1], dtype=np.int64),
+        "ends": np.array([7], dtype=np.int64),
+        "axes": np.array([1], dtype=np.int64),
+        "steps": np.array([2], dtype=np.int64),
+        "zero": np.array([0], dtype=np.int64),
+    }
+    nodes = []
+    for name in ("starts", "ends", "axes", "steps"):
+        nodes.append(helper.make_node("Add", [name, "zero"], [f"{name}_device"]))
+    nodes.append(
+        helper.make_node(
+            "Slice",
+            [
+                "data",
+                "starts_device",
+                "ends_device",
+                "axes_device",
+                "steps_device",
+            ],
+            ["Y"],
+        )
+    )
+    model = build_graph_model(
+        nodes, feeds, [("Y", TensorProto.FLOAT)], name="slice_device_parameters"
+    )
+
+    (expected,) = run(model, feeds, use_musa=False)
+    (actual,) = run(model, feeds, use_musa=True)
+    np.testing.assert_array_equal(actual, expected)
 
 
 def test_slice_with_step():

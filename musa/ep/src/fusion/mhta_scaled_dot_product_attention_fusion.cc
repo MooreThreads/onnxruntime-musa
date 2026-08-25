@@ -180,18 +180,28 @@ void ValidateMhtaSdpaTensor(Ort::ConstValue value, const char* name) {
 class DeviceBuffer {
  public:
   ~DeviceBuffer() {
+    // These buffers are retained in a thread-local, stream-keyed scratch
+    // cache. The owning stream is synchronized by ORT before stream teardown;
+    // use a direct free here so a stale stream handle is never used during
+    // thread-local destruction.
     if (ptr_ != nullptr) (void)musaFree(ptr_);
   }
   DeviceBuffer() = default;
   DeviceBuffer(const DeviceBuffer&) = delete;
   DeviceBuffer& operator=(const DeviceBuffer&) = delete;
 
-  void Resize(size_t bytes) {
-    if (bytes <= bytes_) return;
-    if (ptr_ != nullptr) (void)musaFree(ptr_);
+  void Resize(size_t bytes, musaStream_t stream) {
+    if (bytes <= bytes_ && stream == stream_) return;
+    if (ptr_ != nullptr) {
+      FreeDeviceMemoryOnStream(ptr_, stream_, bytes_);
+    }
     ptr_ = nullptr;
     bytes_ = 0;
-    if (bytes != 0 && musaMalloc(&ptr_, bytes) != musaSuccess) {
+    stream_ = stream;
+    if (bytes != 0) {
+      ptr_ = AllocateDeviceMemoryOnStream(bytes, stream_);
+    }
+    if (bytes != 0 && ptr_ == nullptr) {
       throw std::runtime_error(MusaErrorString(musaErrorMemoryAllocation));
     }
     bytes_ = bytes;
@@ -201,7 +211,31 @@ class DeviceBuffer {
  private:
   void* ptr_ = nullptr;
   size_t bytes_ = 0;
+  musaStream_t stream_ = nullptr;
 };
+
+struct MhtaScratch {
+  DeviceBuffer q_transposed;
+  DeviceBuffer k_transposed;
+  DeviceBuffer mask_materialized;
+  DeviceBuffer scalar;
+  DeviceBuffer lse;
+  DeviceBuffer attn_probs;
+};
+
+// A stream executes its graph nodes in order, so these workspaces can be
+// reused by successive MHTA nodes on that stream. Keeping the cache thread
+// local avoids a mutex in the hot path; ORT does not concurrently execute two
+// kernels on the same compute stream.
+MhtaScratch& MhtaScratchForStream(musaStream_t stream) {
+  thread_local std::unordered_map<musaStream_t, std::unique_ptr<MhtaScratch>>
+      scratch_by_stream;
+  auto& scratch = scratch_by_stream[stream];
+  if (!scratch) {
+    scratch = std::make_unique<MhtaScratch>();
+  }
+  return *scratch;
+}
 
 struct MhtaMaskCacheEntry {
   DeviceBuffer buffer;
@@ -550,10 +584,11 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       return nullptr;
     }
 
-    DeviceBuffer q_transposed;
-    DeviceBuffer k_transposed;
-    DeviceBuffer mask_materialized;
-    DeviceBuffer scalar;
+    MhtaScratch& scratch = MhtaScratchForStream(stream);
+    DeviceBuffer& q_transposed = scratch.q_transposed;
+    DeviceBuffer& k_transposed = scratch.k_transposed;
+    DeviceBuffer& mask_materialized = scratch.mask_materialized;
+    DeviceBuffer& scalar = scratch.scalar;
     const void* q_data = q_buffer.data();
     const void* k_data = k_buffer.data();
     std::vector<int64_t> sdpa_q_shape = q_shape;
@@ -565,10 +600,12 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       sdpa_k_shape = {batch, heads, seqlen_k, head_dim};
       q_transposed.Resize(
           static_cast<size_t>(batch * heads * seqlen_q * head_dim) *
-          MhtaSdpaElementSize(elem_type));
+              MhtaSdpaElementSize(elem_type),
+          stream);
       k_transposed.Resize(
           static_cast<size_t>(batch * heads * seqlen_k * head_dim) *
-          MhtaSdpaElementSize(elem_type));
+              MhtaSdpaElementSize(elem_type),
+          stream);
       ::musa::dnn::Handle* handle = nullptr;
       RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
       ::musa::dnn::Tensor input_tensor, output_tensor;
@@ -600,7 +637,8 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       sdpa_k_shape = {batch, heads, seqlen_k, head_dim};
       k_transposed.Resize(
           static_cast<size_t>(batch * heads * seqlen_k * head_dim) *
-          MhtaSdpaElementSize(elem_type));
+              MhtaSdpaElementSize(elem_type),
+          stream);
       ::musa::dnn::Handle* handle = nullptr;
       RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
       ::musa::dnn::Tensor input_tensor, output_tensor;
@@ -626,7 +664,7 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     if (lseq_last_key_mask_) {
       const size_t mask_bytes =
           static_cast<size_t>(seqlen_q * seqlen_k) * sizeof(bool);
-      mask_materialized.Resize(mask_bytes);
+      mask_materialized.Resize(mask_bytes, stream);
       const musaError_t launch_status =
           LaunchMusaMhtaSdpaLseqLastKeyKeepMask2DKernel(
               static_cast<bool*>(mask_materialized.data()), seqlen_q, seqlen_k,
@@ -654,7 +692,7 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
           ++cache.reuse_count;
           mask_data = cache.buffer.data();
         } else {
-          cache.buffer.Resize(mask_bytes);
+          cache.buffer.Resize(mask_bytes, stream);
           const musaError_t launch_status =
               LaunchMusaMhtaSdpaInt32KeepMaskToBoolKernel(
                   static_cast<const int32_t*>(mask_data),
@@ -674,8 +712,8 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     } else if (mask_scale_ != 1.0f) {
       const size_t mask_bytes = static_cast<size_t>(NumElements(mask_shape)) *
                                 MhtaSdpaElementSize(elem_type);
-      mask_materialized.Resize(mask_bytes);
-      scalar.Resize(MhtaSdpaElementSize(elem_type));
+      mask_materialized.Resize(mask_bytes, stream);
+      scalar.Resize(MhtaSdpaElementSize(elem_type), stream);
       uint8_t scalar_host[sizeof(double)] = {};
       WriteMhtaSdpaScalar(scalar_host, mask_scale_, elem_type);
       musaError_t copy_status = musaMemcpyAsync(scalar.data(), scalar_host,
@@ -706,8 +744,9 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     SetupTensor(out_tensor, output.GetTensorMutableData<void>(),
                 (sim_rank3 || folded_rank3) ? sdpa_q_shape : output_shape,
                 elem_type, "output");
-    DeviceBuffer lse;
-    lse.Resize(static_cast<size_t>(batch * heads * seqlen_q) * sizeof(float));
+    DeviceBuffer& lse = scratch.lse;
+    lse.Resize(static_cast<size_t>(batch * heads * seqlen_q) * sizeof(float),
+               stream);
     SetupTensor(lse_tensor, lse.data(), {batch, heads, seqlen_q},
                 ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, "logsumexp");
     // Inference has dropout disabled.  Passing a null tensor avoids Flash's
@@ -745,21 +784,24 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                         v_tensor, mask_tensor, dropout_tensor),
           "MHTA SDPA RunFlash failed");
     } else {
-      DeviceBuffer attn_probs;
+      DeviceBuffer& attn_probs = scratch.attn_probs;
       attn_probs.Resize(
           static_cast<size_t>(batch * heads * seqlen_q * seqlen_k) *
-          MhtaSdpaElementSize(elem_type));
+              MhtaSdpaElementSize(elem_type),
+          stream);
       ::musa::dnn::Tensor probs_tensor;
       SetupTensor(probs_tensor, attn_probs.data(),
                   {batch, heads, seqlen_q, seqlen_k}, elem_type,
                   "attention probabilities");
-      auto allocator = [](size_t bytes) -> ::musa::dnn::MemoryHandler {
-        void* workspace = nullptr;
-        if (bytes != 0 && musaMalloc(&workspace, bytes) != musaSuccess) {
+      auto allocator = [stream](size_t bytes) -> ::musa::dnn::MemoryHandler {
+        void* workspace = AllocateDeviceMemoryOnStream(bytes, stream);
+        if (bytes != 0 && workspace == nullptr) {
           throw std::runtime_error(MusaErrorString(musaErrorMemoryAllocation));
         }
         return ::musa::dnn::MemoryHandler(
-            workspace, [](void* ptr) { (void)musaFree(ptr); });
+            workspace, [stream, bytes](void* ptr) {
+              FreeDeviceMemoryOnStream(ptr, stream, bytes);
+            });
       };
       CheckStatus(
           sdpa.RunMath(*handle, out_tensor, probs_tensor, q_tensor, k_tensor,

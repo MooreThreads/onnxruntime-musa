@@ -55,6 +55,96 @@ bool IsExactTranspose(Ort::ConstNode node,
          *perm == expected_perm;
 }
 
+bool IsCastTo(Ort::ConstNode node, ONNXTensorElementDataType elem_type);
+
+struct LseqShdBoundaryNodes {
+  Ort::ConstNode q_cast{nullptr};
+  Ort::ConstNode k_cast{nullptr};
+  Ort::ConstNode v_cast{nullptr};
+  Ort::ConstNode output_cast{nullptr};
+};
+
+std::optional<LseqShdBoundaryNodes> FindLseqShdBoundaryNodes(
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    Ort::ConstNode score_matmul, Ort::ConstNode value_matmul) {
+  auto get_producer = [&](Ort::ConstValueInfo value, Ort::ConstNode& producer) {
+    producer = musa_ep::FindProducer(producers, value);
+    return static_cast<bool>(producer);
+  };
+  const auto score_inputs = score_matmul.GetInputs();
+  const auto value_inputs = value_matmul.GetInputs();
+  const auto value_outputs = value_matmul.GetOutputs();
+  if (score_inputs.size() != 2 || value_inputs.size() != 2 ||
+      value_outputs.size() != 1) {
+    return std::nullopt;
+  }
+
+  Ort::ConstNode q_transpose{nullptr};
+  Ort::ConstNode k_transpose{nullptr};
+  Ort::ConstNode v_transpose{nullptr};
+  if (!get_producer(score_inputs[0], q_transpose) ||
+      !get_producer(score_inputs[1], k_transpose) ||
+      !get_producer(value_inputs[1], v_transpose) ||
+      !IsExactTranspose(q_transpose, {1, 0, 2}) ||
+      !IsExactTranspose(k_transpose, {1, 2, 0}) ||
+      !IsExactTranspose(v_transpose, {1, 0, 2})) {
+    return std::nullopt;
+  }
+
+  LseqShdBoundaryNodes result;
+  if (!get_producer(q_transpose.GetInputs()[0], result.q_cast) ||
+      !get_producer(k_transpose.GetInputs()[0], result.k_cast) ||
+      !get_producer(v_transpose.GetInputs()[0], result.v_cast) ||
+      !IsCastTo(result.q_cast, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) ||
+      !IsOnnxOp(result.k_cast, "Concat") ||
+      !IsOnnxOp(result.v_cast, "Concat")) {
+    return std::nullopt;
+  }
+  // The names above are the producers of the transpose inputs. K/V must be
+  // Concat nodes; resolve their data-side FP32 Cast producers below.
+  Ort::ConstNode k_concat = result.k_cast;
+  Ort::ConstNode v_concat = result.v_cast;
+  const auto k_concat_inputs = k_concat.GetInputs();
+  const auto v_concat_inputs = v_concat.GetInputs();
+  if (k_concat_inputs.size() != 2 || v_concat_inputs.size() != 2 ||
+      k_concat.GetOutputs().size() != 1 || v_concat.GetOutputs().size() != 1 ||
+      musa_ep::GetIntAttribute(k_concat, "axis").value_or(-1) != 0 ||
+      musa_ep::GetIntAttribute(v_concat, "axis").value_or(-1) != 0 ||
+      !get_producer(k_concat_inputs[0], result.k_cast) ||
+      !get_producer(v_concat_inputs[0], result.v_cast) ||
+      !IsCastTo(result.k_cast, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) ||
+      !IsCastTo(result.v_cast, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) ||
+      result.k_cast.GetInputs().size() != 1 ||
+      result.v_cast.GetInputs().size() != 1 ||
+      result.k_cast.GetOutputs().size() != 1 ||
+      result.v_cast.GetOutputs().size() != 1) {
+    return std::nullopt;
+  }
+
+  const auto output_consumers = value_outputs[0].GetConsumers();
+  if (output_consumers.size() != 1 || output_consumers[0].index != 0) {
+    return std::nullopt;
+  }
+  Ort::ConstNode output_transpose = output_consumers[0].node;
+  if (!IsExactTranspose(output_transpose, {1, 0, 2}) ||
+      output_transpose.GetOutputs().size() != 1) {
+    return std::nullopt;
+  }
+  const auto output_cast_consumers =
+      output_transpose.GetOutputs()[0].GetConsumers();
+  if (output_cast_consumers.size() != 1 ||
+      output_cast_consumers[0].index != 0) {
+    return std::nullopt;
+  }
+  result.output_cast = output_cast_consumers[0].node;
+  if (!IsCastTo(result.output_cast, ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) ||
+      result.output_cast.GetInputs().size() != 1 ||
+      result.output_cast.GetOutputs().size() != 1) {
+    return std::nullopt;
+  }
+  return result;
+}
+
 struct BshdBoundaryTransposes {
   Ort::ConstNode q;
   Ort::ConstNode k;
@@ -170,6 +260,9 @@ enum class MhtaSdpaLayout {
   kBshdStridedFlash,
   kSimRank3,
   kFoldedHeadRank3,
+  // UniRank lseq keeps physical BF16 tensors contiguous as [S,H,D]. They
+  // are exposed to muDNN as logical [1,H,S,D] views with explicit strides.
+  kLseqShdStridedFlash,
 };
 
 constexpr size_t kNoInputIndex = std::numeric_limits<size_t>::max();
@@ -182,7 +275,7 @@ class MhtaScaledDotProductAttentionFusionCompute final
       float scale, float mask_scale, MhtaSdpaLayout layout,
       bool boolean_mask = false, bool boolean_mask_int32 = false,
       size_t mask_end_index = kNoInputIndex, int64_t static_mask_end = -1,
-      bool lseq_last_key_mask = false)
+      bool lseq_last_key_mask = false, bool no_external_mask = false)
       : q_index_(q_index),
         k_index_(k_index),
         v_index_(v_index),
@@ -194,7 +287,8 @@ class MhtaScaledDotProductAttentionFusionCompute final
         boolean_mask_int32_(boolean_mask_int32),
         mask_end_index_(mask_end_index),
         static_mask_end_(static_mask_end),
-        lseq_last_key_mask_(lseq_last_key_mask) {}
+        lseq_last_key_mask_(lseq_last_key_mask),
+        no_external_mask_(no_external_mask) {}
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override;
 
@@ -211,6 +305,7 @@ class MhtaScaledDotProductAttentionFusionCompute final
   size_t mask_end_index_;
   int64_t static_mask_end_;
   bool lseq_last_key_mask_;
+  bool no_external_mask_;
 };
 
 bool IsMhtaSdpaTensorType(ONNXTensorElementDataType elem_type) {
@@ -458,10 +553,12 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     Ort::ConstValue k = ctx.GetInput(k_index_);
     Ort::ConstValue v = ctx.GetInput(v_index_);
     const bool has_external_mask = mask_index_ != kNoInputIndex;
+    const bool lseq_shd_strided_flash =
+        layout_ == MhtaSdpaLayout::kLseqShdStridedFlash;
     Ort::ConstValue mask{nullptr};
     if (has_external_mask) {
       mask = ctx.GetInput(mask_index_);
-    } else if (!lseq_last_key_mask_) {
+    } else if (!lseq_last_key_mask_ && !no_external_mask_) {
       return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
                                         "MHTA SDPA is missing mask input");
     }
@@ -498,6 +595,13 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
           ORT_NOT_IMPLEMENTED,
           "MHTA lseq materialized-mask SDPA supports FP32 Q/K/V only");
     }
+    if (lseq_shd_strided_flash &&
+        (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
+         has_external_mask || !no_external_mask_)) {
+      return Ort::GetApi().CreateStatus(
+          ORT_NOT_IMPLEMENTED,
+          "MHTA lseq SHD Flash requires BF16 Q/K/V and no external mask");
+    }
 
     std::vector<int64_t> q_shape = Shape(q);
     std::vector<int64_t> k_shape = Shape(k);
@@ -508,7 +612,20 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     const bool bshd_strided_flash =
         layout_ == MhtaSdpaLayout::kBshdStridedFlash;
     std::vector<int64_t> output_shape;
-    if (sim_rank3) {
+    if (lseq_shd_strided_flash) {
+      if (q_shape.size() != 3 || k_shape.size() != 3 || v_shape.size() != 3) {
+        return Ort::GetApi().CreateStatus(
+            ORT_INVALID_ARGUMENT,
+            "MHTA lseq SHD Flash requires rank-3 Q/K/V inputs");
+      }
+      if (q_shape[1] != k_shape[1] || q_shape[1] != v_shape[1] ||
+          q_shape[2] != k_shape[2] || q_shape[2] != v_shape[2]) {
+        return Ort::GetApi().CreateStatus(
+            ORT_NOT_IMPLEMENTED,
+            "MHTA lseq SHD Flash expects Q/K/V [S,H,D] with matching H,D");
+      }
+      output_shape = q_shape;
+    } else if (sim_rank3) {
       if (q_shape.size() != 4 || k_shape.size() != 4 || v_shape.size() != 4) {
         return Ort::GetApi().CreateStatus(
             ORT_INVALID_ARGUMENT, "MHTA SDPA sim layout requires 4D Q/K/V");
@@ -575,26 +692,38 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                                         "MHTA SDPA requires MUSA output");
     }
 
-    const int64_t batch = q_shape[0];
+    const int64_t batch = lseq_shd_strided_flash ? 1 : q_shape[0];
     const int64_t heads =
-        sim_rank3
-            ? q_shape[2]
-            : (folded_rank3 ? 1
-                            : (bshd_strided_flash ? q_shape[2] : q_shape[1]));
-    const int64_t seqlen_q =
-        sim_rank3
+        lseq_shd_strided_flash
             ? q_shape[1]
-            : (folded_rank3 ? q_shape[1]
-                            : (bshd_strided_flash ? q_shape[1] : q_shape[2]));
+            : (sim_rank3 ? q_shape[2]
+                         : (folded_rank3 ? 1
+                                         : (bshd_strided_flash ? q_shape[2]
+                                                               : q_shape[1])));
+    const int64_t seqlen_q =
+        lseq_shd_strided_flash
+            ? q_shape[0]
+            : (sim_rank3 ? q_shape[1]
+                         : (folded_rank3 ? q_shape[1]
+                                         : (bshd_strided_flash ? q_shape[1]
+                                                               : q_shape[2])));
     const int64_t seqlen_k =
-        sim_rank3
-            ? k_shape[1]
-            : (folded_rank3 ? k_shape[2]
-                            : (bshd_strided_flash ? k_shape[1] : k_shape[3]));
+        lseq_shd_strided_flash
+            ? k_shape[0]
+            : (sim_rank3 ? k_shape[1]
+                         : (folded_rank3 ? k_shape[2]
+                                         : (bshd_strided_flash ? k_shape[1]
+                                                               : k_shape[3])));
     const int64_t head_dim =
-        sim_rank3 ? q_shape[3] : (folded_rank3 ? q_shape[2] : q_shape[3]);
-    if (batch <= 0 || heads <= 0 || seqlen_q <= 0 || seqlen_k <= 0 ||
+        lseq_shd_strided_flash
+            ? q_shape[2]
+            : (sim_rank3 ? q_shape[3]
+                         : (folded_rank3 ? q_shape[2] : q_shape[3]));
+    if (batch <= 0 || heads <= 0 || seqlen_q < 0 || seqlen_k < 0 ||
         head_dim <= 0) {
+      return nullptr;
+    }
+    if (lseq_shd_strided_flash && seqlen_q == 0) {
       return nullptr;
     }
     if (boolean_mask_int32_) {
@@ -663,6 +792,21 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       mask_params.mask_k = seqlen_k;
     }
 
+    if (lseq_shd_strided_flash && seqlen_k == 0) {
+      const size_t output_bytes =
+          static_cast<size_t>(
+              output.GetTensorTypeAndShapeInfo().GetElementCount()) *
+          MhtaSdpaElementSize(elem_type);
+      if (output_bytes != 0) {
+        const musaError_t memset_status = musaMemsetAsync(
+            output.GetTensorMutableData<void>(), 0, output_bytes, stream);
+        if (memset_status != musaSuccess) {
+          throw std::runtime_error(MusaErrorString(memset_status));
+        }
+      }
+      return nullptr;
+    }
+
     if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
         !lseq_last_key_mask_) {
       musaError_t launch_status = LaunchMusaMhtaSdpaFp32Kernel(
@@ -688,7 +832,11 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     std::vector<int64_t> sdpa_k_shape = k_shape;
     std::vector<int64_t> sdpa_v_shape = v_shape;
     bool sdpa_key_format_bhds = false;
-    if (sim_rank3) {
+    if (lseq_shd_strided_flash) {
+      sdpa_q_shape = {batch, heads, seqlen_q, head_dim};
+      sdpa_k_shape = {batch, heads, seqlen_k, head_dim};
+      sdpa_v_shape = sdpa_k_shape;
+    } else if (sim_rank3) {
       sdpa_q_shape = {batch, heads, seqlen_q, head_dim};
       sdpa_k_shape = {batch, heads, seqlen_k, head_dim};
       q_transposed.Resize(
@@ -758,7 +906,22 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
         has_external_mask ? mask_shape : std::vector<int64_t>{};
     ONNXTensorElementDataType active_mask_type =
         has_external_mask ? elem_type : ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
-    if (lseq_last_key_mask_) {
+    if (lseq_shd_strided_flash) {
+      // The installed muDNN Flash path can hang when handed a
+      // default-constructed empty mask tensor. A broadcast [1, Sk] all-true
+      // BOOL mask has identical attention semantics and costs only one byte per
+      // key token.
+      const size_t mask_bytes = static_cast<size_t>(seqlen_k) * sizeof(bool);
+      mask_materialized.Resize(mask_bytes, stream);
+      const musaError_t memset_status =
+          musaMemsetAsync(mask_materialized.data(), 1, mask_bytes, stream);
+      if (memset_status != musaSuccess) {
+        throw std::runtime_error(MusaErrorString(memset_status));
+      }
+      mask_data = mask_materialized.data();
+      active_mask_shape = {1, seqlen_k};
+      active_mask_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
+    } else if (lseq_last_key_mask_) {
       const size_t mask_bytes =
           static_cast<size_t>(seqlen_q * seqlen_k) * sizeof(bool);
       mask_materialized.Resize(mask_bytes, stream);
@@ -833,7 +996,18 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
 
     ::musa::dnn::Tensor q_tensor, k_tensor, v_tensor, mask_tensor, out_tensor,
         lse_tensor, dropout_tensor;
-    if (bshd_strided_flash) {
+    if (lseq_shd_strided_flash) {
+      const std::vector<int64_t> q_strides = {seqlen_q * heads * head_dim,
+                                              head_dim, heads * head_dim, 1};
+      const std::vector<int64_t> kv_strides = {seqlen_k * heads * head_dim,
+                                               head_dim, heads * head_dim, 1};
+      SetupTensorWithStrides(q_tensor, q_data, sdpa_q_shape, q_strides,
+                             elem_type, "Q");
+      SetupTensorWithStrides(k_tensor, k_data, sdpa_k_shape, kv_strides,
+                             elem_type, "K");
+      SetupTensorWithStrides(v_tensor, v_buffer.data(), sdpa_v_shape,
+                             kv_strides, elem_type, "V");
+    } else if (bshd_strided_flash) {
       const std::vector<int64_t> bshd_strides = {seqlen_q * heads * head_dim,
                                                  head_dim, heads * head_dim, 1};
       SetupTensorWithStrides(q_tensor, q_data, sdpa_q_shape, bshd_strides,
@@ -847,9 +1021,16 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       SetupTensor(k_tensor, k_data, sdpa_k_shape, elem_type, "K");
       SetupTensor(v_tensor, v_buffer.data(), sdpa_v_shape, elem_type, "V");
     }
-    SetupTensor(mask_tensor, mask_data, active_mask_shape, active_mask_type,
-                "mask");
-    if (bshd_strided_flash) {
+    if (has_external_mask || lseq_last_key_mask_ || lseq_shd_strided_flash) {
+      SetupTensor(mask_tensor, mask_data, active_mask_shape, active_mask_type,
+                  "mask");
+    }
+    if (lseq_shd_strided_flash) {
+      const std::vector<int64_t> output_strides = {
+          seqlen_q * heads * head_dim, head_dim, heads * head_dim, 1};
+      SetupTensorWithStrides(out_tensor, output.GetTensorMutableData<void>(),
+                             sdpa_q_shape, output_strides, elem_type, "output");
+    } else if (bshd_strided_flash) {
       const std::vector<int64_t> bshd_strides = {seqlen_q * heads * head_dim,
                                                  head_dim, heads * head_dim, 1};
       SetupTensorWithStrides(out_tensor, output.GetTensorMutableData<void>(),
@@ -954,6 +1135,10 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
   size_t transpose_count = 0;
   size_t transpose_0213_count = 0;
   size_t transpose_0231_count = 0;
+  size_t transpose_102_count = 0;
+  size_t transpose_120_count = 0;
+  size_t concat_count = 0;
+  size_t constant_of_shape_count = 0;
   for (Ort::ConstNode node : graph.GetNodes()) {
     if (IsOnnxOp(node, "MatMul")) {
       ++matmul_count;
@@ -999,9 +1184,17 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
         ++transpose_0213_count;
       } else if (*perm == std::vector<int64_t>{0, 2, 3, 1}) {
         ++transpose_0231_count;
+      } else if (*perm == std::vector<int64_t>{1, 0, 2}) {
+        ++transpose_102_count;
+      } else if (*perm == std::vector<int64_t>{1, 2, 0}) {
+        ++transpose_120_count;
       } else {
         return false;
       }
+    } else if (IsOnnxOp(node, "Concat")) {
+      ++concat_count;
+    } else if (IsOnnxOp(node, "ConstantOfShape")) {
+      ++constant_of_shape_count;
     } else {
       return false;
     }
@@ -1037,12 +1230,25 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
       cast_count == 0 && unsqueeze_count == 2 && reshape_count == 0 &&
       shape_count == 1 && gather_count == 1 && sub_count == 1 &&
       clip_count == 1 && range_count == 1 && less_count == 1;
+  const bool lseq_bf16_shd_boundary =
+      matmul_count == 2 && einsum_count == 0 && mul_count == 1 &&
+      add_count == 0 && div_count == 0 && softmax_count == 1 &&
+      where_count == 1 && slice_count == 0 && equal_count == 0 &&
+      cast_count == 4 && unsqueeze_count == 2 && reshape_count == 0 &&
+      shape_count == 1 && gather_count == 1 && sub_count == 1 &&
+      clip_count == 1 && range_count == 1 && less_count == 1 &&
+      concat_count == 2 && constant_of_shape_count == 0 &&
+      transpose_count == 4 && transpose_102_count == 3 &&
+      transpose_120_count == 1 && transpose_0213_count == 0 &&
+      transpose_0231_count == 0;
   const bool no_boundary_transpose = transpose_count == 0;
   const bool bshd_boundary_transpose = transpose_count == 4 &&
                                        transpose_0213_count == 3 &&
                                        transpose_0231_count == 1;
-  return (simple_bhsd || boolean_bhsd || sim_rank3 || lseq_premask_rank3) &&
-         (no_boundary_transpose || bshd_boundary_transpose);
+  return (simple_bhsd || boolean_bhsd || sim_rank3 || lseq_premask_rank3 ||
+          lseq_bf16_shd_boundary) &&
+         (no_boundary_transpose || bshd_boundary_transpose ||
+          lseq_bf16_shd_boundary);
 }
 
 std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
@@ -1246,6 +1452,17 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
     const float scale = ReadScalarFloatAttributeInput(scale_inputs[1]);
     if (!std::isfinite(scale)) {
       throw std::runtime_error("MHTA lseq SDPA scale must be finite");
+    }
+
+    if (auto boundary =
+            FindLseqShdBoundaryNodes(producers, score_matmul, value_matmul);
+        boundary.has_value()) {
+      return std::make_unique<MhtaScaledDotProductAttentionFusionCompute>(
+          InputIndex(fused_indices, boundary->q_cast.GetInputs()[0]),
+          InputIndex(fused_indices, boundary->k_cast.GetInputs()[0]),
+          InputIndex(fused_indices, boundary->v_cast.GetInputs()[0]),
+          kNoInputIndex, scale, 0.0f, MhtaSdpaLayout::kLseqShdStridedFlash,
+          false, false, kNoInputIndex, -1, false, true);
     }
 
     return std::make_unique<MhtaScaledDotProductAttentionFusionCompute>(

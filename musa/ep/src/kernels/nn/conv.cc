@@ -65,10 +65,20 @@ bool Conv::TryMudnnConv(Ort::KernelContext& ctx,
 
   Ort::ConstValue x = ctx.GetInput(0);
   Ort::ConstValue w = ctx.GetInput(1);
+  const bool has_bias = ctx.GetInputCount() > 2 && ctx.GetInput(2) != nullptr;
   if (!IsGpuMemory(x.GetTensorMemoryInfo()) ||
       !IsGpuMemory(w.GetTensorMemoryInfo()) ||
       !IsGpuMemory(output.GetTensorMemoryInfo())) {
     return false;
+  }
+  if (has_bias) {
+    Ort::ConstValue b = ctx.GetInput(2);
+    auto b_info = b.GetTensorTypeAndShapeInfo();
+    if (b_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+        b_info.GetShape().size() != 1 || b_info.GetShape()[0] != w_shape[0] ||
+        !IsGpuMemory(b.GetTensorMemoryInfo())) {
+      return false;
+    }
   }
 
   ::musa::dnn::Handle* handle = nullptr;
@@ -105,9 +115,30 @@ bool Conv::TryMudnnConv(Ort::KernelContext& ctx,
     return false;
   }
 
-  return conv.Run(*handle, y_tensor, x_tensor, w_tensor,
-                  ::musa::dnn::Convolution::Algorithm::IMPLICIT_GEMM,
-                  nullptr) == ::musa::dnn::Status::SUCCESS;
+  if (conv.Run(*handle, y_tensor, x_tensor, w_tensor,
+               ::musa::dnn::Convolution::Algorithm::IMPLICIT_GEMM,
+               nullptr) != ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+
+  if (!has_bias) {
+    return true;
+  }
+
+  Ort::ConstValue b = ctx.GetInput(2);
+  ::musa::dnn::Tensor bias_tensor;
+  if (!SetMudnnTensor(bias_tensor, b.GetTensorRawData(), {1, w_shape[0], 1, 1},
+                      ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)) {
+    return false;
+  }
+
+  ::musa::dnn::Binary bias_add;
+  if (bias_add.SetMode(::musa::dnn::Binary::Mode::ADD) !=
+      ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+  return bias_add.Run(*handle, y_tensor, y_tensor, bias_tensor) ==
+         ::musa::dnn::Status::SUCCESS;
 }
 
 OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {

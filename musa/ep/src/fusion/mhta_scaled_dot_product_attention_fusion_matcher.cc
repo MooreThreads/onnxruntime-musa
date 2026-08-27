@@ -114,6 +114,12 @@ bool IsFloat32TensorValueInfo(Ort::ConstValueInfo value_info) {
              ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
 }
 
+bool IsBfloat16TensorValueInfo(Ort::ConstValueInfo value_info) {
+  return value_info.TypeInfo().GetONNXType() == ONNX_TYPE_TENSOR &&
+         value_info.TypeInfo().GetTensorTypeAndShapeInfo().GetElementType() ==
+             ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+}
+
 bool IsExactTranspose(Ort::ConstNode node,
                       const std::vector<int64_t>& expected_perm) {
   const auto perm = GetIntsAttribute(node, "perm");
@@ -985,6 +991,143 @@ bool CanFuseLseqPreMaskMhtaScaledDotProductAttention(
   }
   if (!FusionHasNoExternalPathBetweenSelectedNodes(fusion_nodes, selected))
     return false;
+
+  // The optimized UniRank graph keeps the Q/K/V tensors in BF16 at the
+  // fusion boundary, then widens them to FP32 only for the legacy rank-3
+  // attention core.  Absorb that private widen/transpose/zero-padding path
+  // when it is fully self-contained.  The runtime can then expose the raw
+  // [S,H,D] BF16 tensors directly to FlashAttention instead of materializing
+  // FP32 copies.
+  {
+    Ort::ConstNode q_transpose{nullptr};
+    Ort::ConstNode k_transpose{nullptr};
+    Ort::ConstNode v_transpose{nullptr};
+    Ort::ConstNode output_transpose{nullptr};
+    Ort::ConstNode q_cast{nullptr};
+    Ort::ConstNode k_cast{nullptr};
+    Ort::ConstNode v_cast{nullptr};
+    Ort::ConstNode output_cast{nullptr};
+    Ort::ConstNode k_concat{nullptr};
+    Ort::ConstNode v_concat{nullptr};
+    Ort::ConstNode zero_node{nullptr};
+
+    const auto score_inputs = score_matmul.GetInputs();
+    const auto value_inputs = value_matmul.GetInputs();
+    const auto value_outputs = value_matmul.GetOutputs();
+    if (score_inputs.size() == 2 && value_inputs.size() == 2 &&
+        value_outputs.size() == 1 &&
+        GetProducer(score_inputs[0], q_transpose) &&
+        GetProducer(score_inputs[1], k_transpose) &&
+        GetProducer(value_inputs[1], v_transpose) &&
+        IsExactTranspose(q_transpose, {1, 0, 2}) &&
+        IsExactTranspose(k_transpose, {1, 2, 0}) &&
+        IsExactTranspose(v_transpose, {1, 0, 2}) &&
+        HasOnlyConsumer(q_transpose.GetOutputs()[0], score_matmul, 0) &&
+        HasOnlyConsumer(k_transpose.GetOutputs()[0], score_matmul, 1) &&
+        HasOnlyConsumer(v_transpose.GetOutputs()[0], value_matmul, 1) &&
+        GetProducer(q_transpose.GetInputs()[0], q_cast) &&
+        GetProducer(k_transpose.GetInputs()[0], k_concat) &&
+        GetProducer(v_transpose.GetInputs()[0], v_concat) &&
+        IsCastTo(q_cast, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) &&
+        IsOnnxOp(k_concat, "Concat") && IsOnnxOp(v_concat, "Concat")) {
+      const auto q_cast_inputs = q_cast.GetInputs();
+      const auto q_cast_outputs = q_cast.GetOutputs();
+      const auto k_concat_inputs = k_concat.GetInputs();
+      const auto v_concat_inputs = v_concat.GetInputs();
+      const auto k_concat_outputs = k_concat.GetOutputs();
+      const auto v_concat_outputs = v_concat.GetOutputs();
+      auto q_shape = q_cast_inputs.size() == 1
+                         ? GetTensorShape(q_cast_inputs[0])
+                         : std::nullopt;
+      auto k_shape = std::optional<std::vector<int64_t>>{};
+      auto v_shape = std::optional<std::vector<int64_t>>{};
+      bool boundary_ok =
+          q_cast_inputs.size() == 1 && q_cast_outputs.size() == 1 &&
+          IsBfloat16TensorValueInfo(q_cast_inputs[0]) && q_shape.has_value() &&
+          q_shape->size() == 3 && k_concat_inputs.size() == 2 &&
+          v_concat_inputs.size() == 2 && k_concat_outputs.size() == 1 &&
+          v_concat_outputs.size() == 1 &&
+          GetIntAttribute(k_concat, "axis").value_or(-1) == 0 &&
+          GetIntAttribute(v_concat, "axis").value_or(-1) == 0 &&
+          GetProducer(k_concat_inputs[0], k_cast) &&
+          GetProducer(v_concat_inputs[0], v_cast) &&
+          IsCastTo(k_cast, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) &&
+          IsCastTo(v_cast, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) &&
+          k_cast.GetInputs().size() == 1 && v_cast.GetInputs().size() == 1 &&
+          IsBfloat16TensorValueInfo(k_cast.GetInputs()[0]) &&
+          IsBfloat16TensorValueInfo(v_cast.GetInputs()[0]);
+      if (boundary_ok) {
+        k_shape = GetTensorShape(k_cast.GetInputs()[0]);
+        v_shape = GetTensorShape(v_cast.GetInputs()[0]);
+        boundary_ok = k_shape.has_value() && v_shape.has_value() &&
+                      k_shape->size() == 3 && v_shape->size() == 3 &&
+                      KnownDimsEqual((*q_shape)[1], (*k_shape)[1]) &&
+                      KnownDimsEqual((*q_shape)[1], (*v_shape)[1]) &&
+                      KnownDimsEqual((*q_shape)[2], (*k_shape)[2]) &&
+                      KnownDimsEqual((*q_shape)[2], (*v_shape)[2]) &&
+                      KnownDimsEqual((*k_shape)[0], (*v_shape)[0]) &&
+                      GetProducer(k_concat_inputs[1], zero_node);
+      }
+      if (boundary_ok) {
+        Ort::ConstNode v_zero{nullptr};
+        boundary_ok =
+            GetProducer(v_concat_inputs[1], v_zero) &&
+            v_zero.GetId() == zero_node.GetId() &&
+            IsZeroFloatConstantOfShape(zero_node) &&
+            HasOnlyConsumers(zero_node.GetOutputs()[0], {k_concat, v_concat}) &&
+            HasOnlyConsumer(k_concat_outputs[0], k_transpose, 0) &&
+            HasOnlyConsumer(v_concat_outputs[0], v_transpose, 0);
+      }
+      if (boundary_ok) {
+        const auto output_consumers = value_outputs[0].GetConsumers();
+        if (output_consumers.size() != 1 || output_consumers[0].index != 0) {
+          boundary_ok = false;
+        } else {
+          output_transpose = output_consumers[0].node;
+        }
+        if (boundary_ok && (!IsExactTranspose(output_transpose, {1, 0, 2}) ||
+                            output_transpose.GetOutputs().size() != 1)) {
+          boundary_ok = false;
+        }
+      }
+      if (boundary_ok) {
+        const auto output_cast_consumers =
+            output_transpose.GetOutputs()[0].GetConsumers();
+        if (output_cast_consumers.size() != 1 ||
+            output_cast_consumers[0].index != 0) {
+          boundary_ok = false;
+        } else {
+          output_cast = output_cast_consumers[0].node;
+        }
+        if (boundary_ok &&
+            (!IsCastTo(output_cast, ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) ||
+             output_cast.GetInputs().size() != 1 ||
+             output_cast.GetOutputs().size() != 1 ||
+             !IsFloat32TensorValueInfo(output_cast.GetInputs()[0]) ||
+             !IsBfloat16TensorValueInfo(output_cast.GetOutputs()[0]))) {
+          boundary_ok = false;
+        }
+      }
+      if (boundary_ok) {
+        std::vector<Ort::ConstNode> expanded = fusion_nodes;
+        auto add = [&](Ort::ConstNode node) {
+          return AddFusionNode(node, accepted_node_ids, selected, expanded);
+        };
+        for (Ort::ConstNode node :
+             {q_cast, q_transpose, k_cast, k_concat, k_transpose, v_cast,
+              v_concat, v_transpose, output_transpose, output_cast}) {
+          if (!add(node)) {
+            boundary_ok = false;
+            break;
+          }
+        }
+        if (boundary_ok &&
+            FusionHasNoExternalPathBetweenSelectedNodes(expanded, selected)) {
+          fusion_nodes = std::move(expanded);
+        }
+      }
+    }
+  }
   return true;
 }
 

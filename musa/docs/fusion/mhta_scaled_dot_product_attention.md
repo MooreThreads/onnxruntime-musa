@@ -17,7 +17,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Extracted ONNX Ops
 
-`MatMul`, `Where`, `Softmax`, `Cast`, `Mul`, `Unsqueeze`, `Less`, `Range`, `Clip`, `Sub`, `Gather`, `Shape`, `Div`, `Add`, `Reshape`, `Einsum`
+`MatMul`, `Where`, `Softmax`, `Cast`, `Mul`, `Unsqueeze`, `Less`, `Range`, `Clip`, `Sub`, `Gather`, `Shape`, `Transpose`, `Concat`, `Div`, `Add`, `Reshape`, `Einsum`
 
 ## Mermaid
 

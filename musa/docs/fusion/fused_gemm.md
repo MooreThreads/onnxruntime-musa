@@ -5,7 +5,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Source Mapping
 
-- GetCapability priority: **34**
+- GetCapability priority: **35**
 - Finder: `FindFusedGemmFusions`
 - Finder implementation: `musa/ep/src/fusion/linear_fusion_matcher.cc`
 - Compile detector: `IsFusedGemmFusionGraph`

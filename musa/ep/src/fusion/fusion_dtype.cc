@@ -101,6 +101,11 @@ constexpr FusionDTypeContract kSiluDTypeContract = {
     "same as input", "Cast nodes are not part of this fusion",
     FusionFloatPolicy::kAnyFloat};
 
+constexpr FusionDTypeContract kSwiGluDTypeContract = {
+    "float32/float16/bfloat16", "float32 accumulation for float16/bfloat16",
+    "same as input", "muDNN SwiGlu supports only float32/float16/bfloat16",
+    FusionFloatPolicy::kFp32Fp16Bf16};
+
 bool FloatingTypeAllowed(ONNXTensorElementDataType elem_type,
                          FusionFloatPolicy policy) {
   switch (policy) {
@@ -144,6 +149,9 @@ const FusionDTypeContract& FusionDTypeContractForFinder(const char* finder) {
   }
   if (name == "FindSiluFusions") {
     return kSiluDTypeContract;
+  }
+  if (name == "FindSwiGluFusions") {
+    return kSwiGluDTypeContract;
   }
   if (name == "FindConcatMatMulFusions" ||
       name == "FindParallelMatMulConcatFusions" ||

@@ -131,14 +131,21 @@ def test_concat_bfloat16():
     np.testing.assert_array_equal(actual, np.concatenate([a, b], axis=0))
 
 
-def test_concat_bfloat16_unirank_many_small_rows():
+@pytest.mark.parametrize(
+    ("rows", "widths"),
+    [
+        pytest.param(300, [256] + [128] * 7, id="short_seq_8_inputs"),
+        pytest.param(450, [256, 256] + [128] * 13, id="gpseq_15_inputs"),
+        pytest.param(150, [256, 256] + [128] * 36, id="target_38_inputs"),
+        pytest.param(1, [128] * 17, id="non_feature_17_inputs"),
+        pytest.param(4000, [256] + [128] * 7, id="long_seq_8_inputs"),
+    ],
+)
+def test_concat_bfloat16_unirank_many_small_rows(rows, widths):
     rng = np.random.default_rng(17)
     float_inputs = {
-        "X0": rng.standard_normal((1, 3, 256)).astype(np.float32),
-        **{
-            f"X{i}": rng.standard_normal((1, 3, 128)).astype(np.float32)
-            for i in range(1, 8)
-        },
+        f"X{i}": rng.standard_normal((1, rows, width)).astype(np.float32)
+        for i, width in enumerate(widths)
     }
     inputs = {
         name: float32_to_bfloat16_bits(value)
@@ -156,7 +163,35 @@ def test_concat_bfloat16_unirank_many_small_rows():
         model,
         inputs,
         input_types,
-        [("Y", TensorProto.BFLOAT16, (1, 3, 1152))],
+        [("Y", TensorProto.BFLOAT16, (1, rows, sum(widths)))],
+        use_musa=True,
+    )
+    np.testing.assert_array_equal(
+        actual, np.concatenate(list(inputs.values()), axis=-1)
+    )
+
+
+def test_concat_bfloat16_high_arity_unaligned_width_falls_back():
+    rng = np.random.default_rng(19)
+    inputs = {
+        f"X{i}": float32_to_bfloat16_bits(
+            rng.standard_normal((1, 3, 127)).astype(np.float32)
+        )
+        for i in range(6)
+    }
+    input_types = {name: TensorProto.BFLOAT16 for name in inputs}
+    model = build_model_with_input_types(
+        "Concat",
+        inputs=inputs,
+        input_types=input_types,
+        outputs=[("Y", TensorProto.BFLOAT16)],
+        attrs={"axis": -1},
+    )
+    (actual,) = run_with_iobinding(
+        model,
+        inputs,
+        input_types,
+        [("Y", TensorProto.BFLOAT16, (1, 3, 6 * 127))],
         use_musa=True,
     )
     np.testing.assert_array_equal(

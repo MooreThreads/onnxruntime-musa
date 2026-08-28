@@ -9,6 +9,12 @@ struct MusaConcatElementDesc {
 };
 
 constexpr int64_t kMusaConcatSmallRowsMaxInputs = 256;
+constexpr int64_t kMusaConcatBf16HighArityMaxInputs = 40;
+
+musaError_t LaunchMusaConcatBf16LastAxisHighArity(
+    void* output, const void* const* inputs, const int64_t* input_axis_dims,
+    int64_t input_count, int64_t outer, int64_t output_axis,
+    musaStream_t stream);
 
 musaError_t LaunchMusaConcatCopies(void* output, const void* const* inputs,
                                    const int64_t* input_axis_dims,

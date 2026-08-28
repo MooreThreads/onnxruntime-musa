@@ -8,6 +8,31 @@ constexpr size_t ToBytes(int64_t elements, int32_t element_size) {
 
 constexpr int kConcatCopyThreads = 256;
 
+struct MusaConcatBf16HighArityParams {
+  const uint4* inputs[kMusaConcatBf16HighArityMaxInputs];
+  int32_t input_row_vectors[kMusaConcatBf16HighArityMaxInputs];
+  int32_t output_offsets[kMusaConcatBf16HighArityMaxInputs];
+  int64_t outer;
+  int32_t output_row_vectors;
+};
+
+__global__ void ConcatBf16LastAxisHighArityKernel(
+    uint4* output, MusaConcatBf16HighArityParams params) {
+  const int64_t input_idx = static_cast<int64_t>(blockIdx.y);
+  const int64_t input_row_vectors = params.input_row_vectors[input_idx];
+  const int64_t index =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t input_vectors = params.outer * input_row_vectors;
+  if (index >= input_vectors) {
+    return;
+  }
+
+  const int64_t row = index / input_row_vectors;
+  const int64_t column = index - row * input_row_vectors;
+  output[row * params.output_row_vectors + params.output_offsets[input_idx] +
+         column] = params.inputs[input_idx][index];
+}
+
 struct MusaConcatSmallRowsParams {
   const void* inputs[kMusaConcatSmallRowsMaxInputs];
   int64_t input_axis_dims[kMusaConcatSmallRowsMaxInputs];
@@ -50,7 +75,8 @@ __global__ void ConcatManySmallRowsDirectKernel(
 
   int64_t input_offset = 0;
   for (int64_t input_idx = 0; input_idx < params.input_count; ++input_idx) {
-    const int64_t input_width = params.input_axis_dims[input_idx] * params.inner;
+    const int64_t input_width =
+        params.input_axis_dims[input_idx] * params.inner;
     const int64_t input_end = input_offset + input_width;
     if (row_element < input_end) {
       const auto* input = static_cast<const uint8_t*>(params.inputs[input_idx]);
@@ -87,12 +113,57 @@ __global__ void ConcatManySmallRowsKernel(
 
 }  // namespace
 
+musaError_t LaunchMusaConcatBf16LastAxisHighArity(
+    void* output, const void* const* inputs, const int64_t* input_axis_dims,
+    int64_t input_count, int64_t outer, int64_t output_axis,
+    musaStream_t stream) {
+  constexpr int64_t kBf16ElementsPerVector = sizeof(uint4) / sizeof(uint16_t);
+  if (output == nullptr || inputs == nullptr || input_axis_dims == nullptr ||
+      input_count <= 0 || input_count > kMusaConcatBf16HighArityMaxInputs ||
+      outer <= 0 || output_axis <= 0 ||
+      output_axis % kBf16ElementsPerVector != 0 ||
+      reinterpret_cast<uintptr_t>(output) % alignof(uint4) != 0) {
+    return musaErrorInvalidValue;
+  }
+
+  MusaConcatBf16HighArityParams params{};
+  params.outer = outer;
+  params.output_row_vectors =
+      static_cast<int32_t>(output_axis / kBf16ElementsPerVector);
+  int32_t output_offset = 0;
+  int64_t max_input_vectors = 0;
+  for (int64_t i = 0; i < input_count; ++i) {
+    if (inputs[i] == nullptr || input_axis_dims[i] <= 0 ||
+        input_axis_dims[i] % kBf16ElementsPerVector != 0 ||
+        reinterpret_cast<uintptr_t>(inputs[i]) % alignof(uint4) != 0) {
+      return musaErrorInvalidValue;
+    }
+    params.inputs[i] = static_cast<const uint4*>(inputs[i]);
+    params.input_row_vectors[i] =
+        static_cast<int32_t>(input_axis_dims[i] / kBf16ElementsPerVector);
+    params.output_offsets[i] = output_offset;
+    output_offset += params.input_row_vectors[i];
+    const int64_t input_vectors = outer * params.input_row_vectors[i];
+    max_input_vectors =
+        max_input_vectors > input_vectors ? max_input_vectors : input_vectors;
+  }
+  if (output_offset != params.output_row_vectors) {
+    return musaErrorInvalidValue;
+  }
+
+  const unsigned int blocks = static_cast<unsigned int>(
+      (max_input_vectors + kConcatCopyThreads - 1) / kConcatCopyThreads);
+  dim3 grid(blocks, static_cast<unsigned int>(input_count));
+  ConcatBf16LastAxisHighArityKernel<<<grid, kConcatCopyThreads, 0, stream>>>(
+      static_cast<uint4*>(output), params);
+  return musaGetLastError();
+}
+
 musaError_t LaunchMusaConcatCopies(void* output, const void* const* inputs,
                                    const int64_t* input_axis_dims,
                                    int64_t input_count, int64_t outer,
                                    int64_t inner, int64_t output_axis,
-                                   int32_t element_size,
-                                   musaStream_t stream) {
+                                   int32_t element_size, musaStream_t stream) {
   auto* dst_base = static_cast<uint8_t*>(output);
   int64_t dst_axis_offset = 0;
   const size_t dst_pitch = ToBytes(output_axis * inner, element_size);
@@ -113,7 +184,6 @@ musaError_t LaunchMusaConcatCopies(void* output, const void* const* inputs,
   }
   return musaSuccess;
 }
-
 
 musaError_t LaunchMusaConcatManySmallRowsDirect(
     void* output, const void* const* inputs, const int64_t* input_axis_dims,

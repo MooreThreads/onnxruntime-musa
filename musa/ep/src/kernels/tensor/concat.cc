@@ -24,6 +24,11 @@ constexpr size_t kConcatManySmallMaxWidthBytes = 4096;
 constexpr size_t kConcatRelaxedSmallInputCount = 2;
 constexpr size_t kConcatRelaxedSmallMaxWidthBytes = 32 * 1024;
 constexpr size_t kConcatManySmallMaxMapBytes = 4 * 1024 * 1024;
+// UniRank's BF16 embedding projections concatenate 6-38 aligned last-axis
+// tensors. muDNN handles these high-arity inputs in groups of at most four,
+// which turns one logical Concat into several launches. Keep the vectorized
+// single-launch path deliberately narrow; other BF16 shapes use muDNN.
+constexpr size_t kConcatBf16DirectMinInputCount = 6;
 constexpr int64_t kMaxCpuMetadataConcatElements = kMusaMaxBroadcastRank;
 
 ::musa::dnn::Tensor::Format MudnnFormatForShape(
@@ -322,6 +327,29 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
     const size_t element_descriptor_bytes =
         static_cast<size_t>(output_row_elements) *
         sizeof(MusaConcatElementDesc);
+    constexpr int64_t kBf16ElementsPerVector = sizeof(uint4) / sizeof(uint16_t);
+    bool use_bf16_high_arity =
+        elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 &&
+        axis + 1 == static_cast<int64_t>(out_shape.size()) &&
+        input_data.size() >= kConcatBf16DirectMinInputCount &&
+        input_data.size() <=
+            static_cast<size_t>(kMusaConcatBf16HighArityMaxInputs) &&
+        outer > 0 && inner == 1 && out_shape[static_cast<size_t>(axis)] > 0 &&
+        max_width_bytes <= kConcatRelaxedSmallMaxWidthBytes &&
+        out_shape[static_cast<size_t>(axis)] % kBf16ElementsPerVector == 0 &&
+        reinterpret_cast<uintptr_t>(concat_output) % alignof(uint4) == 0;
+    for (size_t i = 0; use_bf16_high_arity && i < input_data.size(); ++i) {
+      use_bf16_high_arity =
+          input_axis_dims[i] > 0 &&
+          input_axis_dims[i] % kBf16ElementsPerVector == 0 &&
+          reinterpret_cast<uintptr_t>(input_data[i]) % alignof(uint4) == 0;
+    }
+    if (!output_overlaps_input && use_bf16_high_arity) {
+      return finish_concat(LaunchStatus(LaunchMusaConcatBf16LastAxisHighArity(
+          concat_output, input_data.data(), input_axis_dims.data(),
+          static_cast<int64_t>(input_data.size()), outer,
+          out_shape[static_cast<size_t>(axis)], stream)));
+    }
     // Preserve the established FP32 small-row dispatch while routing other
     // fixed-size tensor types through muDNN before the custom copy kernels.
     if (!output_overlaps_input &&

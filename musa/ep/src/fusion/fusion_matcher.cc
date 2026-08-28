@@ -292,6 +292,16 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindSplitConcatFusions", false,
                  std::move(split_concat_fusions), accepted_node_ids);
 
+  // SwiGLU consumes both projection branches and the complete gate activation
+  // chain. It must claim this larger pattern before the generic parallel
+  // linear matcher (and before the standalone SiLU matcher) can consume any
+  // of its MatMul/Mul nodes. Keep it at priority 26 as requested; the
+  // existing matchers below shift by one priority in the generated table.
+  auto swiglu_fusions =
+      FindSwiGluFusions(all_nodes, graph_output_names, accepted_node_ids);
+  AddFusionMatch(matches, "FindSwiGluFusions", true, std::move(swiglu_fusions),
+                 accepted_node_ids);
+
   // The MatMul -> Unsqueeze -> Concat pattern is more specific than a bare
   // parallel MatMul and must claim its nodes first.
   auto parallel_matmul_concat_fusions = FindParallelMatMulConcatFusions(

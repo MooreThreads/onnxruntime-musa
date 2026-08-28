@@ -32,16 +32,17 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 23 | Concat MatMul Fusion | `FindConcatMatMulFusions` | `false` | [concat_matmul.md](fusion/concat_matmul.md) |
 | 24 | Concat Split Fusion | `FindConcatSplitFusions` | `false` | [concat_split.md](fusion/concat_split.md) |
 | 25 | Split Concat Fusion | `FindSplitConcatFusions` | `false` | [split_concat.md](fusion/split_concat.md) |
-| 26 | Parallel MatMul Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
-| 27 | Parallel Linear Fusion | `FindParallelLinearFusions` | `true` | [parallel_linear.md](fusion/parallel_linear.md) |
-| 28 | Strided View Fusion | `FindStridedViewFusions` | `true` | [strided_view.md](fusion/strided_view.md) |
-| 29 | Shape Reshape Fusion | `FindShapeReshapeFusions` | `true` | [shape_reshape.md](fusion/shape_reshape.md) |
-| 30 | Tile Concat Fusion | `FindTileConcatFusions` | `false` | [tile_concat.md](fusion/tile_concat.md) |
-| 31 | Slice Concat Fusion | `FindSliceConcatFusions` | `false` | [slice_concat.md](fusion/slice_concat.md) |
-| 32 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
-| 33 | Gemm Activation Fusion | `FindGemmActivationFusions` | `false` | [gemm_activation.md](fusion/gemm_activation.md) |
-| 34 | Fused Gemm Fusion | `FindFusedGemmFusions` | `false` | [fused_gemm.md](fusion/fused_gemm.md) |
-| 35 | Silu Fusion | `FindSiluFusions` | `false` | [silu.md](fusion/silu.md) |
+| 26 | Swi Glu Fusion | `FindSwiGluFusions` | `true` | [swi_glu.md](fusion/swi_glu.md) |
+| 27 | Parallel MatMul Concat Fusion | `FindParallelMatMulConcatFusions` | `false` | [parallel_matmul_concat.md](fusion/parallel_matmul_concat.md) |
+| 28 | Parallel Linear Fusion | `FindParallelLinearFusions` | `true` | [parallel_linear.md](fusion/parallel_linear.md) |
+| 29 | Strided View Fusion | `FindStridedViewFusions` | `true` | [strided_view.md](fusion/strided_view.md) |
+| 30 | Shape Reshape Fusion | `FindShapeReshapeFusions` | `true` | [shape_reshape.md](fusion/shape_reshape.md) |
+| 31 | Tile Concat Fusion | `FindTileConcatFusions` | `false` | [tile_concat.md](fusion/tile_concat.md) |
+| 32 | Slice Concat Fusion | `FindSliceConcatFusions` | `false` | [slice_concat.md](fusion/slice_concat.md) |
+| 33 | Concat Reshape Fusion | `FindConcatReshapeFusions` | `true` | [concat_reshape.md](fusion/concat_reshape.md) |
+| 34 | Gemm Activation Fusion | `FindGemmActivationFusions` | `false` | [gemm_activation.md](fusion/gemm_activation.md) |
+| 35 | Fused Gemm Fusion | `FindFusedGemmFusions` | `false` | [fused_gemm.md](fusion/fused_gemm.md) |
+| 36 | Silu Fusion | `FindSiluFusions` | `false` | [silu.md](fusion/silu.md) |
 
 ## Compile Dispatch Order
 
@@ -72,13 +73,14 @@ This file is generated from `src/fusion/fusion_matcher.cc` and `src/fusion/fusio
 | 23 | `IsConcatMatMulFusionGraph` | `CreateConcatMatMulFusion` | [concat_matmul](fusion/concat_matmul.md) |
 | 24 | `IsConcatSplitFusionGraph` | `CreateConcatSplitFusion` | [concat_split](fusion/concat_split.md) |
 | 25 | `IsSplitConcatFusionGraph` | `CreateSplitConcatFusion` | [split_concat](fusion/split_concat.md) |
-| 26 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
-| 27 | `IsParallelLinearFusionGraph` | `CreateParallelLinearFusion` | [parallel_linear](fusion/parallel_linear.md) |
-| 28 | `IsStridedViewFusionGraph` | `CreateStridedViewFusion` | [strided_view](fusion/strided_view.md) |
-| 29 | `IsShapeReshapeFusionGraph` | `CreateShapeReshapeFusion` | [shape_reshape](fusion/shape_reshape.md) |
-| 30 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
-| 31 | `IsSliceConcatFusionGraph` | `CreateSliceConcatFusion` | [slice_concat](fusion/slice_concat.md) |
-| 32 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
-| 33 | `IsGemmActivationFusionGraph` | `CreateGemmActivationFusion` | [gemm_activation](fusion/gemm_activation.md) |
-| 34 | `IsFusedGemmFusionGraph` | `CreateFusedGemmFusion` | [fused_gemm](fusion/fused_gemm.md) |
-| 35 | `IsSiluFusionGraph` | `CreateSiluFusion` | [silu](fusion/silu.md) |
+| 26 | `IsSwiGluFusionGraph` | `CreateSwiGluFusion` | [swi_glu](fusion/swi_glu.md) |
+| 27 | `IsParallelMatMulConcatFusionGraph` | `CreateParallelMatMulConcatFusion` | [parallel_matmul_concat](fusion/parallel_matmul_concat.md) |
+| 28 | `IsParallelLinearFusionGraph` | `CreateParallelLinearFusion` | [parallel_linear](fusion/parallel_linear.md) |
+| 29 | `IsStridedViewFusionGraph` | `CreateStridedViewFusion` | [strided_view](fusion/strided_view.md) |
+| 30 | `IsShapeReshapeFusionGraph` | `CreateShapeReshapeFusion` | [shape_reshape](fusion/shape_reshape.md) |
+| 31 | `IsTileConcatFusionGraph` | `CreateTileConcatFusion` | [tile_concat](fusion/tile_concat.md) |
+| 32 | `IsSliceConcatFusionGraph` | `CreateSliceConcatFusion` | [slice_concat](fusion/slice_concat.md) |
+| 33 | `IsConcatReshapeFusionGraph` | `CreateConcatReshapeFusion` | [concat_reshape](fusion/concat_reshape.md) |
+| 34 | `IsGemmActivationFusionGraph` | `CreateGemmActivationFusion` | [gemm_activation](fusion/gemm_activation.md) |
+| 35 | `IsFusedGemmFusionGraph` | `CreateFusedGemmFusion` | [fused_gemm](fusion/fused_gemm.md) |
+| 36 | `IsSiluFusionGraph` | `CreateSiluFusion` | [silu](fusion/silu.md) |

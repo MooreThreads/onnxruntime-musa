@@ -58,6 +58,7 @@
 #include "fusion/split_sequence_moe_fusion.h"
 #include "fusion/split_unsqueeze_concat_fusion.h"
 #include "fusion/strided_view_fusion.h"
+#include "fusion/swiglu_fusion.h"
 #include "fusion/target_id_count_embedding_fusion.h"
 #include "fusion/tile_concat_fusion.h"
 #include "plugin_ep_utils.h"
@@ -67,10 +68,12 @@ using musa_ep::CreateGenerateMTGRCustomMaskFusion;
 using musa_ep::CreateMultiKqvMhaOutputProjectionFusion;
 using musa_ep::CreateRecRankCalibrationFusion;
 using musa_ep::CreateSiluFusion;
+using musa_ep::CreateSwiGluFusion;
 using musa_ep::IsGenerateMTGRCustomMaskFusionGraph;
 using musa_ep::IsMultiKqvMhaOutputProjectionFusionGraph;
 using musa_ep::IsRecRankCalibrationFusionGraph;
 using musa_ep::IsSiluFusionGraph;
+using musa_ep::IsSwiGluFusionGraph;
 
 /*
  * Fusion node runtime bridge
@@ -401,6 +404,9 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
       } else if (IsSplitConcatFusionGraph(graph)) {
         fusion_compute = CreateSplitConcatFusion(graph, fused_node);
         finder_name = "FindSplitConcatFusions";
+      } else if (IsSwiGluFusionGraph(graph)) {
+        fusion_compute = CreateSwiGluFusion(graph, fused_node);
+        finder_name = "FindSwiGluFusions";
       } else if (IsParallelMatMulConcatFusionGraph(graph)) {
         fusion_compute = CreateParallelMatMulConcatFusion(graph, fused_node);
         finder_name = "FindParallelMatMulConcatFusions";

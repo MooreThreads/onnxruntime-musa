@@ -13,7 +13,6 @@
 
 #include "fusion/mhta_scaled_dot_product_attention_fusion.h"
 
-#include <mudnncxx/mudnn.h>
 #include <musa_runtime.h>
 
 #include <cmath>
@@ -33,6 +32,7 @@
 #include "kernels/llm/mhta_sdpa_fp32_impl.h"
 #include "kernels/shared_inc/blas_utils.h"
 #include "kernels/shared_inc/op_kernel_common.h"
+#include "mudnn_compat.h"
 
 namespace {
 
@@ -457,22 +457,42 @@ void CheckStatus(::musa::dnn::Status status, const char* message) {
   }
 }
 
-void SetupTensor(::musa::dnn::Tensor& tensor, const void* data,
-                 const std::vector<int64_t>& shape,
-                 ONNXTensorElementDataType elem_type, const char* name) {
-  if (!SetMudnnTensor(tensor, data, shape, elem_type)) {
+// SDPA accepts a BOOL keep-mask in muDNN 4.3.8 even though BOOL is excluded
+// from the elementwise dispatch whitelist in SetMudnnTensor(). Keep this
+// descriptor path separate so adding SDPA mask support cannot re-enable the
+// unsupported elementwise dtype combinations guarded by that whitelist.
+bool SetMudnnSdpaTensor(::musa::dnn::Tensor& tensor, const void* data,
+                        const std::vector<int64_t>& shape,
+                        ONNXTensorElementDataType elem_type) {
+  ::musa::dnn::Tensor::Type mudnn_type;
+  if (!MudnnTensorType(elem_type, mudnn_type) ||
+      tensor.SetAddr(data) != ::musa::dnn::Status::SUCCESS ||
+      tensor.SetType(mudnn_type) != ::musa::dnn::Status::SUCCESS ||
+      tensor.SetFormat(::musa::dnn::Tensor::Format::NCHW) !=
+          ::musa::dnn::Status::SUCCESS) {
+    return false;
+  }
+  std::vector<int64_t> dims = shape.empty() ? std::vector<int64_t>{1} : shape;
+  return tensor.SetNdInfo(static_cast<int64_t>(dims.size()), dims.data()) ==
+         ::musa::dnn::Status::SUCCESS;
+}
+
+void SetupSdpaTensor(::musa::dnn::Tensor& tensor, const void* data,
+                     const std::vector<int64_t>& shape,
+                     ONNXTensorElementDataType elem_type, const char* name) {
+  if (!SetMudnnSdpaTensor(tensor, data, shape, elem_type)) {
     throw std::runtime_error(std::string("failed to set MHTA SDPA tensor ") +
                              name);
   }
 }
 
-void SetupTensorWithStrides(::musa::dnn::Tensor& tensor, const void* data,
-                            const std::vector<int64_t>& shape,
-                            const std::vector<int64_t>& strides,
-                            ONNXTensorElementDataType elem_type,
-                            const char* name) {
+void SetupSdpaTensorWithStrides(::musa::dnn::Tensor& tensor, const void* data,
+                                const std::vector<int64_t>& shape,
+                                const std::vector<int64_t>& strides,
+                                ONNXTensorElementDataType elem_type,
+                                const char* name) {
   if (shape.size() != strides.size() || shape.empty() ||
-      !SetMudnnTensor(tensor, data, shape, elem_type) ||
+      !SetMudnnSdpaTensor(tensor, data, shape, elem_type) ||
       tensor.SetNdInfo(static_cast<int64_t>(shape.size()), shape.data(),
                        strides.data()) != ::musa::dnn::Status::SUCCESS) {
     throw std::runtime_error(
@@ -850,18 +870,18 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       ::musa::dnn::Handle* handle = nullptr;
       RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
       ::musa::dnn::Tensor input_tensor, output_tensor;
-      SetupTensor(input_tensor, q_data, q_shape, elem_type, "Q");
-      SetupTensor(output_tensor, q_transposed.data(), sdpa_q_shape, elem_type,
-                  "Q transpose");
+      SetupSdpaTensor(input_tensor, q_data, q_shape, elem_type, "Q");
+      SetupSdpaTensor(output_tensor, q_transposed.data(), sdpa_q_shape,
+                      elem_type, "Q transpose");
       const int64_t perm[] = {0, 2, 1, 3};
       ::musa::dnn::Permute permute;
       CheckStatus(permute.ConfigDimStride(output_tensor, input_tensor, 4, perm),
                   "failed to configure MHTA SDPA Q permute");
       CheckStatus(permute.Run(*handle, output_tensor, input_tensor),
                   "MHTA SDPA Q permute failed");
-      SetupTensor(input_tensor, k_data, k_shape, elem_type, "K");
-      SetupTensor(output_tensor, k_transposed.data(), sdpa_k_shape, elem_type,
-                  "K transpose");
+      SetupSdpaTensor(input_tensor, k_data, k_shape, elem_type, "K");
+      SetupSdpaTensor(output_tensor, k_transposed.data(), sdpa_k_shape,
+                      elem_type, "K transpose");
       CheckStatus(permute.ConfigDimStride(output_tensor, input_tensor, 4, perm),
                   "failed to configure MHTA SDPA K permute");
       CheckStatus(permute.Run(*handle, output_tensor, input_tensor),
@@ -887,9 +907,9 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       ::musa::dnn::Handle* handle = nullptr;
       RETURN_IF_ERROR(EnsureMudnnHandle(&handle, stream));
       ::musa::dnn::Tensor input_tensor, output_tensor;
-      SetupTensor(input_tensor, k_data, k_shape, elem_type, "K");
-      SetupTensor(output_tensor, k_transposed.data(), sdpa_k_shape, elem_type,
-                  "K transpose");
+      SetupSdpaTensor(input_tensor, k_data, k_shape, elem_type, "K");
+      SetupSdpaTensor(output_tensor, k_transposed.data(), sdpa_k_shape,
+                      elem_type, "K transpose");
       const int64_t perm[] = {0, 1, 3, 2};
       ::musa::dnn::Permute permute;
       CheckStatus(permute.ConfigDimStride(output_tensor, input_tensor, 4, perm),
@@ -968,6 +988,11 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                                  kInt32MaskCacheReuseLimit);
           mask_data = cache.buffer.data();
         }
+        // The raw INT32 input may have a key-prefix dimension larger than Sk
+        // (the absorbed Slice trims it).  The materialized BOOL tensor is
+        // always contiguous [B,H,Sq,Sk], so update the params used by the
+        // post-RunFlash fully-masked-row repair to its actual key extent.
+        mask_params.mask_k = seqlen_k;
       }
     } else if (mask_scale_ != 1.0f) {
       const size_t mask_bytes = static_cast<size_t>(NumElements(mask_shape)) *
@@ -982,10 +1007,11 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
       if (copy_status != musaSuccess)
         throw std::runtime_error(MusaErrorString(copy_status));
       ::musa::dnn::Tensor mask_tensor, scalar_tensor, scaled_tensor;
-      SetupTensor(mask_tensor, mask_data, mask_shape, elem_type, "mask");
-      SetupTensor(scalar_tensor, scalar.data(), {1}, elem_type, "mask scale");
-      SetupTensor(scaled_tensor, mask_materialized.data(), mask_shape,
-                  elem_type, "scaled mask");
+      SetupSdpaTensor(mask_tensor, mask_data, mask_shape, elem_type, "mask");
+      SetupSdpaTensor(scalar_tensor, scalar.data(), {1}, elem_type,
+                      "mask scale");
+      SetupSdpaTensor(scaled_tensor, mask_materialized.data(), mask_shape,
+                      elem_type, "scaled mask");
       ::musa::dnn::Binary mul;
       CheckStatus(mul.SetMode(::musa::dnn::Binary::Mode::MUL),
                   "failed to set MHTA SDPA mask scale mode");
@@ -1001,53 +1027,55 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
                                               head_dim, heads * head_dim, 1};
       const std::vector<int64_t> kv_strides = {seqlen_k * heads * head_dim,
                                                head_dim, heads * head_dim, 1};
-      SetupTensorWithStrides(q_tensor, q_data, sdpa_q_shape, q_strides,
-                             elem_type, "Q");
-      SetupTensorWithStrides(k_tensor, k_data, sdpa_k_shape, kv_strides,
-                             elem_type, "K");
-      SetupTensorWithStrides(v_tensor, v_buffer.data(), sdpa_v_shape,
-                             kv_strides, elem_type, "V");
+      SetupSdpaTensorWithStrides(q_tensor, q_data, sdpa_q_shape, q_strides,
+                                 elem_type, "Q");
+      SetupSdpaTensorWithStrides(k_tensor, k_data, sdpa_k_shape, kv_strides,
+                                 elem_type, "K");
+      SetupSdpaTensorWithStrides(v_tensor, v_buffer.data(), sdpa_v_shape,
+                                 kv_strides, elem_type, "V");
     } else if (bshd_strided_flash) {
       const std::vector<int64_t> bshd_strides = {seqlen_q * heads * head_dim,
                                                  head_dim, heads * head_dim, 1};
-      SetupTensorWithStrides(q_tensor, q_data, sdpa_q_shape, bshd_strides,
-                             elem_type, "Q");
-      SetupTensorWithStrides(k_tensor, k_data, sdpa_k_shape, bshd_strides,
-                             elem_type, "K");
-      SetupTensorWithStrides(v_tensor, v_buffer.data(), sdpa_v_shape,
-                             bshd_strides, elem_type, "V");
+      SetupSdpaTensorWithStrides(q_tensor, q_data, sdpa_q_shape, bshd_strides,
+                                 elem_type, "Q");
+      SetupSdpaTensorWithStrides(k_tensor, k_data, sdpa_k_shape, bshd_strides,
+                                 elem_type, "K");
+      SetupSdpaTensorWithStrides(v_tensor, v_buffer.data(), sdpa_v_shape,
+                                 bshd_strides, elem_type, "V");
     } else {
-      SetupTensor(q_tensor, q_data, sdpa_q_shape, elem_type, "Q");
-      SetupTensor(k_tensor, k_data, sdpa_k_shape, elem_type, "K");
-      SetupTensor(v_tensor, v_buffer.data(), sdpa_v_shape, elem_type, "V");
+      SetupSdpaTensor(q_tensor, q_data, sdpa_q_shape, elem_type, "Q");
+      SetupSdpaTensor(k_tensor, k_data, sdpa_k_shape, elem_type, "K");
+      SetupSdpaTensor(v_tensor, v_buffer.data(), sdpa_v_shape, elem_type, "V");
     }
     if (has_external_mask || lseq_last_key_mask_ || lseq_shd_strided_flash) {
-      SetupTensor(mask_tensor, mask_data, active_mask_shape, active_mask_type,
-                  "mask");
+      SetupSdpaTensor(mask_tensor, mask_data, active_mask_shape,
+                      active_mask_type, "mask");
     }
     if (lseq_shd_strided_flash) {
       const std::vector<int64_t> output_strides = {
           seqlen_q * heads * head_dim, head_dim, heads * head_dim, 1};
-      SetupTensorWithStrides(out_tensor, output.GetTensorMutableData<void>(),
-                             sdpa_q_shape, output_strides, elem_type, "output");
+      SetupSdpaTensorWithStrides(
+          out_tensor, output.GetTensorMutableData<void>(), sdpa_q_shape,
+          output_strides, elem_type, "output");
     } else if (bshd_strided_flash) {
       const std::vector<int64_t> bshd_strides = {seqlen_q * heads * head_dim,
                                                  head_dim, heads * head_dim, 1};
-      SetupTensorWithStrides(out_tensor, output.GetTensorMutableData<void>(),
-                             sdpa_q_shape, bshd_strides, elem_type, "output");
+      SetupSdpaTensorWithStrides(
+          out_tensor, output.GetTensorMutableData<void>(), sdpa_q_shape,
+          bshd_strides, elem_type, "output");
     } else {
-      SetupTensor(out_tensor, output.GetTensorMutableData<void>(),
-                  (sim_rank3 || folded_rank3) ? sdpa_q_shape : output_shape,
-                  elem_type, "output");
+      SetupSdpaTensor(out_tensor, output.GetTensorMutableData<void>(),
+                      (sim_rank3 || folded_rank3) ? sdpa_q_shape : output_shape,
+                      elem_type, "output");
     }
     DeviceBuffer& lse = scratch.lse;
     lse.Resize(static_cast<size_t>(batch * heads * seqlen_q) * sizeof(float),
                stream);
-    SetupTensor(lse_tensor, lse.data(), {batch, heads, seqlen_q},
-                ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, "logsumexp");
+    SetupSdpaTensor(lse_tensor, lse.data(), {batch, heads, seqlen_q},
+                    ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, "logsumexp");
     // Inference has dropout disabled.  Passing a null tensor avoids Flash's
     // output-mask shape contract [B,H,Sq,Sk] and its needless allocation.
-    SetupTensor(dropout_tensor, nullptr, {1}, elem_type, "dropout mask");
+    SetupSdpaTensor(dropout_tensor, nullptr, {1}, elem_type, "dropout mask");
     ::musa::dnn::ScaledDotProductAttention sdpa;
     CheckStatus(
         sdpa.SetComputeMode(
@@ -1077,8 +1105,23 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
       CheckStatus(
           sdpa.RunFlash(*handle, out_tensor, lse_tensor, q_tensor, k_tensor,
-                        v_tensor, mask_tensor, dropout_tensor),
+                        v_tensor, mask_tensor, dropout_tensor, nullptr),
           "MHTA SDPA RunFlash failed");
+      // muDNN 4.3.8 returns NaN when every key in a query row is masked. The
+      // ONNX keep-mask semantics used by this fusion require a zero output for
+      // that row. The repair runs on the same provider stream and therefore
+      // remains ordered after RunFlash without a host synchronization.
+      if (boolean_mask_ && !lseq_shd_strided_flash && !bshd_strided_flash &&
+          !sim_rank3 && !folded_rank3) {
+        const musaError_t repair_status = LaunchMusaMhtaSdpaZeroFullyMaskedRows(
+            static_cast<uint16_t*>(output.GetTensorMutableData<void>()),
+            static_cast<const uint8_t*>(mask_data), mask_params, stream);
+        if (repair_status != musaSuccess) {
+          throw std::runtime_error(
+              std::string("MHTA SDPA fully-masked row repair failed: ") +
+              MusaErrorString(repair_status));
+        }
+      }
     } else {
       DeviceBuffer& attn_probs = scratch.attn_probs;
       attn_probs.Resize(
@@ -1086,9 +1129,9 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
               MhtaSdpaElementSize(elem_type),
           stream);
       ::musa::dnn::Tensor probs_tensor;
-      SetupTensor(probs_tensor, attn_probs.data(),
-                  {batch, heads, seqlen_q, seqlen_k}, elem_type,
-                  "attention probabilities");
+      SetupSdpaTensor(probs_tensor, attn_probs.data(),
+                      {batch, heads, seqlen_q, seqlen_k}, elem_type,
+                      "attention probabilities");
       auto allocator = [stream](size_t bytes) -> ::musa::dnn::MemoryHandler {
         void* workspace = AllocateDeviceMemoryOnStream(bytes, stream);
         if (bytes != 0 && workspace == nullptr) {

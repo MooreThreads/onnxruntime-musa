@@ -216,9 +216,10 @@ ORT_MUSA_DUMP_RUNTIME_GRAPH_MERMAID_PATH=/tmp/musa_runtime_execution_graph.mmd \
   stream ownership 隔离 free chunk：有 owner 的 chunk 仅由同一 stream
   复用；释放 sync-stream 实现时会先执行该 stream 的局部完成同步，再解除
   ownership 并允许其他 stream 复用。不会执行 device-wide 同步；该 release
-  路径会等待该 stream 上已提交的工作完成。没有 `OrtSyncStream` 的分配不进入
-  可复用 arena，而是 direct allocation/free，避免在共享 Session 多流 Run 中把
-  unowned block 交给另一条 stream。
+  路径会等待该 stream 上已提交的工作完成。没有 `OrtSyncStream`，或 stream
+  没有原生句柄（例如 ORT 为 memory pattern 使用的 `DummyStream`）的分配，
+  使用 direct allocation/free 并计入预算，不进入可复用 arena。这类 stream
+  没有 MUSA implementation 或释放回调，不能调用 `SyncStream_GetImpl()`。
 - 默认值：未设置或设置为 `0` 时不启用 arena，继续使用原始
   `CustomAllocator` 分配/释放路径。
 - 解析规则：必须是完整的非负十进制 MB 整数；尾部字符、负数和换算溢出均会

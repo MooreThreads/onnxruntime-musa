@@ -56,7 +56,7 @@ target_include_directories(${MUSA_PLUGIN_TARGET}
 )
 
 set(MUSA_LIBRARY_DIRS "${MUSA_HOME}/lib" "${MUSA_HOME}/lib64")
-foreach(_musa_lib IN ITEMS musart mublas mudnncxx mudnn)
+foreach(_musa_lib IN ITEMS musart mublas mudnn)
   string(TOUPPER "${_musa_lib}" _musa_lib_upper)
   find_library(MUSA_${_musa_lib_upper}_LIBRARY
     NAMES ${_musa_lib}
@@ -70,6 +70,28 @@ foreach(_musa_lib IN ITEMS musart mublas mudnncxx mudnn)
   endif()
   list(APPEND MUSA_PLUGIN_LINK_LIBRARIES ${MUSA_${_musa_lib_upper}_LIBRARY})
 endforeach()
+
+# mudnncxx is a separate shared library in MUSA 5.1, but its C++ API is
+# folded into mudnn in MUSA 4.3.8. Link it only when it is present.
+find_library(MUSA_MUDNNCXX_LIBRARY
+  NAMES mudnncxx
+  PATHS ${MUSA_LIBRARY_DIRS}
+  NO_DEFAULT_PATH
+)
+if(MUSA_MUDNNCXX_LIBRARY)
+  list(APPEND MUSA_PLUGIN_LINK_LIBRARIES ${MUSA_MUDNNCXX_LIBRARY})
+  set(MUSA_MUDNNCXX_RUNTIME "libmudnncxx.so.3")
+else()
+  set(MUSA_MUDNNCXX_RUNTIME "")
+endif()
+set(MUSA_EXTERNAL_RUNTIME_LIBRARIES
+  "\"libmusa.so.1\", \"libmusart.so.5\", \"libmublas.so.1\","
+)
+if(MUSA_MUDNNCXX_RUNTIME)
+  string(APPEND MUSA_EXTERNAL_RUNTIME_LIBRARIES
+    " \"${MUSA_MUDNNCXX_RUNTIME}\",")
+endif()
+string(APPEND MUSA_EXTERNAL_RUNTIME_LIBRARIES " \"libmudnn.so.3\"")
 
 target_link_libraries(${MUSA_PLUGIN_TARGET} ${MUSA_PLUGIN_LINK_LIBRARIES})
 

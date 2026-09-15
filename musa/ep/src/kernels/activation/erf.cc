@@ -11,50 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
 
 namespace {
-constexpr size_t kMudnnMaxElementwiseRank = 5;
-
-bool TryMudnnErf(Ort::KernelContext& ctx, const std::vector<int64_t>& shape,
-                 ONNXTensorElementDataType elem_type) {
-  Ort::ConstValue input = ctx.GetInput(0);
-  if (shape.size() > kMudnnMaxElementwiseRank ||
-      !IsGpuMemory(input.GetTensorMemoryInfo())) {
-    return false;
-  }
-
-  Ort::UnownedValue y = ctx.GetOutput(0, shape);
-  if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
-    return false;
-  }
-
-  ::musa::dnn::Handle* handle = nullptr;
-  OrtStatus* handle_status = EnsureMudnnHandle(&handle, GetComputeStream(ctx));
-  if (handle_status != nullptr) {
-    Ort::GetApi().ReleaseStatus(handle_status);
-    return false;
-  }
-
-  ::musa::dnn::Tensor input_tensor;
-  ::musa::dnn::Tensor output_tensor;
-  if (!SetMudnnTensor(input_tensor, input.GetTensorRawData(), shape,
-                      elem_type) ||
-      !SetMudnnTensor(output_tensor, y.GetTensorMutableRawData(), shape,
-                      elem_type)) {
-    return false;
-  }
-
-  ::musa::dnn::Unary op;
-  if (op.SetMode(::musa::dnn::Unary::Mode::ERF) !=
-      ::musa::dnn::Status::SUCCESS) {
-    return false;
-  }
-  return op.Run(*handle, output_tensor, input_tensor) ==
-         ::musa::dnn::Status::SUCCESS;
-}
-
 class Erf : public OpKernelBase<Erf> {
  public:
   Erf(const OrtKernelInfo* /*info*/, void* /*state*/) {}
@@ -68,9 +27,9 @@ OrtStatus* Erf::Compute(Ort::KernelContext& ctx) const {
   if (OutputEmptyTensorIfNeeded(ctx, shape)) {
     return nullptr;
   }
-  if (TryMudnnErf(ctx, shape, elem_type)) {
-    return nullptr;
-  }
+  // muDNN ERF on Toolkit 4.3.8 returns SUCCESS but maps +/-Inf to NaN.
+  // Use the existing device erff/erf implementation (as in CUDA/musify) for
+  // all registered floating types to preserve infinities, NaNs and signed zero.
   return UnaryDeviceCompute(ctx, shape, elem_type, MusaUnaryOp::Erf, "Erf");
 }
 }  // namespace

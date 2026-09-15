@@ -34,7 +34,7 @@ Build-time (only two):
 
 | Component | Version | Notes |
 |---|---|---|
-| **MUSA toolkit** | **5.1.0** | Defaults to `/usr/local/musa`. Override with `-DMUSA_HOME=...` or `./build.sh -- -DMUSA_HOME=/opt/musa`. Links the MUSA runtime, muBLAS, and muDNN libraries. |
+| **MUSA toolkit** | **5.1.0 / 4.3.8** | Both versions are supported. Defaults to `/usr/local/musa`. Override with `-DMUSA_HOME=...` or `./build.sh -- -DMUSA_HOME=/opt/musa`. Links the MUSA runtime, muBLAS, and muDNN libraries. |
 | **C++ compiler** | C++20 | GCC 11+ / Clang 14+. Required for `std::span`. |
 
 ONNX Runtime is a Git submodule pinned to tag **v1.26.0** (commit `8c546c37`). The build uses
@@ -329,6 +329,7 @@ python -m pytest test/ops/
 │                     └─▶ kernels/{math, activation, tensor, logical,  │
 │                                  reduction, nn}                      │
 │                            └─▶ MUSA runtime libraries on MUSA 5.1.0  │
+│                                or 4.3.8                              │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 

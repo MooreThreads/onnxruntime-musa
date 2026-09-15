@@ -245,20 +245,8 @@ OrtStatus* TopK::Compute(Ort::KernelContext& ctx) const {
     status = LaunchMusaTopKBlockSortKernel(
         input_data, values_data, indices_data, params, musa_elem_type, stream);
   } else if (algorithm == TopKAlgorithm::SegmentedRadixSort) {
-    size_t workspace_bytes = 0;
-    status = GetMusaTopKRadixSortWorkspaceSize(params, musa_elem_type,
-                                               &workspace_bytes);
-    if (status == musaSuccess) {
-      void* workspace = AllocateDeviceMemoryOnStream(workspace_bytes, stream);
-      if (workspace == nullptr) {
-        return Ort::GetApi().CreateStatus(
-            ORT_FAIL, "TopK failed to allocate radix-sort workspace");
-      }
-      status = LaunchMusaTopKRadixSortKernel(
-          input_data, values_data, indices_data, params, musa_elem_type,
-          workspace, workspace_bytes, stream);
-      FreeDeviceMemoryOnStream(workspace, stream, workspace_bytes);
-    }
+    status = LaunchMusaTopKGenericKernel(input_data, values_data, indices_data,
+                                         params, musa_elem_type, stream);
   }
 
   if (status == musaErrorNotSupported) {

@@ -35,7 +35,11 @@ list(APPEND MUSA_PLUGIN_SOURCES ${MUSA_PLUGIN_FUSION_SOURCES})
 list(APPEND CMAKE_MODULE_PATH "${MUSA_HOME}/cmake")
 set(MUSA_TOOLKIT_ROOT_DIR "${MUSA_HOME}")
 find_package(MUSA REQUIRED)
-list(APPEND MUSA_MCC_FLAGS -std=c++17)
+list(APPEND MUSA_MCC_FLAGS
+  -x musa
+  --gcc-toolchain=${MUSA_GCC_TOOLCHAIN}
+  -std=c++17
+)
 
 set_source_files_properties(
   ${MUSA_PLUGIN_KERNEL_MU_SOURCES}

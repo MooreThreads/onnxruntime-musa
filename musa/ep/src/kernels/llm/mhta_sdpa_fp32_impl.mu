@@ -100,6 +100,40 @@ __global__ void MhtaLseqLastKeyKeepMask2DKernel(bool* bool_mask,
   }
 }
 
+__global__ void MhtaZeroFullyMaskedRowsKernel(
+    uint16_t* output, const uint8_t* bool_mask,
+    MusaMhtaSdpaFp32Params params) {
+  const int64_t row_id = static_cast<int64_t>(blockIdx.x);
+  const int64_t rows = params.batch * params.heads * params.seqlen_q;
+  if (row_id >= rows) return;
+
+  const int64_t row = row_id % params.seqlen_q;
+  const int64_t head_index = row_id / params.seqlen_q;
+  const int64_t h = head_index % params.heads;
+  const int64_t b = head_index / params.heads;
+  // One block owns one row. Let lane zero scan the (usually short) mask row;
+  // this avoids relying on atomics on shared memory in older MCC releases.
+  __shared__ int keep;
+  if (threadIdx.x == 0) {
+    keep = 0;
+    for (int64_t k = 0; k < params.seqlen_k; ++k) {
+      const int64_t mask_offset = MaskOffset(params, b, h, row, k);
+      if (bool_mask[mask_offset]) {
+        keep = 1;
+        break;
+      }
+    }
+  }
+  __syncthreads();
+  if (keep == 0) {
+    const int64_t output_base =
+        ((b * params.heads + h) * params.seqlen_q + row) * params.head_dim;
+    for (int64_t d = threadIdx.x; d < params.head_dim; d += blockDim.x) {
+      output[output_base + d] = 0;
+    }
+  }
+}
+
 __global__ void MhtaSdpaFp32Kernel(const float* q, const float* k,
                                    const float* v, const void* mask,
                                    float* output,
@@ -230,5 +264,21 @@ musaError_t LaunchMusaMhtaSdpaInt32KeepMaskToBoolKernel(
     MhtaInt32KeepMaskToBoolKernel<<<BlocksForCount(count), kThreadsPerBlock, 0,
                                     stream>>>(mask, bool_mask, params);
   }
+  return musaGetLastError();
+}
+
+musaError_t LaunchMusaMhtaSdpaZeroFullyMaskedRows(
+    uint16_t* output, const uint8_t* bool_mask,
+    MusaMhtaSdpaFp32Params params, musaStream_t stream) {
+  if (output == nullptr || bool_mask == nullptr || params.batch <= 0 ||
+      params.heads <= 0 || params.seqlen_q <= 0 || params.seqlen_k <= 0 ||
+      params.head_dim <= 0) {
+    return musaSuccess;
+  }
+  const int64_t rows = params.batch * params.heads * params.seqlen_q;
+  if (rows > INT32_MAX) return musaErrorNotSupported;
+  MhtaZeroFullyMaskedRowsKernel<<<static_cast<unsigned int>(rows),
+                                  kThreadsPerBlock, 0, stream>>>(
+      output, bool_mask, params);
   return musaGetLastError();
 }

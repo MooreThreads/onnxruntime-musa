@@ -49,14 +49,18 @@ def _make_model(feeds: dict[str, np.ndarray]) -> bytes:
     )
 
 
-def _create_musa_session(model: bytes):
+def _create_musa_session(model: bytes, *, enable_mem_pattern=True):
     devices = musa_devices()
     if not devices:
         pytest.skip("No MUSA device available")
 
     options = ort.SessionOptions()
+    options.enable_mem_pattern = enable_mem_pattern
+    options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
     options.add_provider_for_devices(devices, {})
-    return ort.InferenceSession(model, sess_options=options)
+    session = ort.InferenceSession(model, sess_options=options)
+    session.disable_fallback()
+    return session
 
 
 def test_allocator_cache_shared_session_is_stream_ordered(monkeypatch):
@@ -119,26 +123,30 @@ def test_staggered_run_end_keeps_concurrent_streams_isolated(monkeypatch):
         consumer_future.result()
 
 
-def test_allocator_cache_survives_repeated_worker_stream_release(monkeypatch):
+@pytest.mark.parametrize("enable_mem_pattern", [True, False], ids=["memory_pattern", "per_tensor"])
+def test_allocator_cache_survives_repeated_worker_stream_release(monkeypatch, enable_mem_pattern):
     """Repeated short-lived workers exercise stream release between cache uses."""
 
     monkeypatch.setenv("ORT_MUSA_ALLOCATOR_CACHE_LIMIT_MB", "128")
     feeds = {"X": np.linspace(-3.0, 3.0, 16384, dtype=np.float32)}
     model = _make_model(feeds)
     cpu_session = ort.InferenceSession(model, providers=["CPUExecutionProvider"])
-    (expected,) = cpu_session.run(None, feeds)
-    session = _create_musa_session(model)
+    worker_feeds = [{"X": feeds["X"] + np.float32(worker)} for worker in range(4)]
+    expected = [cpu_session.run(None, feed)[0] for feed in worker_feeds]
+    session = _create_musa_session(model, enable_mem_pattern=enable_mem_pattern)
+    start = threading.Barrier(4)
 
-    def run_once() -> None:
-        (actual,) = session.run(None, feeds)
-        np.testing.assert_array_equal(actual, expected)
+    def run_once(worker: int) -> None:
+        start.wait(timeout=30)
+        (actual,) = session.run(None, worker_feeds[worker])
+        np.testing.assert_array_equal(actual, expected[worker])
 
     # Recreate workers rather than keeping a fixed pool: this repeatedly tears
     # down ORT's per-worker stream state while the shared session and arena
     # remain alive.
     for _ in range(128):
         with ThreadPoolExecutor(max_workers=4) as executor:
-            list(executor.map(lambda _: run_once(), range(4)))
+            list(executor.map(run_once, range(4)))
 
 
 @pytest.mark.parametrize("invalid_value", ["-1", "128x", "18446744073709551616"])

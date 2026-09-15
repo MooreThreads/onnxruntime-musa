@@ -10,10 +10,6 @@
   "ort_tested_versions": ["@ONNXRUNTIME_VERSION@"],
   "platform": "@CMAKE_SYSTEM_NAME@-@CMAKE_SYSTEM_PROCESSOR@",
   "external_runtime_libraries": [
-    "libmusa.so.1",
-    "libmusart.so.5",
-    "libmublas.so.1",
-    "libmudnncxx.so.3",
-    "libmudnn.so.3"
+    @MUSA_EXTERNAL_RUNTIME_LIBRARIES@
   ]
 }

@@ -47,7 +47,6 @@ AUDITWHEEL_EXCLUDE = [
     "libmusa.so.1",
     "libmusart.so.5",
     "libmublas.so.1",
-    "libmudnncxx.so.3",
     "libmudnn.so.3",
 ]
 

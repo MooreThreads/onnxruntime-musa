@@ -46,3 +46,11 @@ musaError_t LaunchMusaMhtaSdpaLseqLastKeyKeepMask2DKernel(bool* bool_mask,
                                                           int64_t seqlen_q,
                                                           int64_t seqlen_k,
                                                           musaStream_t stream);
+
+// RunFlash returns NaN for a query row whose keep-mask contains no key on
+// older muDNN releases. ONNX attention semantics require that row to produce
+// zeros, so repair those rows on the provider stream after SDPA completes.
+musaError_t LaunchMusaMhtaSdpaZeroFullyMaskedRows(uint16_t* output,
+                                                  const uint8_t* bool_mask,
+                                                  MusaMhtaSdpaFp32Params params,
+                                                  musaStream_t stream);

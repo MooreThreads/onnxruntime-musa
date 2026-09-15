@@ -1,6 +1,5 @@
 #include "matmul.h"
 
-#include <mudnncxx/mudnn.h>
 #include <musa_runtime.h>
 
 #include <algorithm>
@@ -11,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "mudnn_compat.h"
 #include "shared_inc/blas_utils.h"
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(

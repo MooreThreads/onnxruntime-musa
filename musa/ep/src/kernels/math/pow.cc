@@ -21,6 +21,14 @@ bool TryMudnnPow(Ort::KernelContext& ctx, const std::vector<int64_t>& shape0,
                  const std::vector<int64_t>& shape1,
                  ONNXTensorElementDataType lhs_type,
                  ONNXTensorElementDataType rhs_type) {
+  // 4.3.8 has no integer POW entry in the muDNN dispatch table. The native
+  // device kernel below supports these types, so bypass muDNN safely.
+  if (lhs_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
+      lhs_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 ||
+      rhs_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
+      rhs_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+    return false;
+  }
   std::vector<int64_t> out_shape = BroadcastShape(shape0, shape1);
   if (shape0.empty() || shape1.empty() ||
       out_shape.size() > kMudnnMaxElementwiseRank ||

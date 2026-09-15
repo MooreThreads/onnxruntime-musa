@@ -31,6 +31,21 @@ def test_conv_opset11_float_nchw():
     )
 
 
+def test_conv_opset11_float_nchw_with_bias():
+    x = np.random.default_rng(5).standard_normal((1, 2, 4, 4)).astype(np.float32)
+    w = np.random.default_rng(6).standard_normal((3, 2, 3, 3)).astype(np.float32)
+    b = np.array([1.25, -2.0, 0.5], dtype=np.float32)
+    run_and_compare(
+        "Conv",
+        inputs={"X": x, "W": w, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"pads": [1, 1, 1, 1], "strides": [1, 1]},
+        opset=11,
+        rtol=1e-4,
+        atol=1e-4,
+    )
+
+
 def test_conv_lowered_conv1d_h1_k1():
     x = np.random.default_rng(0).standard_normal((2, 64, 1, 8)).astype(np.float32)
     w = np.random.default_rng(1).standard_normal((16, 64, 1, 1)).astype(np.float32)

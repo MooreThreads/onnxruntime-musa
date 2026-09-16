@@ -24,7 +24,12 @@ __global__ void Conv2DFloatKernel(const float* input,
     const int64_t n = remaining;
 
     float acc = bias == nullptr ? 0.0f : bias[oc];
-    for (int64_t ic = 0; ic < params.c; ++ic) {
+    const int64_t channels_per_group = params.c / params.group;
+    const int64_t outputs_per_group = params.m / params.group;
+    const int64_t group_index = oc / outputs_per_group;
+    for (int64_t ic_in_group = 0; ic_in_group < channels_per_group;
+         ++ic_in_group) {
+      const int64_t ic = group_index * channels_per_group + ic_in_group;
       for (int64_t kh = 0; kh < params.kernel_h; ++kh) {
         const int64_t ih =
             oh * params.stride_h + kh * params.dilation_h - params.pad_h;
@@ -40,7 +45,7 @@ __global__ void Conv2DFloatKernel(const float* input,
           const int64_t input_index =
               ((n * params.c + ic) * params.h + ih) * params.w + iw;
           const int64_t weight_index =
-              ((oc * params.c + ic) * params.kernel_h + kh) *
+              ((oc * channels_per_group + ic_in_group) * params.kernel_h + kh) *
                   params.kernel_w +
               kw;
           acc += input[input_index] * weight[weight_index];

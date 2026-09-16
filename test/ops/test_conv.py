@@ -46,6 +46,37 @@ def test_conv_opset11_float_nchw_with_bias():
     )
 
 
+def test_conv_opset11_float_nchw_grouped_with_bias():
+    x = np.random.default_rng(7).standard_normal((1, 4, 5, 5)).astype(np.float32)
+    w = np.random.default_rng(8).standard_normal((6, 2, 3, 3)).astype(np.float32)
+    b = np.random.default_rng(9).standard_normal((6,)).astype(np.float32)
+    run_and_compare(
+        "Conv",
+        inputs={"X": x, "W": w, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"group": 2, "pads": [1, 1, 1, 1], "strides": [1, 1]},
+        opset=11,
+        rtol=1e-4,
+        atol=1e-4,
+    )
+
+
+def test_conv_opset11_float_nchw_depthwise_fallback_with_bias():
+    # H=1 and kH=1 deliberately selects Conv's custom device fallback path.
+    x = np.random.default_rng(10).standard_normal((1, 4, 1, 7)).astype(np.float32)
+    w = np.random.default_rng(11).standard_normal((4, 1, 1, 3)).astype(np.float32)
+    b = np.random.default_rng(12).standard_normal((4,)).astype(np.float32)
+    run_and_compare(
+        "Conv",
+        inputs={"X": x, "W": w, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"group": 4, "pads": [0, 1, 0, 1], "strides": [1, 1]},
+        opset=11,
+        rtol=1e-4,
+        atol=1e-4,
+    )
+
+
 def test_conv_lowered_conv1d_h1_k1():
     x = np.random.default_rng(0).standard_normal((2, 64, 1, 8)).astype(np.float32)
     w = np.random.default_rng(1).standard_normal((16, 64, 1, 1)).astype(np.float32)

@@ -51,6 +51,29 @@ No `FetchContent` or ORT build tree is needed to compile the plugin. See
 
 GSL is **not** used; `std::span` (C++20) replaced `gsl::span` everywhere.
 
+## Docker images
+
+The following public images contain this repository at `/home/onnxruntime-musa` and
+provide the corresponding MUSA toolkit version:
+
+| Image | MUSA toolkit |
+|---|---|
+| `registry.mthreads.com/presale/devtech/fusionrt:5.1.0-20260915` | 5.1.0 |
+| `registry.mthreads.com/presale/devtech/fusionrt:4.3.8-20260915` | 4.3.8 |
+
+Pull an image with:
+
+```bash
+docker pull registry.mthreads.com/presale/devtech/fusionrt:5.1.0-20260915
+docker pull registry.mthreads.com/presale/devtech/fusionrt:4.3.8-20260915
+```
+
+After starting a container, the repository is available at:
+
+```text
+/home/onnxruntime-musa
+```
+
 Development/test runtime:
 
 - Python **>=3.11**.

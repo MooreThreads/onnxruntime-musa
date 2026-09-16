@@ -15,6 +15,15 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(MUSA_HOME "/usr/local/musa" CACHE PATH "Path to MUSA toolkit")
 
+# FindMUSA.cmake derives MCC's host compiler from CMAKE_C_COMPILER. This
+# project only enables CXX, so provide the selected C++ compiler explicitly.
+get_filename_component(_musa_cxx_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+get_filename_component(MUSA_GCC_TOOLCHAIN "${_musa_cxx_bin}/.." REALPATH)
+if(NOT MUSA_HOST_COMPILER)
+  set(MUSA_HOST_COMPILER "${CMAKE_CXX_COMPILER}" CACHE FILEPATH
+      "Host side compiler used by MCC" FORCE)
+endif()
+
 # ONNX Runtime is pinned as a submodule under third_party/onnxruntime (tag v1.26.0).
 # Only include/onnxruntime is materialized by the repository's sparse-checkout helper.
 set(ONNXRUNTIME_INCLUDE_DIR

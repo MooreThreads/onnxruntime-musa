@@ -271,8 +271,8 @@ class ArenaImpl {
   void Free(void* p);
 
   // Allocate memory directly, outside the reusable arena. Used for
-  // stream-unaware callers and initializers so they don't affect arena growth
-  // patterns or become cross-stream reusable.
+  // stream-unaware callers, ORT's handle-less memory-pattern stream, and
+  // initializers so they don't become cross-stream reusable.
   void* Reserve(size_t size);
 
   // Release unused memory. Frees all allocation regions where every chunk is
@@ -285,7 +285,7 @@ class ArenaImpl {
   size_t AllocatedSize(const void* ptr);
 
   // Un-assign chunks that are currently assigned to the stream.
-  // Called from OrtSyncStreamImpl::OnSessionRunEnd.
+  // Called on stream release after synchronizing the native MUSA stream.
   OrtStatus* ResetChunksUsingStream(const OrtSyncStreamImpl* stream_impl);
 
  private:

@@ -122,9 +122,13 @@ struct CustomAllocator : BaseAllocator {
       return nullptr;
     }
     auto& impl = *static_cast<CustomAllocator*>(this_);
+    // Memory-pattern allocations may use ORT's DummyStream. Only real device
+    // streams have an implementation; the dummy's native handle is null.
     const OrtSyncStreamImpl* stream_impl =
-        stream != nullptr ? Ort::GetEpApi().SyncStream_GetImpl(stream)
-                          : nullptr;
+        stream != nullptr &&
+                Ort::GetApi().SyncStream_GetHandle(stream) != nullptr
+            ? Ort::GetEpApi().SyncStream_GetImpl(stream)
+            : nullptr;
     return impl.AllocateCached(size, stream_impl);
   }
 

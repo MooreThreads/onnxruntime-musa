@@ -314,7 +314,23 @@ void* ArenaImpl::Alloc(size_t size) {
 }
 
 void* ArenaImpl::AllocOnStream(size_t size, OrtSyncStream* stream) {
-  return AllocateRawInternal(size, stream, false);
+  // ORT allocates memory-pattern buffers on a DummyStream with a null native
+  // handle. It has no OrtSyncStreamImpl, so SyncStream_GetImpl would interpret
+  // the wrong object layout. Treat it like Alloc(): there is no MUSA stream
+  // completion/release callback that could make its chunks safe to cache.
+  ORT_TRY {
+    if (stream == nullptr || api_.SyncStream_GetHandle(stream) == nullptr) {
+      return Reserve(size);
+    }
+    return AllocateRawInternal(size, stream, false);
+  }
+  ORT_CATCH(const std::exception& ex) {
+    ORT_HANDLE_EXCEPTION([&]() {
+      MUSA_ARENA_LOG(ERROR,
+                     "AllocOnStream(" << size << ") failed: " << ex.what());
+    });
+    return nullptr;
+  }
 }
 
 void* ArenaImpl::Reserve(size_t size) {
@@ -428,6 +444,11 @@ void* ArenaImpl::AllocateRawInternal(size_t num_bytes, OrtSyncStream* stream,
 
   // Release the OrtStatus and return nullptr instead of throwing — allocate
   // calls must not propagate exceptions across the C API boundary.
+  MUSA_ARENA_LOG(
+      ERROR, "Arena allocation failed: requested="
+                 << num_bytes << " allocated=" << stats_.total_allocated_bytes
+                 << " in_use=" << stats_.bytes_in_use << " limit="
+                 << config_.max_mem << ": " << api_.GetErrorMessage(status));
   api_.ReleaseStatus(status);
   return nullptr;
 }

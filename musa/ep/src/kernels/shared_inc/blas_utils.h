@@ -14,7 +14,6 @@
 #pragma once
 
 #include <mublas.h>
-#include <mudnncxx/mudnn.h>
 
 #include <cstdlib>
 #include <memory>
@@ -23,6 +22,7 @@
 
 #include "math/gemm_post_kernels.h"
 #include "math/matmul.h"
+#include "mudnn_compat.h"
 #include "shared_inc/op_kernel_common.h"
 
 // Shared GEMM implementation used by Gemm and FusedGemm. MatMul keeps its
@@ -128,9 +128,33 @@ inline bool MudnnTensorType(ONNXTensorElementDataType elem_type,
   }
 }
 
+// MUSA 4.3.8 exposes Tensor descriptors for these types, but its muDNN
+// elementwise dispatch table does not contain all of them. Calling Run() for
+// one of those combinations throws std::out_of_range ("_Map_base::at")
+// instead of returning Status::NOT_SUPPORTED. The provider has native .mu
+// kernels for these types, so make muDNN opt-in only for the common types and
+// let the caller's device-kernel fallback handle the rest.
+inline bool IsMudnnElementwiseTypeSupported(
+    ONNXTensorElementDataType elem_type) {
+  switch (elem_type) {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
+      return true;
+    default:
+      return false;
+  }
+}
+
 inline bool SetMudnnTensor(::musa::dnn::Tensor& tensor, const void* data,
                            const std::vector<int64_t>& shape,
                            ONNXTensorElementDataType elem_type) {
+  if (!IsMudnnElementwiseTypeSupported(elem_type)) return false;
   ::musa::dnn::Tensor::Type mudnn_type;
   if (!MudnnTensorType(elem_type, mudnn_type)) return false;
   if (tensor.SetAddr(data) != ::musa::dnn::Status::SUCCESS) return false;
@@ -263,7 +287,11 @@ inline mublasStatus MublasGemmEx(mublasHandle_t handle,
   musaDataType_t data_type;
   mublasComputeType_t compute_type;
   if (!MublasDataType(elem_type, data_type, compute_type)) {
-    return MUBLAS_STATUS_NOT_SUPPORTED;
+    // Both the 4.3.x and 5.1.0 headers expose this value.  Do not provide a
+    // preprocessor alias for MUBLAS_STATUS_NOT_SUPPORTED: in 5.1.0 that name
+    // is an enum member and such an alias rewrites the enum declaration while
+    // mublas_types.h is being parsed.
+    return MUBLAS_STATUS_NOT_IMPLEMENTED;
   }
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) {
     const double alpha64 = alpha;
@@ -288,7 +316,7 @@ inline mublasStatus MublasGemmStridedBatchedEx(
   musaDataType_t data_type;
   mublasComputeType_t compute_type;
   if (!MublasDataType(elem_type, data_type, compute_type)) {
-    return MUBLAS_STATUS_NOT_SUPPORTED;
+    return MUBLAS_STATUS_NOT_IMPLEMENTED;
   }
   if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) {
     const double alpha64 = alpha;

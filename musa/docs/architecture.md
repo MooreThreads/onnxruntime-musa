@@ -80,7 +80,7 @@ Python or C++ ORT host:
                                        reduction, nn}
                                   |
                                   v
-                              musart / mublas (MUSA 5.1.0)
+                              musart / mublas (MUSA 5.1.0 / 4.3.8)
 ```
 
 ## Stream-ordered device arena
@@ -97,6 +97,14 @@ stream synchronization events, but without an allocator-owned event at
 logical `Free` it cannot prove that a wait covers the chunk's final device
 access; therefore an owned chunk is never reused directly by another stream.
 Every chunk belongs to at most one stream ownership set.
+
+ORT may allocate a memory-pattern buffer on its `DummyStream`, whose native
+handle is null and which has no plugin implementation or MUSA release callback.
+Both allocator paths check the native handle before calling
+`SyncStream_GetImpl`. Such allocations, and allocations with no stream, use
+direct `Reserve`/`Free` instead of entering the stream cache. They still count
+against the arena budget. Interpreting the dummy as a plugin stream reads an
+invalid implementation pointer and corrupts ownership bookkeeping.
 
 `OnSessionRunEnd` does not clear ownership because host-side Run completion is
 not a device-completion fence. When ORT releases the `MusaSyncStream`

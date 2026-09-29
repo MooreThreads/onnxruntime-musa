@@ -245,17 +245,19 @@ grep '^#define ORT_API_VERSION ' \
 
 The last command must report API version `26`.
 
-#### 2. Build and install the MUSA provider
+#### 2. Reuse the already-built MUSA provider
+
+This verification flow reuses the plugin produced by the main build. It does not compile the
+MUSA EP again and does not install it into a second directory.
 
 ```bash
-cmake -S . -B build/Release -DCMAKE_BUILD_TYPE=Release
-cmake --build build/Release --target onnxruntime_providers_musa_plugin -j
-cmake --install build/Release \
-  --prefix "$PWD/build/install/onnxruntime-ep-musa/1.0.0"
+test -f build/Release/libonnxruntime_providers_musa_plugin.so
+export MUSA_PLUGIN_SO="$PWD/build/Release/libonnxruntime_providers_musa_plugin.so"
 ```
 
-This installs the plugin, compatibility manifest, licenses, and a CMake package. It does not
-install ORT core.
+`build/Release` contains the MUSA plugin, while `ORT_ROOT` points to the already-downloaded ORT
+C++ SDK. `cmake --install` is only needed when creating a relocatable/package-style installation
+for another application.
 
 #### 3. Build the Python-free C++ probe
 
@@ -265,36 +267,25 @@ cmake -S examples/cpp -B build/cxx-probe \
 cmake --build build/cxx-probe -j
 ```
 
-If the SDK uses a non-standard layout, pass the two files explicitly:
+#### 4. Register the plugin and verify a model from C++
 
 ```bash
-cmake -S examples/cpp -B build/cxx-probe \
-  -DORT_INCLUDE_DIR="$ORT_ROOT/include" \
-  -DORT_LIBRARY="$ORT_ROOT/lib/libonnxruntime.so"
-```
-
-#### 4. Register the plugin from C++
-
-```bash
-MUSA_EP_ROOT="$PWD/build/install/onnxruntime-ep-musa/1.0.0"
-MUSA_APP_LIBRARY_PATH="$ORT_ROOT/lib:$MUSA_EP_ROOT/lib:/usr/local/musa/lib:/usr/local/musa/lib64"
+MUSA_APP_LIBRARY_PATH="$ORT_ROOT/lib:/usr/local/musa/lib:/usr/local/musa/lib64"
 export LD_LIBRARY_PATH="$MUSA_APP_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
 
 build/cxx-probe/ort_musa_ep_probe \
-  "$MUSA_EP_ROOT/lib/libonnxruntime_providers_musa_plugin.so"
-```
-
-To create a MUSA-only session for a model:
-
-```bash
-build/cxx-probe/ort_musa_ep_probe \
-  "$MUSA_EP_ROOT/lib/libonnxruntime_providers_musa_plugin.so" \
-  /absolute/path/model.onnx
+  "$MUSA_PLUGIN_SO" \
+  "$PWD/examples/cpp/single_gemm_opset19.onnx"
 ```
 
 The application links only `libonnxruntime.so`. It passes the plugin path to
 `Ort::Env::RegisterExecutionProviderLibrary()` at runtime; do not link the application
 against `libonnxruntime_providers_musa_plugin.so`.
+
+The current C++ probe validates plugin registration, visible MUSA devices, and model/session
+creation. It does not call `Session::Run()` because a generic ONNX model does not provide input
+values. Use the model-specific Python examples under [test/ops/](test/ops/) for an end-to-end run
+with inputs and output comparison.
 
 See [examples/cpp/README.md](examples/cpp/README.md) for the same procedure in a standalone
 C++-focused document.

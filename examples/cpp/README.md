@@ -48,22 +48,18 @@ grep '^#define ORT_API_VERSION ' "$ORT_ROOT/include/onnxruntime_c_api.h"
 
 The API check must report version `26`.
 
-## 2. Build and install the MUSA plugin
+## 2. Reuse the already-built MUSA plugin
 
 Run these commands from the repository root:
 
 ```bash
-cmake -S . -B build/Release -DCMAKE_BUILD_TYPE=Release
-cmake --build build/Release --target onnxruntime_providers_musa_plugin -j
-cmake --install build/Release \
-  --prefix "$PWD/build/install/onnxruntime-ep-musa/1.0.0"
-
-export MUSA_EP_ROOT="$PWD/build/install/onnxruntime-ep-musa/1.0.0"
-export MUSA_PLUGIN_SO="$MUSA_EP_ROOT/lib/libonnxruntime_providers_musa_plugin.so"
+test -f build/Release/libonnxruntime_providers_musa_plugin.so
+export MUSA_PLUGIN_SO="$PWD/build/Release/libonnxruntime_providers_musa_plugin.so"
 ```
 
-The install contains the plugin, manifest, CMake package, and licenses. It does not
-contain `libonnxruntime.so`; that file comes from `ORT_ROOT`.
+This reuses the plugin produced by the main `build/Release` build. It does not compile the MUSA
+EP again and does not run `cmake --install`. Installation is only needed for a package-style
+deployment directory; the ORT runtime still comes from `ORT_ROOT`.
 
 ## 3. Build this C++ probe
 
@@ -72,16 +68,6 @@ The preferred form lets CMake discover the standard ORT SDK layout:
 ```bash
 cmake -S examples/cpp -B build/cxx-probe \
   -DORT_ROOT="$ORT_ROOT"
-cmake --build build/cxx-probe -j
-```
-
-If the SDK has a split or non-standard layout, pass the header directory and library
-explicitly:
-
-```bash
-cmake -S examples/cpp -B build/cxx-probe \
-  -DORT_INCLUDE_DIR="$ORT_ROOT/include" \
-  -DORT_LIBRARY="$ORT_ROOT/lib/libonnxruntime.so"
 cmake --build build/cxx-probe -j
 ```
 
@@ -133,10 +119,10 @@ The MUSA plugin is not a `target_link_libraries()` input. Pass its absolute path
 
 ## 5. Run and register the plugin
 
-The runtime linker must find ORT, the MUSA plugin install directory, and the MUSA toolkit:
+The runtime linker must find ORT, the MUSA plugin directory, and the MUSA toolkit:
 
 ```bash
-MUSA_APP_LIBRARY_PATH="$ORT_ROOT/lib:$MUSA_EP_ROOT/lib:/usr/local/musa/lib:/usr/local/musa/lib64"
+MUSA_APP_LIBRARY_PATH="$ORT_ROOT/lib:/usr/local/musa/lib:/usr/local/musa/lib64"
 export LD_LIBRARY_PATH="$MUSA_APP_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
 build/cxx-probe/ort_musa_ep_probe "$MUSA_PLUGIN_SO"
 ```
@@ -144,8 +130,13 @@ build/cxx-probe/ort_musa_ep_probe "$MUSA_PLUGIN_SO"
 With an ONNX model, the probe also creates a Session with CPU fallback disabled:
 
 ```bash
-build/cxx-probe/ort_musa_ep_probe "$MUSA_PLUGIN_SO" /absolute/path/model.onnx
+build/cxx-probe/ort_musa_ep_probe "$MUSA_PLUGIN_SO" "$PWD/examples/cpp/single_gemm_opset19.onnx"
 ```
+
+The current probe validates plugin registration, visible MUSA devices, and model/session
+creation. It does not call `Session::Run()` because a generic ONNX model does not provide input
+values. Use a model-specific example when you need end-to-end execution with inputs and output
+comparison.
 
 Internally the application performs:
 

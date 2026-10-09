@@ -262,6 +262,60 @@ def test_concat_matmul_fusion_zero_k_non_empty_output(tmp_path):
     assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
 
 
+def test_concat_matmul_fusion_skips_empty_concat_input(tmp_path):
+    rng = np.random.default_rng(11)
+    x0 = rng.standard_normal((2, 3)).astype(np.float32)
+    x1 = np.empty((2, 0), dtype=np.float32)
+    x2 = rng.standard_normal((2, 2)).astype(np.float32)
+    b = rng.standard_normal((5, 4)).astype(np.float32)
+
+    nodes = [
+        helper.make_node("Concat", ["X0", "X1", "X2"], ["C"], axis=1),
+        helper.make_node("MatMul", ["C", "B"], ["Y"]),
+    ]
+    feeds = {"X0": x0, "X1": x1, "X2": x2, "B": b}
+    model = build_graph_model(
+        nodes,
+        feeds,
+        [("Y", TensorProto.FLOAT)],
+        name="concat_matmul_empty_axis_input_graph",
+    )
+
+    outputs = run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
+    np.testing.assert_allclose(outputs[0], np.concatenate([x0, x2], axis=1) @ b,
+                               rtol=1e-3, atol=1e-3)
+    musa_ops = _profile_musa_ops(
+        model, feeds, tmp_path, "concat_matmul_empty_axis_input"
+    )
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+
+
+def test_concat_matmul_fusion_only_one_non_empty_concat_input(tmp_path):
+    rng = np.random.default_rng(12)
+    x0 = rng.standard_normal((2, 3)).astype(np.float32)
+    x1 = np.empty((2, 0), dtype=np.float32)
+    b = rng.standard_normal((3, 4)).astype(np.float32)
+
+    nodes = [
+        helper.make_node("Concat", ["X0", "X1"], ["C"], axis=1),
+        helper.make_node("MatMul", ["C", "B"], ["Y"]),
+    ]
+    feeds = {"X0": x0, "X1": x1, "B": b}
+    model = build_graph_model(
+        nodes,
+        feeds,
+        [("Y", TensorProto.FLOAT)],
+        name="concat_matmul_single_non_empty_input_graph",
+    )
+
+    outputs = run_model_and_compare(model, feeds, rtol=1e-3, atol=1e-3)
+    np.testing.assert_allclose(outputs[0], x0 @ b, rtol=1e-3, atol=1e-3)
+    musa_ops = _profile_musa_ops(
+        model, feeds, tmp_path, "concat_matmul_single_non_empty_input"
+    )
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+
+
 def test_concat_matmul_fusion_float16_profiles_fused(tmp_path):
     rng = np.random.default_rng(4)
     x0 = rng.standard_normal((2, 3, 4, 5)).astype(np.float16)

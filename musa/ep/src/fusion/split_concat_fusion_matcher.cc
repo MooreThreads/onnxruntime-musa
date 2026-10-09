@@ -62,6 +62,18 @@ bool CanFuseSplitConcat(
         !IsFloatTensorValueInfo(reshape_inputs[0])) {
       return false;
     }
+
+    // The runtime implementation consumes the tensor before Reshape and
+    // reconstructs the Reshape dimensions from the statically known output
+    // shape.  Do not select a graph whose Reshape shape is only known at
+    // runtime: CreateSplitConcatFusion cannot safely derive sequence and part
+    // width for that graph and would otherwise fail during Compile.
+    auto reshape_shape = GetTensorShape(reshape_outputs[0]);
+    if (!reshape_shape.has_value() || reshape_shape->size() != 3 ||
+        (*reshape_shape)[1] <= 0 || (*reshape_shape)[2] <= 0 ||
+        (*reshape_shape)[2] % static_cast<int64_t>(split_outputs.size()) != 0) {
+      return false;
+    }
   }
 
   auto split_axis_attr = GetIntAttribute(split_node, "axis");
@@ -79,6 +91,7 @@ bool CanFuseSplitConcat(
   }
 
   std::vector<int64_t> split_sizes;
+  const bool has_explicit_split_sizes = split_inputs.size() == 2;
   if (split_inputs.size() == 2) {
     auto split_initializer = ReadIntInitializerNoLimit(split_inputs[1]);
     if (!split_initializer.has_value() ||
@@ -102,6 +115,12 @@ bool CanFuseSplitConcat(
       return false;
     }
     split_total += split_size;
+  }
+  if (reshape_node && has_explicit_split_sizes) {
+    const auto reshape_shape = GetTensorShape(reshape_node.GetOutputs()[0]);
+    if (!reshape_shape.has_value() || (*reshape_shape)[2] != split_total) {
+      return false;
+    }
   }
   for (size_t i = 0; i < split_outputs.size(); ++i) {
     Ort::ConstValueInfo split_output = split_outputs[i];

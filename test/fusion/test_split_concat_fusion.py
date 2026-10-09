@@ -163,3 +163,46 @@ def test_split_concat_fusion_absorbs_optional_transpose():
     node_names = _profile_musa_node_names(model_bytes, {"X": x})
     for name in ("SplitConcatSplit", "SplitConcatConcat", "SplitConcatTranspose"):
         assert not any(event.startswith(name) for event in node_names), node_names
+
+
+def test_split_concat_fusion_skips_dynamic_upstream_reshape():
+    """A runtime Reshape shape must not make Compile reject the whole graph."""
+    rng = np.random.default_rng(109)
+    x = rng.standard_normal((2, 12)).astype(np.float32)
+    reshape_shape = np.array([2, 3, 4], dtype=np.int64)
+    split_outputs = [f"S{i}" for i in range(4)]
+    graph = helper.make_graph(
+        [
+            # Deliberately leave the intermediate Reshape value without a
+            # ValueInfo. Its dimensions are supplied at runtime, so the
+            # SplitConcat matcher must decline this fusion candidate.
+            helper.make_node("Reshape", ["X", "shape"], ["R"], name="DynamicReshape"),
+            helper.make_node(
+                "Split", ["R"], split_outputs, axis=2, name="DynamicSplit"
+            ),
+            helper.make_node(
+                "Concat", split_outputs, ["Y"], axis=0, name="DynamicConcat"
+            ),
+        ],
+        "split_concat_dynamic_reshape_graph",
+        [
+            helper.make_tensor_value_info("X", TensorProto.FLOAT, [2, 12]),
+            helper.make_tensor_value_info("shape", TensorProto.INT64, [3]),
+        ],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    model_bytes = model.SerializeToString()
+
+    musa_outputs = run_model_and_compare(
+        model_bytes,
+        {"X": x, "shape": reshape_shape},
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    expected = np.concatenate(
+        np.split(x.reshape(2, 3, 4), 4, axis=2),
+        axis=0,
+    )
+    np.testing.assert_allclose(musa_outputs[0], expected, rtol=0, atol=0)

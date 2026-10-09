@@ -91,21 +91,16 @@ size_t GetMappedIndex(const std::unordered_map<std::string, size_t>& indices,
   return it->second;
 }
 
-bool IsFloatGpuTensor(Ort::ConstValue value) {
-  auto info = value.GetTensorTypeAndShapeInfo();
-  ONNXTensorElementDataType elem_type = info.GetElementType();
-  return (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
-          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
-          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) &&
-         IsGpuMemory(value.GetTensorMemoryInfo());
-}
-
 bool IsRmsNormStorageType(ONNXTensorElementDataType elem_type) {
   return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE;
+}
+
+bool IsRmsNormFloatTensor(Ort::ConstValue value) {
+  auto info = value.GetTensorTypeAndShapeInfo();
+  return IsRmsNormStorageType(info.GetElementType());
 }
 
 class DeviceTempBuffer {
@@ -142,15 +137,14 @@ std::vector<int64_t> RmsNormInvVarShape(
   return inv_var_shape;
 }
 
-bool TryMudnnRmsNorm(Ort::ConstValue input, const void* gamma_data,
+bool TryMudnnRmsNorm(const void* input_data, const void* gamma_data,
                      Ort::UnownedValue output,
                      const std::vector<int64_t>& input_shape,
                      const std::vector<int64_t>& gamma_shape,
                      ONNXTensorElementDataType elem_type, float epsilon,
                      musaStream_t stream) {
-  if (!IsGpuMemory(input.GetTensorMemoryInfo()) ||
-      !IsGpuMemory(output.GetTensorMemoryInfo()) || gamma_data == nullptr ||
-      input_shape.empty() ||
+  if (input_data == nullptr || !IsGpuMemory(output.GetTensorMemoryInfo()) ||
+      gamma_data == nullptr || input_shape.empty() ||
       elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) {
     return false;
   }
@@ -176,8 +170,7 @@ bool TryMudnnRmsNorm(Ort::ConstValue input, const void* gamma_data,
   ::musa::dnn::Tensor output_tensor;
   ::musa::dnn::Tensor gamma_tensor;
   ::musa::dnn::Tensor inv_var_tensor;
-  if (!SetMudnnTensor(input_tensor, input.GetTensorRawData(), input_shape,
-                      elem_type) ||
+  if (!SetMudnnTensor(input_tensor, input_data, input_shape, elem_type) ||
       !SetMudnnTensor(output_tensor, output.GetTensorMutableRawData(),
                       input_shape, elem_type) ||
       !SetMudnnTensor(gamma_tensor, gamma_data, gamma_shape, elem_type) ||
@@ -214,7 +207,7 @@ struct RmsNormFusionCompute : FusionNodeCompute {
       Ort::KernelContext ctx(kernel_context);
       Ort::ConstValue input = ctx.GetInput(input_index);
       Ort::ConstValue gamma = ctx.GetInput(gamma_index);
-      if (!IsFloatGpuTensor(input)) {
+      if (!IsRmsNormFloatTensor(input)) {
         return Ort::GetApi().CreateStatus(
             ORT_NOT_IMPLEMENTED, "RmsNorm requires a MUSA floating input");
       }
@@ -261,15 +254,17 @@ struct RmsNormFusionCompute : FusionNodeCompute {
       }
 
       const musaStream_t stream = GetComputeStream(ctx);
+      DeviceInputBuffer input_buffer;
       DeviceInputBuffer gamma_buffer;
+      RETURN_IF_ERROR(input_buffer.Bind(input, stream));
       RETURN_IF_ERROR(gamma_buffer.Bind(gamma, stream));
-      if (TryMudnnRmsNorm(input, gamma_buffer.data(), output, input_shape,
-                          gamma_shape, input_info.GetElementType(), epsilon,
-                          stream)) {
+      if (TryMudnnRmsNorm(input_buffer.data(), gamma_buffer.data(), output,
+                          input_shape, gamma_shape, input_info.GetElementType(),
+                          epsilon, stream)) {
         return nullptr;
       }
       return LaunchStatus(
-          LaunchMusaRmsNormKernel(input.GetTensorRawData(), gamma_buffer.data(),
+          LaunchMusaRmsNormKernel(input_buffer.data(), gamma_buffer.data(),
                                   output.GetTensorMutableRawData(), rows,
                                   norm_size, epsilon, elem_type, stream));
     } catch (const Ort::Exception& ex) {
@@ -304,8 +299,7 @@ struct CastRmsNormFusionCompute : FusionNodeCompute {
       if (input_info.GetElementType() !=
               ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
           gamma_info.GetElementType() !=
-              ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 ||
-          !IsGpuMemory(input.GetTensorMemoryInfo())) {
+              ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
         return Ort::GetApi().CreateStatus(
             ORT_NOT_IMPLEMENTED,
             "CastRmsNorm requires MUSA bfloat16 input and gamma");
@@ -345,15 +339,17 @@ struct CastRmsNormFusionCompute : FusionNodeCompute {
       }
 
       const musaStream_t stream = GetComputeStream(ctx);
+      DeviceInputBuffer input_buffer;
       DeviceInputBuffer gamma_buffer;
+      RETURN_IF_ERROR(input_buffer.Bind(input, stream));
       RETURN_IF_ERROR(gamma_buffer.Bind(gamma, stream));
-      if (TryMudnnRmsNorm(input, gamma_buffer.data(), output, input_shape,
-                          gamma_shape, input_info.GetElementType(), epsilon,
-                          stream)) {
+      if (TryMudnnRmsNorm(input_buffer.data(), gamma_buffer.data(), output,
+                          input_shape, gamma_shape, input_info.GetElementType(),
+                          epsilon, stream)) {
         return nullptr;
       }
       return LaunchStatus(LaunchMusaCastRmsNormBf16Kernel(
-          input.GetTensorRawData(), gamma_buffer.data(),
+          input_buffer.data(), gamma_buffer.data(),
           output.GetTensorMutableRawData(), rows, norm_size, epsilon, stream));
     } catch (const Ort::Exception& ex) {
       Ort::Status status(ex);

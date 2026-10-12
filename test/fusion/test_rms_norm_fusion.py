@@ -277,6 +277,22 @@ def test_rms_norm_fusion(tmp_path):
     _assert_rms_norm_fused(op_names)
 
 
+def test_rms_norm_fusion_accepts_cpu_bound_input(tmp_path):
+    """The fused kernel must copy a normal host feed before launching on MUSA."""
+    model = _build_rms_norm_model()
+    x = np.linspace(-1.0, 1.0, num=2 * 3 * 5, dtype=np.float32).reshape(2, 3, 5)
+
+    (actual,) = run_model_and_compare(model, {"X": x}, rtol=1e-5, atol=1e-5)
+    gamma = np.linspace(0.5, 1.5, num=5, dtype=np.float32)
+    expected = _rms_norm_reference(x, gamma, 1.0e-6)
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+
+    op_names = _profile_op_names(
+        model, {"X": x}, str(tmp_path / "rms_norm_cpu_bound_input")
+    )
+    _assert_rms_norm_fused(op_names)
+
+
 def test_pow_rms_norm_fusion(tmp_path):
     model = _build_pow_rms_norm_model()
     x = np.linspace(-2.0, 2.0, num=2 * 3 * 5, dtype=np.float32).reshape(2, 3, 5)

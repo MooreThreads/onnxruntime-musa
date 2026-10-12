@@ -481,10 +481,54 @@ void RunMudnnConcat(const std::vector<Ort::ConstValue>& concat_inputs,
                     void* concat_data, ONNXTensorElementDataType elem_type,
                     musaStream_t stream) {
   ::musa::dnn::Handle* handle = MudnnHandleOrThrow(stream);
-  std::vector<::musa::dnn::Tensor> input_tensors(concat_inputs.size());
-  for (size_t i = 0; i < concat_inputs.size(); ++i) {
-    SetupMudnnTensor(input_tensors[i], concat_inputs[i].GetTensorRawData(),
-                     TensorShape(concat_inputs[i]), elem_type);
+  const size_t axis_index = static_cast<size_t>(axis);
+
+  // muDNN Concat rejects tensors with a zero extent, while ONNX permits empty
+  // inputs along the concatenation axis.  Drop those inputs before invoking
+  // muDNN; they contribute no elements and therefore do not change the
+  // concatenation result.
+  std::vector<Ort::ConstValue> non_empty_inputs;
+  non_empty_inputs.reserve(concat_inputs.size());
+  for (Ort::ConstValue input : concat_inputs) {
+    const std::vector<int64_t> shape = TensorShape(input);
+    if (axis_index >= shape.size()) {
+      throw std::runtime_error("ConcatMatMul concat axis is out of range");
+    }
+    if (shape[axis_index] < 0) {
+      throw std::runtime_error(
+          "ConcatMatMul concat input has an unresolved dimension");
+    }
+    if (shape[axis_index] != 0) {
+      non_empty_inputs.push_back(input);
+    }
+  }
+
+  if (non_empty_inputs.empty()) {
+    throw std::runtime_error(
+        "ConcatMatMul concat has no non-empty inputs for a non-empty output");
+  }
+
+  // With only one non-empty input, avoid relying on whether muDNN accepts a
+  // one-input Concat.  Empty inputs have already been removed, so the output
+  // is layout-identical to that input and a device-to-device copy is enough.
+  if (non_empty_inputs.size() == 1) {
+    const size_t bytes =
+        static_cast<size_t>(NumElements(concat_shape)) * ElementSize(elem_type);
+    const musaError_t status =
+        musaMemcpyAsync(concat_data, non_empty_inputs[0].GetTensorRawData(),
+                        bytes, musaMemcpyDeviceToDevice, stream);
+    if (status != musaSuccess) {
+      throw std::runtime_error(
+          std::string("ConcatMatMul concat copy failed: ") +
+          MusaErrorString(status));
+    }
+    return;
+  }
+
+  std::vector<::musa::dnn::Tensor> input_tensors(non_empty_inputs.size());
+  for (size_t i = 0; i < non_empty_inputs.size(); ++i) {
+    SetupMudnnTensor(input_tensors[i], non_empty_inputs[i].GetTensorRawData(),
+                     TensorShape(non_empty_inputs[i]), elem_type);
   }
 
   ::musa::dnn::Tensor output_tensor;

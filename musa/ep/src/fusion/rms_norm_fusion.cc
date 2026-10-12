@@ -209,7 +209,7 @@ struct RmsNormFusionCompute : FusionNodeCompute {
       Ort::ConstValue gamma = ctx.GetInput(gamma_index);
       if (!IsRmsNormFloatTensor(input)) {
         return Ort::GetApi().CreateStatus(
-            ORT_NOT_IMPLEMENTED, "RmsNorm requires a MUSA floating input");
+            ORT_NOT_IMPLEMENTED, "RmsNorm requires a floating-point input");
       }
 
       auto input_info = input.GetTensorTypeAndShapeInfo();
@@ -302,7 +302,7 @@ struct CastRmsNormFusionCompute : FusionNodeCompute {
               ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16) {
         return Ort::GetApi().CreateStatus(
             ORT_NOT_IMPLEMENTED,
-            "CastRmsNorm requires MUSA bfloat16 input and gamma");
+            "CastRmsNorm requires bfloat16 input and gamma");
       }
 
       std::vector<int64_t> input_shape = input_info.GetShape();

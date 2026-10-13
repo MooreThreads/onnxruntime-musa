@@ -168,10 +168,11 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
   }
   auto x_shape = x_info.GetShape();
   auto w_shape = w_info.GetShape();
-  if ((x_shape.size() != 4 && x_shape.size() != 5) ||
-      w_shape.size() != x_shape.size()) {
+  const size_t rank = x_shape.size();
+  if ((rank != 3 && rank != 4 && rank != 5) || w_shape.size() != rank) {
     return Ort::GetApi().CreateStatus(
-        ORT_NOT_IMPLEMENTED, "Conv only supports 2D NCHW or 3D NCDHW tensors");
+        ORT_NOT_IMPLEMENTED,
+        "Conv only supports 1D NCL, 2D NCHW or 3D NCDHW tensors");
   }
   if (group_ <= 0 || x_shape[1] != w_shape[1] * group_ ||
       w_shape[0] % group_ != 0) {
@@ -180,7 +181,11 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
         "Conv group must divide output channels and match input channels");
   }
 
-  const size_t spatial_rank = x_shape.size() - 2;
+  // A Conv1D tensor is NCL. Executing it as a unit-height 2D NCHW tensor
+  // ([N, C, 1, L] with a [M, C / group, 1, K] kernel) keeps the memory layout
+  // identical, so the existing 2D muDNN and custom device paths are reused.
+  const bool is_1d = rank == 3;
+  const size_t spatial_rank = is_1d ? 1 : rank - 2;
   std::vector<int64_t> pads = pads_;
   if (pads.empty()) {
     pads.resize(spatial_rank * 2, 0);
@@ -210,7 +215,8 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
     }
   }
 
-  std::vector<int64_t> y_shape = {x_shape[0], w_shape[0]};
+  std::vector<int64_t> out_spatial;
+  out_spatial.reserve(spatial_rank);
   for (size_t i = 0; i < spatial_rank; ++i) {
     const int64_t output_dim =
         (x_shape[i + 2] + pads[i] + pads[i + spatial_rank] -
@@ -221,14 +227,33 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
       return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
                                         "Conv invalid output shape");
     }
-    y_shape.push_back(output_dim);
+    out_spatial.push_back(output_dim);
   }
+
+  std::vector<int64_t> y_shape = {x_shape[0], w_shape[0]};
+  y_shape.insert(y_shape.end(), out_spatial.begin(), out_spatial.end());
   Ort::UnownedValue output = ctx.GetOutput(0, y_shape);
-  if (TryMudnnConv(ctx, x_shape, w_shape, y_shape, pads, strides, dilations,
-                   output)) {
+
+  std::vector<int64_t> x_exec = x_shape;
+  std::vector<int64_t> w_exec = w_shape;
+  std::vector<int64_t> y_exec = y_shape;
+  std::vector<int64_t> pads_exec = pads;
+  std::vector<int64_t> strides_exec = strides;
+  std::vector<int64_t> dilations_exec = dilations;
+  if (is_1d) {
+    x_exec = {x_shape[0], x_shape[1], 1, x_shape[2]};
+    w_exec = {w_shape[0], w_shape[1], 1, w_shape[2]};
+    y_exec = {y_shape[0], y_shape[1], 1, out_spatial[0]};
+    pads_exec = {0, pads[0], 0, pads[1]};
+    strides_exec = {1, strides[0]};
+    dilations_exec = {1, dilations[0]};
+  }
+
+  if (TryMudnnConv(ctx, x_exec, w_exec, y_exec, pads_exec, strides_exec,
+                   dilations_exec, output)) {
     return nullptr;
   }
-  if (spatial_rank == 3) {
+  if (rank == 5) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED,
         "Conv3D requires the muDNN path; custom fallback is 2D-only");
@@ -255,23 +280,23 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
   }
 
   MusaConv2DParams params{};
-  params.n = x_shape[0];
-  params.c = x_shape[1];
+  params.n = x_exec[0];
+  params.c = x_exec[1];
   params.group = group_;
-  params.h = x_shape[2];
-  params.w = x_shape[3];
-  params.m = w_shape[0];
-  params.kernel_h = w_shape[2];
-  params.kernel_w = w_shape[3];
-  params.out_h = y_shape[2];
-  params.out_w = y_shape[3];
-  params.pad_h = pads[0];
-  params.pad_w = pads[1];
-  params.stride_h = strides[0];
-  params.stride_w = strides[1];
-  params.dilation_h = dilations[0];
-  params.dilation_w = dilations[1];
-  params.total_elements = NumElements(y_shape);
+  params.h = x_exec[2];
+  params.w = x_exec[3];
+  params.m = w_exec[0];
+  params.kernel_h = w_exec[2];
+  params.kernel_w = w_exec[3];
+  params.out_h = y_exec[2];
+  params.out_w = y_exec[3];
+  params.pad_h = pads_exec[0];
+  params.pad_w = pads_exec[1];
+  params.stride_h = strides_exec[0];
+  params.stride_w = strides_exec[1];
+  params.dilation_h = dilations_exec[0];
+  params.dilation_w = dilations_exec[1];
+  params.total_elements = NumElements(y_exec);
   return LaunchStatus(LaunchMusaConv2DFloatKernel(
       x.GetTensorData<float>(), w.GetTensorData<float>(), bias,
       output.GetTensorMutableData<float>(), params, GetComputeStream(ctx)));

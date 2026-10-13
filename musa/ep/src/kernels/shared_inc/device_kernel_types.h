@@ -291,6 +291,7 @@ struct MusaTopKParams {
 struct MusaConv2DParams {
   int64_t n;
   int64_t c;
+  int64_t group;
   int64_t h;
   int64_t w;
   int64_t m;

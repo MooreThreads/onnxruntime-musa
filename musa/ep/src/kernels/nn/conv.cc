@@ -157,9 +157,11 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "Conv only supports 2D NCHW tensors");
   }
-  if (group_ != 1 || w_shape[1] != x_shape[1]) {
-    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
-                                      "Conv only supports group=1");
+  if (group_ <= 0 || x_shape[1] != w_shape[1] * group_ ||
+      w_shape[0] % group_ != 0) {
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT,
+        "Conv group must divide output channels and match input channels");
   }
 
   std::vector<int64_t> pads = pads_;
@@ -213,6 +215,7 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
   MusaConv2DParams params{};
   params.n = x_shape[0];
   params.c = x_shape[1];
+  params.group = group_;
   params.h = x_shape[2];
   params.w = x_shape[3];
   params.m = w_shape[0];

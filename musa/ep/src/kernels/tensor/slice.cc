@@ -182,5 +182,12 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Slice, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .AddTypeConstraint("Tind", IntTensorTypes())),
+         .AddTypeConstraint("Tind", IntTensorTypes())
+         // starts/ends/axes/steps are shape metadata: keep them in host memory
+         // (the in-tree CUDA kernel declares the same) so ORT orders the
+         // CPU/device boundary itself instead of leaving it inside the kernel.
+         .SetInputMemType(1, OrtMemTypeCPUInput)
+         .SetInputMemType(2, OrtMemTypeCPUInput)
+         .SetInputMemType(3, OrtMemTypeCPUInput)
+         .SetInputMemType(4, OrtMemTypeCPUInput)),
     Slice)

@@ -21,6 +21,11 @@ the `MemcpyFromHost` destination is a MUSA device tensor.
 The consumer operators below (`Flatten`, `Transpose`) reject CPU memory on the
 device path, so the tests are RED (device-tensor guard failure) unless the
 boundary copy really lands in device memory.
+
+The CPU-side operator is `Atan`, which the plugin EP does not register: these
+graphs need a node that really stays on the CPU EP, and an operator the EP
+claims (Sin until its step-6 registration, for instance) produces the tensor on
+the device instead, so no boundary copy is inserted at all.
 """
 
 import numpy as np
@@ -35,10 +40,10 @@ from op_test_utils import (
 
 
 def _cpu_produced_input_model(x, op_type, attrs, name):
-    """`Sin` (CPU EP) -> `op_type` (MUSA EP): one inserted MemcpyFromHost."""
+    """`Atan` (CPU EP) -> `op_type` (MUSA EP): one inserted MemcpyFromHost."""
     return build_graph_model(
         [
-            helper.make_node("Sin", ["X"], ["cpu_output"]),
+            helper.make_node("Atan", ["X"], ["cpu_output"]),
             helper.make_node(op_type, ["cpu_output"], ["Y"], **attrs),
         ],
         inputs={"X": x},
@@ -76,7 +81,7 @@ def test_memcpy_from_host_shared_by_multiple_musa_kernels():
     x = np.linspace(-1.5, 1.5, 24, dtype=np.float32).reshape(2, 3, 4)
     model = build_graph_model(
         [
-            helper.make_node("Sin", ["X"], ["cpu_output"]),
+            helper.make_node("Atan", ["X"], ["cpu_output"]),
             helper.make_node("Flatten", ["cpu_output"], ["flat"], axis=1),
             helper.make_node("Transpose", ["cpu_output"], ["transposed"], perm=[2, 0, 1]),
         ],
@@ -94,7 +99,7 @@ def test_memcpy_to_host_before_cpu_kernel(monkeypatch):
     model = build_graph_model(
         [
             helper.make_node("Relu", ["X"], ["relu_output"]),
-            helper.make_node("Sin", ["relu_output"], ["Y"]),
+            helper.make_node("Atan", ["relu_output"], ["Y"]),
         ],
         inputs={"X": x},
         outputs=[("Y", TensorProto.FLOAT)],
@@ -116,7 +121,7 @@ def test_memcpy_to_host_before_cpu_kernel(monkeypatch):
 def _if_branch():
     return helper.make_graph(
         [
-            helper.make_node("Sin", ["X"], ["cpu_output"]),
+            helper.make_node("Atan", ["X"], ["cpu_output"]),
             helper.make_node("Flatten", ["cpu_output"], ["branch_y"], axis=1),
         ],
         "branch",

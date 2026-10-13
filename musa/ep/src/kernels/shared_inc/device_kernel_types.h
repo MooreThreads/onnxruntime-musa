@@ -34,6 +34,9 @@ enum class MusaUnaryOp : int32_t {
   Softplus = 14,
   Ceil = 15,
   Floor = 16,
+  Sin = 17,
+  Cos = 18,
+  Gelu = 19,
 };
 
 enum class MusaCompareOp : int32_t {
@@ -106,6 +109,21 @@ struct MusaMaxPoolParams {
   int64_t pads_begin[kMusaMaxBroadcastRank];
   int64_t strides[kMusaMaxBroadcastRank];
   int64_t dilations[kMusaMaxBroadcastRank];
+};
+
+// AveragePool has no dilations, and needs to know whether the padding counts
+// towards the divisor (ONNX count_include_pad).
+struct MusaAveragePoolParams {
+  int32_t rank;
+  int32_t spatial_rank;
+  int32_t count_include_pad;
+  int64_t output_elements;
+  int64_t input_dims[kMusaMaxBroadcastRank];
+  int64_t input_strides[kMusaMaxBroadcastRank];
+  int64_t output_strides[kMusaMaxBroadcastRank];
+  int64_t kernel_shape[kMusaMaxBroadcastRank];
+  int64_t pads_begin[kMusaMaxBroadcastRank];
+  int64_t strides[kMusaMaxBroadcastRank];
 };
 
 struct MusaRangeParams {

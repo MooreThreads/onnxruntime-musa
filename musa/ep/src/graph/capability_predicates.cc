@@ -19,7 +19,9 @@
 #include <string>
 #include <vector>
 
+#include "activation/gelu_support.h"
 #include "graph/graph_utils.h"
+#include "nn/average_pool_support.h"
 #include "tensor/resize_support.h"
 
 namespace musa_ep {
@@ -152,6 +154,58 @@ bool SliceConfigurationSupported(Ort::ConstNode node) {
                      [](int64_t step) { return step > 0; });
 }
 
+/// True when the MUSA Gelu kernel can run this node.
+///
+/// The route implements the exact erf form. The ONNX Gelu carries
+/// `approximate` as a string, the com.microsoft Gelu as an int (0 = exact,
+/// 1 = tanh); a node asking for the tanh approximation stays on the CPU EP.
+bool GeluConfigurationSupported(Ort::ConstNode node) {
+  std::string approximate = kGeluDefaultApproximate;
+  if (std::optional<std::string> value =
+          GetStringAttribute(node, "approximate");
+      value.has_value()) {
+    approximate = *value;
+  } else if (std::optional<int64_t> value =
+                 GetIntAttribute(node, "approximate");
+             value.has_value()) {
+    approximate = *value == 0 ? kGeluDefaultApproximate : "tanh";
+  }
+  return GeluApproximateRejection(approximate) == nullptr;
+}
+
+/// True when the MUSA AveragePool kernel can run this node.
+///
+/// The kernel covers the auto_pad modes, count_include_pad and the attribute
+/// pads, but not ceil_mode, and it is a device pooling route limited to the
+/// rank and element types the shared route definition lists. A node the route
+/// rejects stays on the CPU EP, where it ran before the kernel was registered.
+bool AveragePoolConfigurationSupported(Ort::ConstNode node) {
+  musa_ep::AveragePoolRouteConfig config;
+  config.auto_pad =
+      GetStringAttribute(node, "auto_pad").value_or(kAveragePoolDefaultAutoPad);
+  config.ceil_mode = GetIntAttribute(node, "ceil_mode").value_or(0);
+  config.count_include_pad =
+      GetIntAttribute(node, "count_include_pad").value_or(0);
+  config.kernel_shape =
+      GetIntsAttribute(node, "kernel_shape").value_or(std::vector<int64_t>{});
+  config.pads = GetIntsAttribute(node, "pads").value_or(std::vector<int64_t>{});
+  config.strides =
+      GetIntsAttribute(node, "strides").value_or(std::vector<int64_t>{});
+
+  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+  if (inputs.empty() || inputs[0] == nullptr) {
+    return false;
+  }
+  const Ort::ConstTypeInfo input_type = inputs[0].TypeInfo();
+  if (input_type.GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+  const auto input_info = input_type.GetTensorTypeAndShapeInfo();
+  config.input_rank = static_cast<int64_t>(input_info.GetShape().size());
+  config.input_element_type = input_info.GetElementType();
+  return AveragePoolRouteRejection(config) == nullptr;
+}
+
 }  // namespace
 
 bool IsNodeConfigurationSupported(Ort::ConstNode node) {
@@ -160,6 +214,15 @@ bool IsNodeConfigurationSupported(Ort::ConstNode node) {
   }
   if (IsOnnxOp(node, "Slice")) {
     return SliceConfigurationSupported(node);
+  }
+  if (IsOnnxOp(node, "AveragePool")) {
+    return AveragePoolConfigurationSupported(node);
+  }
+  // Gelu is an official ONNX operator from opset 20 on, and the plugin also
+  // registers the com.microsoft Gelu (same semantics, int approximation).
+  if (node.GetOperatorType() == "Gelu" &&
+      (IsOnnxDomain(node.GetDomain()) || node.GetDomain() == "com.microsoft")) {
+    return GeluConfigurationSupported(node);
   }
   return true;
 }

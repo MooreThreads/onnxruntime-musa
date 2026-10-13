@@ -3,10 +3,10 @@
 
 namespace {
 
-template <typename T>
+template <typename T, typename ScaleT>
 __global__ void LayerNormKernel(const T* input,
-                                const float* scale,
-                                const float* bias,
+                                const ScaleT* scale,
+                                const ScaleT* bias,
                                 T* output,
                                 float* mean,
                                 float* inv_std,
@@ -63,18 +63,18 @@ __global__ void LayerNormKernel(const T* input,
     const float normalized =
         (MusaScalarToFloat(input[row * params.norm_size + col]) - row_mean) *
         row_inv_std;
-    float value = normalized * scale[col];
+    float value = normalized * MusaScalarToFloat(scale[col]);
     if (params.has_bias) {
-      value += bias[col];
+      value += MusaScalarToFloat(bias[col]);
     }
     output[row * params.norm_size + col] = MusaScalarFromFloat<T>(value);
   }
 }
 
-template <typename T>
+template <typename T, typename ScaleT>
 musaError_t LaunchLayerNormTyped(const void* input,
-                                 const float* scale,
-                                 const float* bias,
+                                 const void* scale,
+                                 const void* bias,
                                  void* output,
                                  float* mean,
                                  float* inv_std,
@@ -87,38 +87,54 @@ musaError_t LaunchLayerNormTyped(const void* input,
   if (params.norm_size > INT32_MAX) {
     return musaErrorNotSupported;
   }
-  LayerNormKernel<T><<<static_cast<int>(params.rows), kThreadsPerBlock, 0,
-                      stream>>>(reinterpret_cast<const T*>(input), scale, bias,
-                                reinterpret_cast<T*>(output), mean, inv_std,
-                                params, epsilon);
+  LayerNormKernel<T, ScaleT>
+      <<<static_cast<int>(params.rows), kThreadsPerBlock, 0, stream>>>(
+          reinterpret_cast<const T*>(input),
+          reinterpret_cast<const ScaleT*>(scale),
+          reinterpret_cast<const ScaleT*>(bias),
+          reinterpret_cast<T*>(output), mean, inv_std, params, epsilon);
   return musaGetLastError();
+}
+
+template <typename T>
+musaError_t DispatchLayerNorm(const void* input, const void* scale,
+                              const void* bias, void* output, float* mean,
+                              float* inv_std, MusaLayerNormParams params,
+                              float epsilon, MusaElementType scale_elem_type,
+                              musaStream_t stream) {
+  switch (scale_elem_type) {
+    case MusaElementType::Float:
+      return LaunchLayerNormTyped<T, float>(input, scale, bias, output, mean,
+                                            inv_std, params, epsilon, stream);
+    case MusaElementType::Float16:
+      return LaunchLayerNormTyped<T, __half>(input, scale, bias, output, mean,
+                                             inv_std, params, epsilon, stream);
+    default:
+      return musaErrorNotSupported;
+  }
 }
 
 }  // namespace
 
 musaError_t LaunchMusaLayerNormKernel(const void* input,
-                                      const float* scale,
-                                      const float* bias,
+                                      const void* scale,
+                                      const void* bias,
                                       void* output,
                                       float* mean,
                                       float* inv_std,
                                       MusaLayerNormParams params,
                                       float epsilon,
                                       MusaElementType elem_type,
+                                      MusaElementType scale_elem_type,
                                       musaStream_t stream) {
   switch (elem_type) {
     case MusaElementType::Float:
-      return LaunchLayerNormTyped<float>(input, scale, bias, output, mean,
-                                         inv_std, params, epsilon, stream);
+      return DispatchLayerNorm<float>(input, scale, bias, output, mean, inv_std,
+                                      params, epsilon, scale_elem_type, stream);
     case MusaElementType::Float16:
-      return LaunchLayerNormTyped<__half>(input, scale, bias, output, mean,
-                                          inv_std, params, epsilon, stream);
-    case MusaElementType::BFloat16:
-      return LaunchLayerNormTyped<__mt_bfloat16>(
-          input, scale, bias, output, mean, inv_std, params, epsilon, stream);
-    case MusaElementType::Double:
-      return LaunchLayerNormTyped<double>(input, scale, bias, output, mean,
-                                          inv_std, params, epsilon, stream);
+      return DispatchLayerNorm<__half>(input, scale, bias, output, mean,
+                                       inv_std, params, epsilon,
+                                       scale_elem_type, stream);
     default:
       return musaErrorNotSupported;
   }

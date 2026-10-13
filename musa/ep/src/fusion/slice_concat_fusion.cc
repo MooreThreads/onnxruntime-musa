@@ -43,7 +43,7 @@ int64_t ReadIntAttribute(Ort::ConstNode node, const std::string& name,
                          int64_t default_value) {
   Ort::ConstOpAttr attr;
   Ort::Status status = node.GetAttributeByName(name, attr);
-  if (!status.IsOK()) {
+  if (!status.IsOK() || !attr) {
     return default_value;
   }
 
@@ -243,7 +243,7 @@ bool IsZeroFloatConstantOfShape(Ort::ConstNode node) {
 
   Ort::ConstOpAttr attr;
   Ort::Status attr_status = node.GetAttributeByName("value", attr);
-  if (!attr_status.IsOK()) {
+  if (!attr_status.IsOK() || !attr) {
     return true;
   }
 

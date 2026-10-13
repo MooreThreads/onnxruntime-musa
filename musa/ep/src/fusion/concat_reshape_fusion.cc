@@ -452,7 +452,7 @@ int64_t ReadIntAttribute(Ort::ConstNode node, const std::string& name,
                          int64_t default_value) {
   Ort::ConstOpAttr attr;
   Ort::Status status = node.GetAttributeByName(name, attr);
-  if (!status.IsOK()) {
+  if (!status.IsOK() || !attr) {
     return default_value;
   }
 

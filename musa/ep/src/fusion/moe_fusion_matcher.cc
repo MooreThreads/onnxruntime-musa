@@ -57,7 +57,7 @@ float ReadFloatAttribute(Ort::ConstNode node, const char* name,
                          float default_value) {
   Ort::ConstOpAttr attr;
   float value = default_value;
-  return node.GetAttributeByName(name, attr).IsOK() &&
+  return node.GetAttributeByName(name, attr).IsOK() && attr &&
                  attr.GetValue(value).IsOK()
              ? value
              : default_value;
@@ -88,7 +88,7 @@ std::optional<std::vector<int64_t>> ReadIntConstant(
   }
   Ort::ConstOpAttr attr;
   Ort::Value value{nullptr};
-  if (!producer.GetAttributeByName("value", attr).IsOK() ||
+  if (!producer.GetAttributeByName("value", attr).IsOK() || !attr ||
       !attr.GetTensorAttributeAsOrtValue(value).IsOK() || !value) {
     return std::nullopt;
   }

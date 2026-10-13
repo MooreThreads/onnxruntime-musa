@@ -50,7 +50,7 @@ bool RequireSameParallelLinearStorageType(
 int64_t ReadIntAttribute(Ort::ConstNode node, const char* name,
                          int64_t default_value) {
   Ort::ConstOpAttr attr;
-  if (!node.GetAttributeByName(name, attr).IsOK()) {
+  if (!node.GetAttributeByName(name, attr).IsOK() || !attr) {
     return default_value;
   }
   int64_t value = default_value;
@@ -60,7 +60,7 @@ int64_t ReadIntAttribute(Ort::ConstNode node, const char* name,
 float ReadFloatAttribute(Ort::ConstNode node, const char* name,
                          float default_value) {
   Ort::ConstOpAttr attr;
-  if (!node.GetAttributeByName(name, attr).IsOK()) {
+  if (!node.GetAttributeByName(name, attr).IsOK() || !attr) {
     return default_value;
   }
   float value = default_value;

@@ -13,8 +13,9 @@
 """End-to-end CPU-vs-MUSA test for the Conv operator."""
 
 import numpy as np
+import pytest
 
-from op_test_utils import TensorProto, run_and_compare
+from op_test_utils import TensorProto, build_model, run, run_and_compare
 
 
 def test_conv_opset11_float_nchw():
@@ -75,6 +76,41 @@ def test_conv_opset11_float_nchw_depthwise_fallback_with_bias():
         rtol=1e-4,
         atol=1e-4,
     )
+
+
+def test_conv_opset11_float_ncdhw_with_bias():
+    x = np.random.default_rng(13).standard_normal((1, 2, 4, 5, 6)).astype(np.float32)
+    w = np.random.default_rng(14).standard_normal((3, 2, 3, 3, 3)).astype(np.float32)
+    b = np.random.default_rng(15).standard_normal((3,)).astype(np.float32)
+    run_and_compare(
+        "Conv",
+        inputs={"X": x, "W": w, "B": b},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={
+            "pads": [1, 1, 1, 1, 1, 1],
+            "strides": [1, 2, 1],
+            "dilations": [1, 1, 1],
+        },
+        opset=11,
+        rtol=1e-4,
+        atol=1e-4,
+    )
+
+
+def test_conv_opset11_float_ncdhw_mudnn_failure_is_explicit(monkeypatch):
+    x = np.random.default_rng(16).standard_normal((1, 2, 3, 4, 5)).astype(np.float32)
+    w = np.random.default_rng(17).standard_normal((3, 2, 1, 3, 3)).astype(np.float32)
+    model = build_model(
+        "Conv",
+        inputs={"X": x, "W": w},
+        outputs=[("Y", TensorProto.FLOAT)],
+        attrs={"pads": [0, 1, 1, 0, 1, 1]},
+        opset=11,
+    )
+
+    monkeypatch.setenv("ORT_MUSA_CONV3D_FORCE_MUDNN_FAILURE_FOR_TEST", "1")
+    with pytest.raises(Exception, match="Conv3D requires the muDNN path"):
+        run(model, {"X": x, "W": w}, use_musa=True)
 
 
 def test_conv_lowered_conv1d_h1_k1():

@@ -28,6 +28,7 @@
 #include "ep_stream.h"
 #include "fusion/fusion_matcher.h"
 #include "fusion/fusion_node_compute.h"
+#include "graph/capability_predicates.h"
 #include "graph/cpu_preferred_nodes.h"
 #include "graph_mermaid_dump.h"
 #include "plugin_ep_utils.h"
@@ -237,7 +238,11 @@ OrtStatus* CollectSupportedNodeCandidates(
     const OrtKernelDef* kernel_def = nullptr;
     RETURN_IF_ERROR(ep_api.EpGraphSupportInfo_LookUpKernel(graph_support_info,
                                                            node, &kernel_def));
-    if (kernel_def != nullptr) {
+    // The registry only matches op/domain/opset/dtype, so ask the per-operator
+    // predicate as well: a kernel that implements a subset of the ONNX
+    // configurations must not claim the nodes it cannot run, or they would
+    // fail during Compute() instead of running on the CPU EP.
+    if (kernel_def != nullptr && IsNodeConfigurationSupported(node)) {
       candidates.nodes.push_back(node);
       candidates.tentative_nodes.push_back(node);
     }

@@ -17,8 +17,21 @@
 namespace {
 class Slice : public OpKernelBase<Slice> {
  public:
-  Slice(const OrtKernelInfo* /*info*/, void* /*state*/) {}
+  Slice(const OrtKernelInfo* info, void* /*state*/) {
+    Ort::ConstKernelInfo kernel_info(info);
+    // Through opset 9 starts/ends/axes are node attributes and there is no
+    // `steps` (those schemas fix it to 1); from opset 10 on they are inputs.
+    // The kernel reads both and prefers the inputs when the schema has them.
+    starts_attr_ = AttrsOrEmpty(kernel_info, "starts");
+    ends_attr_ = AttrsOrEmpty(kernel_info, "ends");
+    axes_attr_ = AttrsOrEmpty(kernel_info, "axes");
+  }
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
+
+ private:
+  std::vector<int64_t> starts_attr_;
+  std::vector<int64_t> ends_attr_;
+  std::vector<int64_t> axes_attr_;
 };
 
 OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
@@ -26,17 +39,30 @@ OrtStatus* Slice::Compute(Ort::KernelContext& ctx) const {
   auto in0_info = input0.GetTensorTypeAndShapeInfo();
   auto elem_type = in0_info.GetElementType();
   auto shape0 = in0_info.GetShape();
-  std::vector<size_t> parameter_indices{1, 2};
-  if (ctx.GetInputCount() > 3) parameter_indices.push_back(3);
-  if (ctx.GetInputCount() > 4) parameter_indices.push_back(4);
-  std::vector<std::vector<int64_t>> parameters =
-      ReadIntTensors(ctx, parameter_indices);
-  std::vector<int64_t> starts = std::move(parameters[0]);
-  std::vector<int64_t> ends = std::move(parameters[1]);
+  std::vector<int64_t> starts;
+  std::vector<int64_t> ends;
   std::vector<int64_t> axes;
-  std::vector<int64_t> steps(starts.size(), 1);
-  if (ctx.GetInputCount() > 3) axes = std::move(parameters[2]);
-  if (ctx.GetInputCount() > 4) steps = std::move(parameters[3]);
+  std::vector<int64_t> steps;
+  if (ctx.GetInputCount() > 1) {
+    std::vector<size_t> parameter_indices{1, 2};
+    if (ctx.GetInputCount() > 3) parameter_indices.push_back(3);
+    if (ctx.GetInputCount() > 4) parameter_indices.push_back(4);
+    std::vector<std::vector<int64_t>> parameters =
+        ReadIntTensors(ctx, parameter_indices);
+    starts = std::move(parameters[0]);
+    ends = std::move(parameters[1]);
+    if (parameter_indices.size() > 2) axes = std::move(parameters[2]);
+    if (parameter_indices.size() > 3) steps = std::move(parameters[3]);
+  } else {
+    starts = starts_attr_;
+    ends = ends_attr_;
+    axes = axes_attr_;
+  }
+  if (starts.size() != ends.size()) {
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT, "Slice starts/ends must have the same length");
+  }
+  if (steps.empty()) steps.assign(starts.size(), 1);
   if (axes.empty()) {
     axes.resize(starts.size());
     std::iota(axes.begin(), axes.end(), 0);
@@ -191,3 +217,37 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
          .SetInputMemType(3, OrtMemTypeCPUInput)
          .SetInputMemType(4, OrtMemTypeCPUInput)),
     Slice)
+
+// opset 10 moved starts/ends/axes/steps from attributes to inputs; opset 11
+// only clarified negative indices. Both schemas are the opset-13 set without
+// bfloat16, and the same kernel def applies to them.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Slice, kOnnxDomain, 10, 10,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
+         .AddTypeConstraint("Tind", IntTensorTypes())
+         .SetInputMemType(1, OrtMemTypeCPUInput)
+         .SetInputMemType(2, OrtMemTypeCPUInput)
+         .SetInputMemType(3, OrtMemTypeCPUInput)
+         .SetInputMemType(4, OrtMemTypeCPUInput)),
+    Slice)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Slice, kOnnxDomain, 11, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
+         .AddTypeConstraint("Tind", IntTensorTypes())
+         .SetInputMemType(1, OrtMemTypeCPUInput)
+         .SetInputMemType(2, OrtMemTypeCPUInput)
+         .SetInputMemType(3, OrtMemTypeCPUInput)
+         .SetInputMemType(4, OrtMemTypeCPUInput)),
+    Slice)
+
+// opset 1-9 keeps starts/ends/axes in node attributes; those schemas do not
+// have bfloat16 either, and they have no `Tind` type parameter (there is no
+// indices input), so only `T` may be declared here.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Slice, kOnnxDomain, 1, 9,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T",
+                                      AllFixedSizeTensorTypesNoBFloat16())),
+                                  Slice)

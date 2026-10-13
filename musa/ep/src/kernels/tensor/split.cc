@@ -25,11 +25,15 @@ class Split : public OpKernelBase<Split> {
   Split(const OrtKernelInfo* info, void* /*state*/) {
     Ort::ConstKernelInfo kernel_info(info);
     axis_ = AttrOrDefault<int64_t>(kernel_info, "axis", 0);
+    // Through opset 12 the per-output sizes live in the `split` attribute; the
+    // kernel prefers the input when the schema provides one.
+    split_attr_ = AttrsOrEmpty(kernel_info, "split");
   }
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
 
  private:
   int64_t axis_ = 0;
+  std::vector<int64_t> split_attr_;
 };
 
 OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
@@ -39,12 +43,27 @@ OrtStatus* Split::Compute(Ort::KernelContext& ctx) const {
   auto shape0 = in0_info.GetShape();
   int64_t axis = NormalizeAxis(axis_, shape0.size());
   std::vector<int64_t> splits;
+  bool sizes_given = false;
   if (ctx.GetInputCount() > 1) {
     splits = ReadIntTensor(ctx, 1);
+    sizes_given = true;
+  } else if (!split_attr_.empty()) {
+    splits = split_attr_;
+    sizes_given = true;
   } else {
     size_t count = ctx.GetOutputCount();
     splits.assign(
         count, shape0[static_cast<size_t>(axis)] / static_cast<int64_t>(count));
+  }
+  // The copies below walk the input row by row, so explicit sizes that do not
+  // add up to the split axis would read past the input.
+  if (sizes_given &&
+      (splits.size() != ctx.GetOutputCount() ||
+       std::accumulate(splits.begin(), splits.end(), int64_t{0}) !=
+           shape0[static_cast<size_t>(axis)])) {
+    return Ort::GetApi().CreateStatus(
+        ORT_INVALID_ARGUMENT,
+        "Split sizes must cover the split axis over all outputs");
   }
   if (std::any_of(splits.begin(), splits.end(),
                   [](int64_t split) { return split < 0; })) {
@@ -199,3 +218,20 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .SetInputMemType(1, OrtMemTypeCPUInput)),
     Split)
+
+// opset 2-10 carries the per-output sizes in the `split` attribute and has no
+// second input; opset 11-12 only documented a negative axis. Neither schema
+// has bfloat16, and the kernel reads the attribute as well, so one class
+// serves both old ranges. (The opset-1 schema, which also allowed `split` as a
+// tensor input, is deliberately not registered, matching the CUDA EP.)
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Split, kOnnxDomain, 2, 10,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T",
+                                      AllFixedSizeTensorTypesNoBFloat16())),
+                                  Split)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Split, kOnnxDomain, 11, 12,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T",
+                                      AllFixedSizeTensorTypesNoBFloat16())),
+                                  Split)

@@ -118,6 +118,14 @@ struct MusaClipParams {
   const void* max_data;
   int32_t has_min;
   int32_t has_max;
+  // Through opset 10 the bounds live in the node's FLOAT attributes instead of
+  // scalar inputs. When *_is_attribute is set the matching data pointer is
+  // unused and the bound is the attribute value, converted to the element type
+  // the same way the ONNX reference kernels do.
+  int32_t min_is_attribute;
+  int32_t max_is_attribute;
+  float min_attribute;
+  float max_attribute;
 };
 
 struct MusaLayerNormParams {
@@ -220,6 +228,12 @@ struct MusaPadParams {
   int64_t input_strides[kMusaMaxBroadcastRank];
   int64_t output_dims[kMusaMaxBroadcastRank];
   int64_t pads_begin[kMusaMaxBroadcastRank];
+  // Pad through opset 10 keeps the pad value in a FLOAT attribute instead of a
+  // third input; when set, attribute_value replaces the constant_value bit
+  // pattern of the kernel argument. Those schemas only allow
+  // float16/float/float64, so the element width selects the conversion.
+  int32_t value_from_attribute;
+  float attribute_value;
 };
 
 struct MusaNonZeroParams {

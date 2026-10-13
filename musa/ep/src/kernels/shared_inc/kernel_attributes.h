@@ -14,6 +14,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "utils.h"
@@ -33,5 +34,21 @@ inline std::vector<int64_t> AttrsOrEmpty(Ort::ConstKernelInfo& info,
     return info.GetAttributes<int64_t>(name);
   } catch (...) {
     return {};
+  }
+}
+
+/// Reads an attribute that holds a single value.
+///
+/// AttrsOrEmpty() above goes through the ORT array getters, which only accept
+/// the list attribute types (FLOATS/INTS/STRINGS) - a scalar FLOAT/INT/STRING
+/// attribute fails there and would silently read as "absent". Use this for
+/// those; a missing attribute is reported by ORT as an error, which is what
+/// turns into the empty optional here.
+template <typename T>
+std::optional<T> AttrOrNullopt(Ort::ConstKernelInfo& info, const char* name) {
+  try {
+    return info.GetAttribute<T>(name);
+  } catch (...) {
+    return std::nullopt;
   }
 }

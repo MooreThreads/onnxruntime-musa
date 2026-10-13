@@ -13,6 +13,7 @@
 
 #include "graph/capability_predicates.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -126,11 +127,39 @@ bool ResizeConfigurationSupported(Ort::ConstNode node) {
   return ResizeRouteValueRejection(config, values) == nullptr;
 }
 
+/// True when the MUSA Slice kernel can run this node.
+///
+/// The device copy walks every slice with a positive step, so the kernel
+/// rejects a non-positive `steps` entry - leaving those nodes on the CPU EP is
+/// better than a node that fails during Compute(). `steps` is the fourth input
+/// of the opset-10 schema and does not exist before opset 10 (the older
+/// schemas have no steps at all). A `steps` tensor that is not a constant
+/// initializer is a run-time value the kernel has to judge, exactly like the
+/// Resize values above.
+bool SliceConfigurationSupported(Ort::ConstNode node) {
+  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+  constexpr size_t kStepsInputIndex = 4;
+  if (inputs.size() <= kStepsInputIndex ||
+      inputs[kStepsInputIndex] == nullptr) {
+    return true;
+  }
+  const std::optional<std::vector<int64_t>> steps =
+      ReadIntInitializerNoLimit(inputs[kStepsInputIndex]);
+  if (!steps.has_value()) {
+    return true;
+  }
+  return std::all_of(steps->begin(), steps->end(),
+                     [](int64_t step) { return step > 0; });
+}
+
 }  // namespace
 
 bool IsNodeConfigurationSupported(Ort::ConstNode node) {
   if (IsOnnxOp(node, "Resize")) {
     return ResizeConfigurationSupported(node);
+  }
+  if (IsOnnxOp(node, "Slice")) {
+    return SliceConfigurationSupported(node);
   }
   return true;
 }

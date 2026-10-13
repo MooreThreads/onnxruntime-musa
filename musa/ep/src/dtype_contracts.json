@@ -590,18 +590,19 @@
     {
       "op": "Erf",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "9-19",
       "storage": "bfloat16,float16,float32,float64",
       "output": "same as input",
       "compute": "FP32 for BF16/FP16; FP64 for float64",
       "accumulation": "none",
-      "path": "muDNN unary when available; device unary kernel fallback",
+      "path": "muDNN unary when available; device unary kernel fallback. opset 9-12 reuses the same kernel class (the schema only added bfloat16 at 13), which is what the opset 10-12 Bert/GPT models need after ORT stops fusing their Gelu subgraph around the EP-claimed nodes",
       "verified_dtypes": "float32,float16,float64,bfloat16",
       "tests": [
         "test/ops/test_erf.py",
-        "test/ops/test_unary_dtype_matrix.py"
+        "test/ops/test_unary_dtype_matrix.py",
+        "test/ops/test_fusion_ops.py"
       ],
-      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Erf type constraint"
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Erf type constraint; the 9-12 registration has no bfloat16 (opset 13)"
     },
     {
       "op": "Exp",
@@ -811,16 +812,17 @@
       "op": "LayerNormalization",
       "domain": "ai.onnx",
       "opset": "17-19",
-      "storage": "float32 X/output; float32 Scale/B (B optional)",
+      "storage": "float32 or float16 X/Y; Scale/B of the same element type as X (ORT binds them to T); B optional",
       "output": "same shape as X; optional float32 mean and inv_std",
       "compute": "row-wise normalization over axis suffix",
       "accumulation": "FP32",
-      "path": "muDNN LayerNorm or MUSA FP32 device kernel",
-      "verified_dtypes": "float32",
+      "path": "muDNN LayerNorm for float32, MUSA device kernel for float32/float16",
+      "verified_dtypes": "float32,float16",
       "tests": [
-        "test/ops/test_layer_normalization.py"
+        "test/ops/test_layer_normalization.py",
+        "test/ops/test_fusion_ops.py"
       ],
-      "unsupported_reasons": "stash_type=1 only; Scale/B must be float and match normalized suffix; registration currently exposes float32 only"
+      "unsupported_reasons": "stash_type=1 only; Scale/B must match X in type and the normalized suffix shape; Scale/B float32 next to float16 X is rejected because ORT itself cannot load it"
     },
     {
       "op": "Flatten",
@@ -1352,6 +1354,81 @@
         "test/ops/test_reverse_sequence.py"
       ],
       "unsupported_reasons": "schema excludes BF16 through opset 19; string/complex unregistered; axes restricted to 0/1"
+    },
+    {
+      "op": "Sin",
+      "domain": "ai.onnx",
+      "opset": "7-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for float16; FP64 for float64",
+      "accumulation": "none",
+      "path": "MUSA device unary kernel (sinf/sin); the schema is unchanged from opset 7 through 19 apart from bfloat16 at 13",
+      "verified_dtypes": "float32,float16",
+      "tests": [
+        "test/ops/test_fusion_ops.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Sin type constraint; the 7-12 registration has no bfloat16"
+    },
+    {
+      "op": "Cos",
+      "domain": "ai.onnx",
+      "opset": "7-19",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "FP32 for float16; FP64 for float64",
+      "accumulation": "none",
+      "path": "MUSA device unary kernel (cosf/cos); the schema is unchanged from opset 7 through 19 apart from bfloat16 at 13",
+      "verified_dtypes": "float32,float16",
+      "tests": [
+        "test/ops/test_fusion_ops.py"
+      ],
+      "unsupported_reasons": "integer,bool,string,complex are excluded by the ONNX Cos type constraint; the 7-12 registration has no bfloat16"
+    },
+    {
+      "op": "AveragePool",
+      "domain": "ai.onnx",
+      "opset": "7-19",
+      "storage": "float16,float32,float64",
+      "output": "same as input",
+      "compute": "window sum and divide; the divisor is the kernel size when count_include_pad is set, otherwise the number of window positions inside the input",
+      "accumulation": "FP32 for float16; FP64 for float32/float64 custom path",
+      "path": "muDNN Pooling AVGPOOL_COUNT_PAD/AVGPOOL_COUNT_WITHOUT_PAD for symmetric pads, MUSA device pooling kernel otherwise",
+      "verified_dtypes": "float32,float16",
+      "tests": [
+        "test/ops/test_fusion_ops.py"
+      ],
+      "unsupported_reasons": "ceil_mode=1 stays on the CPU EP (the capability predicate and the kernel share the rejection list in kernels/nn/average_pool_support.h); rank 3-8, concrete shapes, auto_pad NOTSET/VALID/SAME_UPPER/SAME_LOWER"
+    },
+    {
+      "op": "Gelu",
+      "domain": "ai.onnx",
+      "opset": "20-21",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "0.5*x*(1+erf(x/sqrt(2))); FP32 for float16/bfloat16",
+      "accumulation": "none",
+      "path": "MUSA device unary kernel through the shared unary dispatcher",
+      "verified_dtypes": "float32,float16",
+      "tests": [
+        "test/ops/test_fusion_ops.py"
+      ],
+      "unsupported_reasons": "approximate=tanh stays on the CPU EP (capability predicate in graph/capability_predicates.cc shares kernels/activation/gelu_support.h with the kernel)"
+    },
+    {
+      "op": "Gelu",
+      "domain": "com.microsoft",
+      "opset": "1",
+      "storage": "bfloat16,float16,float32,float64",
+      "output": "same as input",
+      "compute": "0.5*x*(1+erf(x/sqrt(2))); FP32 for float16/bfloat16",
+      "accumulation": "none",
+      "path": "MUSA device unary kernel, shared with the ONNX Gelu",
+      "verified_dtypes": "float32,float16",
+      "tests": [
+        "test/ops/test_fusion_ops.py"
+      ],
+      "unsupported_reasons": "an int approximate=1 (tanh) stays on the CPU EP; no fusion in this ORT version produces these nodes for the plugin EP yet"
     }
   ]
 }

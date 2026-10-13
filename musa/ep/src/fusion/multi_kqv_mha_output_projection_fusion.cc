@@ -376,7 +376,7 @@ size_t FusedInputIndex(const std::unordered_map<std::string, size_t>& indices,
 float GetFloatAttribute(Ort::ConstNode node, const char* name, float fallback) {
   Ort::ConstOpAttr attr;
   float value = fallback;
-  return node.GetAttributeByName(name, attr).IsOK() &&
+  return node.GetAttributeByName(name, attr).IsOK() && attr &&
                  attr.GetValue(value).IsOK()
              ? value
              : fallback;

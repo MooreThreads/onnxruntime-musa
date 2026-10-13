@@ -208,6 +208,18 @@ inline std::vector<const OrtDataType*> FloatTensorTypes() {
   return {GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)};
 }
 
+// LayerNormalization (opset 17): the kernel runs X, and reads Scale/Bias, in
+// float32 or float16. ORT binds Scale/Bias to the same "T" as X even though
+// the ONNX schema names that constraint "U" (and only allows float/bfloat16
+// there), so a model ORT loads carries the same element type on all three
+// inputs.
+inline std::vector<const OrtDataType*> LayerNormTensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+  };
+}
+
 inline std::vector<const OrtDataType*> ClipTensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),

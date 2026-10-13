@@ -204,30 +204,34 @@ OrtStatus* LayerNormalization::Compute(Ort::KernelContext& ctx) const {
   }
   std::vector<int64_t> normalized_shape(input_shape.begin() + axis,
                                         input_shape.end());
+  // ORT binds Scale/Bias to the same type parameter as X, so a model that ORT
+  // accepts carries one element type on all three inputs. muDNN reads
+  // Scale/Bias as float32, the device kernel reads them as the input type.
+  const auto scale_elem_type = scale_info.GetElementType();
   if (!ShapeEqualsSuffix(scale_shape, normalized_shape) ||
-      scale_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+      scale_elem_type != elem_type) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED,
-        "LayerNormalization requires float scale matching normalized shape");
+        "LayerNormalization requires a scale matching the input type and the "
+        "normalized shape");
   }
   Ort::ConstValue bias =
       (ctx.GetInputCount() > 2) ? ctx.GetInput(2) : Ort::ConstValue{nullptr};
   if (bias != nullptr) {
     auto bias_info = bias.GetTensorTypeAndShapeInfo();
     if (!ShapeEqualsSuffix(bias_info.GetShape(), normalized_shape) ||
-        bias_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+        bias_info.GetElementType() != elem_type) {
       return Ort::GetApi().CreateStatus(
           ORT_NOT_IMPLEMENTED,
-          "LayerNormalization requires float bias matching normalized shape");
+          "LayerNormalization requires a bias matching the input type and the "
+          "normalized shape");
     }
   }
 
   MusaElementType musa_elem_type;
   if (!ToMusaElementType(elem_type, musa_elem_type) ||
       (elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
-       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
-       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 &&
-       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE)) {
+       elem_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16)) {
     return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
                                       "LayerNormalization unsupported dtype");
   }
@@ -270,7 +274,8 @@ OrtStatus* LayerNormalization::Compute(Ort::KernelContext& ctx) const {
         "LayerNormalization requires MUSA device optional outputs");
   }
 
-  if (TryMudnn(ctx, input_shape, scale_shape, mean_shape, elem_type, axis,
+  if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+      TryMudnn(ctx, input_shape, scale_shape, mean_shape, elem_type, axis,
                output, mean, inv_std)) {
     return nullptr;
   }
@@ -279,13 +284,18 @@ OrtStatus* LayerNormalization::Compute(Ort::KernelContext& ctx) const {
   params.rows = rows;
   params.norm_size = norm_size;
   params.has_bias = bias != nullptr ? 1 : 0;
+  MusaElementType scale_musa_type = MusaElementType::Float;
+  if (!ToMusaElementType(scale_elem_type, scale_musa_type)) {
+    return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                      "LayerNormalization unsupported dtype");
+  }
   musaError_t status = LaunchMusaLayerNormKernel(
-      input.GetTensorRawData(), scale.GetTensorData<float>(),
-      bias == nullptr ? nullptr : bias.GetTensorData<float>(),
+      input.GetTensorRawData(), scale.GetTensorRawData(),
+      bias == nullptr ? nullptr : bias.GetTensorRawData(),
       output.GetTensorMutableRawData(),
       mean == nullptr ? nullptr : mean.GetTensorMutableData<float>(),
       inv_std == nullptr ? nullptr : inv_std.GetTensorMutableData<float>(),
-      params, epsilon_, musa_elem_type, GetComputeStream(ctx));
+      params, epsilon_, musa_elem_type, scale_musa_type, GetComputeStream(ctx));
   if (status == musaErrorNotSupported) {
     return Ort::GetApi().CreateStatus(
         ORT_NOT_IMPLEMENTED,
@@ -297,5 +307,5 @@ OrtStatus* LayerNormalization::Compute(Ort::KernelContext& ctx) const {
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     LayerNormalization, kOnnxDomain, 17, 19,
-    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())),
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", LayerNormTensorTypes())),
     LayerNormalization)

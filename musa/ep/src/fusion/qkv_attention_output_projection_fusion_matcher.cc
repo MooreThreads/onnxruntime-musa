@@ -12,7 +12,7 @@ float ReadFloatAttribute(Ort::ConstNode node, const char* name,
                          float default_value) {
   Ort::ConstOpAttr attribute;
   float value = default_value;
-  return node.GetAttributeByName(name, attribute).IsOK() &&
+  return node.GetAttributeByName(name, attribute).IsOK() && attribute &&
                  attribute.GetValue(value).IsOK()
              ? value
              : default_value;

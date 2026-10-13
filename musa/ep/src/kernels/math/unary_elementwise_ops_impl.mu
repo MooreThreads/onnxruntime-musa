@@ -39,6 +39,12 @@ __device__ __forceinline__ float UnaryValue(float x, MusaUnaryOp op, float alpha
       return ceilf(x);
     case MusaUnaryOp::Floor:
       return floorf(x);
+    case MusaUnaryOp::Sin:
+      return sinf(x);
+    case MusaUnaryOp::Cos:
+      return cosf(x);
+    case MusaUnaryOp::Gelu:
+      return 0.5f * x * (1.0f + erff(x * 0.70710678118654752440f));
   }
   return x;
 }
@@ -86,6 +92,15 @@ __device__ __forceinline__ T UnaryValueTyped(T x, MusaUnaryOp op, float alpha) {
       return static_cast<T>(ceil(static_cast<double>(x)));
     case MusaUnaryOp::Floor:
       return static_cast<T>(floor(static_cast<double>(x)));
+    case MusaUnaryOp::Sin:
+      return static_cast<T>(sin(static_cast<double>(x)));
+    case MusaUnaryOp::Cos:
+      return static_cast<T>(cos(static_cast<double>(x)));
+    case MusaUnaryOp::Gelu: {
+      const double value = static_cast<double>(x);
+      return static_cast<T>(0.5 * value *
+                            (1.0 + erf(value * 0.70710678118654752440)));
+    }
   }
   return x;
 }
@@ -158,6 +173,21 @@ musaError_t LaunchUnaryTyped(const void* input,
   return musaGetLastError();
 }
 
+musaError_t LaunchUnaryFloat(const void* input,
+                             void* output,
+                             int64_t count,
+                             MusaUnaryOp op,
+                             float alpha,
+                             musaStream_t stream) {
+  if (count == 0) {
+    return musaSuccess;
+  }
+  UnaryFloatKernel<<<BlocksForCount(count), kThreadsPerBlock, 0, stream>>>(
+      reinterpret_cast<const float*>(input), reinterpret_cast<float*>(output),
+      count, op, alpha);
+  return musaGetLastError();
+}
+
 template <typename T>
 musaError_t LaunchUnaryFloatLikeTyped(const void* input,
                                       void* output,
@@ -183,7 +213,7 @@ musaError_t LaunchMusaUnaryKernel(const void* input,
                                   musaStream_t stream) {
   switch (elem_type) {
     case MusaElementType::Float:
-      return LaunchUnaryTyped<float>(input, output, count, op, alpha, stream);
+      return LaunchUnaryFloat(input, output, count, op, alpha, stream);
     case MusaElementType::Double:
       return LaunchUnaryTyped<double>(input, output, count, op, alpha, stream);
     case MusaElementType::Uint8:
@@ -219,8 +249,7 @@ musaError_t LaunchMusaUnaryFloatKernel(const float* input,
                                        MusaUnaryOp op,
                                        float alpha,
                                        musaStream_t stream) {
-  return LaunchMusaUnaryKernel(input, output, count, op, alpha,
-                               MusaElementType::Float, stream);
+  return LaunchUnaryFloat(input, output, count, op, alpha, stream);
 }
 
 template <typename T>

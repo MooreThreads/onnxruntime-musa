@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cstdlib>
+
 #include "shared_inc/op_kernel_common.h"
 
 namespace {
@@ -59,6 +61,11 @@ std::vector<int64_t> ResolveReshapeOutputShape(
 
 OrtStatus* Reshape::Compute(Ort::KernelContext& ctx) const {
   Ort::ConstValue input0 = ctx.GetInput(0);
+  if (!IsGpuMemory(input0.GetTensorMemoryInfo()) &&
+      std::getenv("ORT_MUSA_TEST_FAIL_RESHAPE_CPU_INPUT") != nullptr) {
+    return Ort::GetApi().CreateStatus(
+        ORT_EP_FAIL, "test-only Reshape CPU-input route reached");
+  }
   auto shape0 = input0.GetTensorTypeAndShapeInfo().GetShape();
   std::vector<int64_t> out_shape =
       ResolveReshapeOutputShape(shape0, ReadIntTensor(ctx, 1), allowzero_);
@@ -100,11 +107,20 @@ OrtStatus* ReshapeString::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Reshape, kOnnxDomain, 13, 19,
+    Reshape, kOnnxDomain, 5, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
+         .SetInputMemType(1, OrtMemTypeCPUInput)),
+    Reshape)
+
+// The opset-21 schema only adds the int4/uint4 element types, which this
+// kernel does not implement (and does not declare), so the opset-13 behaviour
+// still covers the node.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Reshape, kOnnxDomain, 13, 21,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .SetInputMemType(1, OrtMemTypeCPUInput)
-         .AddInputOutputAlias(0, 0)),
+         .SetInputMemType(1, OrtMemTypeCPUInput)),
     Reshape)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(

@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "nn/average_pool_support.h"
 #include "nn/pool_impl.h"
 #include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
@@ -173,6 +174,28 @@ bool TryMudnnMaxPool(const void* input_data, void* output_data,
                       ::musa::dnn::Pooling::Mode::MAXPOOL, stream);
 }
 
+// muDNN expresses ONNX count_include_pad through two average modes: the one
+// that divides by the kernel size, and the one that divides by the positions
+// that land inside the input.
+bool TryMudnnAveragePool(const void* input_data, void* output_data,
+                         const std::vector<int64_t>& input_shape,
+                         const std::vector<int64_t>& output_shape,
+                         const std::vector<int64_t>& kernel_shape,
+                         const std::vector<int64_t>& pads,
+                         const std::vector<int64_t>& strides,
+                         bool count_include_pad,
+                         ONNXTensorElementDataType elem_type,
+                         musaStream_t stream) {
+  // AveragePool has no dilations attribute; the kernel window is dense.
+  const std::vector<int64_t> dilations(input_shape.size() - 2, 1);
+  return TryMudnnPool(
+      input_data, output_data, input_shape, output_shape, kernel_shape, pads,
+      strides, dilations, elem_type,
+      count_include_pad ? ::musa::dnn::Pooling::Mode::AVGPOOL_COUNT_PAD
+                        : ::musa::dnn::Pooling::Mode::AVGPOOL_COUNT_WITHOUT_PAD,
+      stream);
+}
+
 bool HfdType(ONNXTensorElementDataType elem_type) {
   return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
          elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE ||
@@ -278,6 +301,33 @@ MusaMaxPoolParams MakeMaxPoolParams(const std::vector<int64_t>& input_shape,
     params.pads_begin[i] = pads[idx];
     params.strides[i] = strides[idx];
     params.dilations[i] = dilations[idx];
+  }
+  return params;
+}
+
+MusaAveragePoolParams MakeAveragePoolParams(
+    const std::vector<int64_t>& input_shape,
+    const std::vector<int64_t>& output_shape,
+    const std::vector<int64_t>& kernel_shape, const std::vector<int64_t>& pads,
+    const std::vector<int64_t>& strides, bool count_include_pad) {
+  MusaAveragePoolParams params{};
+  params.rank = static_cast<int32_t>(input_shape.size());
+  params.spatial_rank = static_cast<int32_t>(input_shape.size() - 2);
+  params.count_include_pad = count_include_pad ? 1 : 0;
+  params.output_elements = NumElements(output_shape);
+
+  auto input_strides = Strides(input_shape);
+  auto output_strides = Strides(output_shape);
+  for (size_t i = 0; i < input_shape.size(); ++i) {
+    params.input_dims[i] = input_shape[i];
+    params.input_strides[i] = input_strides[i];
+    params.output_strides[i] = output_strides[i];
+  }
+  for (int32_t i = 0; i < params.spatial_rank; ++i) {
+    const auto idx = static_cast<size_t>(i);
+    params.kernel_shape[i] = kernel_shape[idx];
+    params.pads_begin[i] = pads[idx];
+    params.strides[i] = strides[idx];
   }
   return params;
 }
@@ -509,12 +559,120 @@ OrtStatus* MaxPool::Compute(Ort::KernelContext& ctx) const {
   return LaunchStatus(status);
 }
 
+class AveragePool : public OpKernelBase<AveragePool> {
+ public:
+  AveragePool(const OrtKernelInfo* info, void* /*state*/) {
+    Ort::ConstKernelInfo kernel_info(info);
+    auto_pad_ = AttrOrDefault<std::string>(kernel_info, "auto_pad", "NOTSET");
+    ceil_mode_ = AttrOrDefault<int64_t>(kernel_info, "ceil_mode", 0);
+    count_include_pad_ =
+        AttrOrDefault<int64_t>(kernel_info, "count_include_pad", 0);
+    kernel_shape_ = AttrsOrEmpty(kernel_info, "kernel_shape");
+    pads_ = AttrsOrEmpty(kernel_info, "pads");
+    strides_ = AttrsOrEmpty(kernel_info, "strides");
+  }
+  OrtStatus* Compute(Ort::KernelContext& ctx) const;
+
+ private:
+  std::string auto_pad_;
+  int64_t ceil_mode_ = 0;
+  int64_t count_include_pad_ = 0;
+  std::vector<int64_t> kernel_shape_;
+  std::vector<int64_t> pads_;
+  std::vector<int64_t> strides_;
+};
+
+OrtStatus* AveragePool::Compute(Ort::KernelContext& ctx) const {
+  musaStream_t stream = GetComputeStream(ctx);
+  Ort::ConstValue input = ctx.GetInput(0);
+  auto input_info = input.GetTensorTypeAndShapeInfo();
+  const auto elem_type = input_info.GetElementType();
+  auto input_shape = input_info.GetShape();
+  const size_t spatial_rank =
+      input_shape.size() >= 2 ? input_shape.size() - 2 : 0;
+
+  // The capability predicate and this guard ask the same question of the same
+  // struct, so the nodes this route claims are exactly the nodes it runs.
+  musa_ep::AveragePoolRouteConfig config;
+  config.auto_pad = auto_pad_;
+  config.ceil_mode = ceil_mode_;
+  config.count_include_pad = count_include_pad_;
+  config.kernel_shape = kernel_shape_;
+  config.pads = NormalizePads(pads_, spatial_rank);
+  config.strides = NormalizeSpatialAttr(strides_, spatial_rank, 1);
+  config.input_rank = static_cast<int64_t>(input_shape.size());
+  config.input_element_type = elem_type;
+  if (const char* reason = musa_ep::AveragePoolRouteRejection(config);
+      reason != nullptr) {
+    return PoolStatus("AveragePool", reason);
+  }
+
+  const std::vector<int64_t> dilations(spatial_rank, 1);
+  std::vector<int64_t> pads;
+  if (!musa_ep::ResolveAveragePoolPads(auto_pad_, pads_, input_shape,
+                                       kernel_shape_, config.strides, pads)) {
+    return PoolStatus("AveragePool",
+                      "auto_pad requires a concrete input shape");
+  }
+  RETURN_IF_ERROR(ValidatePoolCommon("AveragePool", input_shape, kernel_shape_,
+                                     pads, config.strides, dilations));
+
+  MusaElementType musa_elem_type;
+  if (!ToMusaElementType(elem_type, musa_elem_type)) {
+    return PoolStatus("AveragePool", "unsupported dtype");
+  }
+
+  std::vector<int64_t> output_shape = PoolOutputShape(
+      input_shape, kernel_shape_, pads, config.strides, dilations);
+  Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
+  if (!IsGpuMemory(input.GetTensorMemoryInfo()) ||
+      !IsGpuMemory(output.GetTensorMemoryInfo())) {
+    return PoolStatus("AveragePool", "requires MUSA device tensors");
+  }
+
+  if (HfdType(elem_type) &&
+      TryMudnnAveragePool(input.GetTensorRawData(),
+                          output.GetTensorMutableRawData(), input_shape,
+                          output_shape, kernel_shape_, pads, config.strides,
+                          count_include_pad_ != 0, elem_type, stream)) {
+    return nullptr;
+  }
+
+  musaError_t status = LaunchMusaAveragePoolKernel(
+      input.GetTensorRawData(), output.GetTensorMutableRawData(),
+      MakeAveragePoolParams(input_shape, output_shape, kernel_shape_, pads,
+                            config.strides, count_include_pad_ != 0),
+      musa_elem_type, stream);
+  if (status == musaErrorNotSupported) {
+    return PoolStatus("AveragePool", "unsupported dtype");
+  }
+  return LaunchStatus(status);
+}
+
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     GlobalAveragePool, kOnnxDomain, 1, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())),
     GlobalAveragePool)
+
+// The AveragePool schema changes at 10 (ceil_mode is documented) and 19 (only
+// the default values of strides/dilations are clarified), so the same kernel
+// class covers every range, exactly as the CUDA EP registers it.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    AveragePool, kOnnxDomain, 7, 9,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())),
+    AveragePool)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    AveragePool, kOnnxDomain, 10, 10,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())),
+    AveragePool)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    AveragePool, kOnnxDomain, 11, 19,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())),
+    AveragePool)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     GlobalMaxPool, kOnnxDomain, 1, 19,

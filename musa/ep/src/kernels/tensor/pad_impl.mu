@@ -3,6 +3,35 @@
 
 namespace {
 
+// Pad through opset 10 supplies the pad value as a FLOAT node attribute. The
+// schemas of those opsets only allow float16/float/float64 elements, so the
+// element width picks the conversion, and the bits are copied byte-wise to
+// stay independent of the host layout of the union.
+__device__ __forceinline__ uint64_t PadAttributeValueBits(float value,
+                                                          int32_t element_size) {
+  uint64_t bits = 0;
+  if (element_size == 2) {
+    const __half converted = __float2half_rn(value);
+    for (int32_t byte = 0; byte < 2; ++byte) {
+      reinterpret_cast<uint8_t*>(&bits)[byte] =
+          reinterpret_cast<const uint8_t*>(&converted)[byte];
+    }
+  } else if (element_size == 4) {
+    const float converted = value;
+    for (int32_t byte = 0; byte < 4; ++byte) {
+      reinterpret_cast<uint8_t*>(&bits)[byte] =
+          reinterpret_cast<const uint8_t*>(&converted)[byte];
+    }
+  } else if (element_size == 8) {
+    const double converted = static_cast<double>(value);
+    for (int32_t byte = 0; byte < 8; ++byte) {
+      reinterpret_cast<uint8_t*>(&bits)[byte] =
+          reinterpret_cast<const uint8_t*>(&converted)[byte];
+    }
+  }
+  return bits;
+}
+
 __device__ __forceinline__ void WriteConstant(void* output,
                                               int64_t output_index,
                                               uint64_t constant_value,
@@ -62,6 +91,9 @@ __global__ void PadKernel(const void* input,
                           uint64_t constant_value,
                           int32_t element_size,
                           MusaPadParams params) {
+  if (params.value_from_attribute) {
+    constant_value = PadAttributeValueBits(params.attribute_value, element_size);
+  }
   const int64_t thread_id =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const int64_t total_threads =

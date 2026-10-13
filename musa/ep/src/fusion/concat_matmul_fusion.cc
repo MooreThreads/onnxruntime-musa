@@ -178,7 +178,7 @@ std::string Name(Ort::ConstValueInfo value_info) {
 int64_t ReadIntAttribute(Ort::ConstNode node, const std::string& name) {
   Ort::ConstOpAttr attr;
   Ort::Status status = node.GetAttributeByName(name, attr);
-  if (!status.IsOK()) {
+  if (!status.IsOK() || !attr) {
     throw std::runtime_error("missing required node attribute: " + name);
   }
 

@@ -30,6 +30,16 @@ OrtStatus* Less::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Less, kOnnxDomain, 7, 8,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T", CompareOpset7TensorTypes())),
+                                  Less)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Less, kOnnxDomain, 9, 12,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T", CompareTensorTypesNoBFloat16())),
+                                  Less)
+
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Less, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", CompareTensorTypes())),

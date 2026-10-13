@@ -13,6 +13,8 @@
 
 #pragma once
 
+#include <musa_runtime.h>
+
 #include <memory>
 #include <utility>
 
@@ -57,3 +59,12 @@ struct MusaDataTransfer : OrtDataTransferImpl {
   uint32_t vendor_id_;
   std::shared_ptr<PinnedHostPool> pinned_host_pool_;
 };
+
+// Copies a single tensor across the host/device boundary using `impl`, ordering
+// the transfer on `stream` (the caller's own MUSA compute stream). Shares the
+// pageable-H2D staging and D2H ordering of MusaDataTransfer instead of issuing
+// a raw musaMemcpy inline. Used by the MemcpyFromHost / MemcpyToHost kernels
+// that ORT's MemcpyTransformer inserts for CPU/device placement boundaries.
+OrtStatus* MusaCopyTensorOnStream(OrtDataTransferImpl& impl,
+                                  const OrtValue* src_tensor,
+                                  OrtValue* dst_tensor, musaStream_t stream);

@@ -345,6 +345,7 @@ def run_model_and_compare_with_cpu_fallback(
     *,
     rtol: float = 1e-3,
     atol: float = 1e-4,
+    disable_ep_error_fallback: bool = False,
 ) -> list[np.ndarray]:
     """Run a full ONNX model on CPU and MUSA with ORT CPU fallback enabled."""
     cpu_outputs = run(model_bytes, feeds, use_musa=False)
@@ -358,6 +359,8 @@ def run_model_and_compare_with_cpu_fallback(
     so = ort.SessionOptions()
     so.add_provider_for_devices(devices, {})
     session = ort.InferenceSession(model_bytes, sess_options=so)
+    if disable_ep_error_fallback:
+        session.disable_fallback()
     musa_outputs = session.run(None, dict(feeds))
 
     assert len(cpu_outputs) == len(

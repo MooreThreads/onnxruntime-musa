@@ -76,6 +76,10 @@ OrtStatus* Sqrt::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Sqrt, kOnnxDomain, 6, 12,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Sqrt)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Sqrt, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
     Sqrt)

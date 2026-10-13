@@ -35,8 +35,27 @@ OrtStatus* ValidateScalarInput(Ort::ConstValue value,
 
 class Clip : public OpKernelBase<Clip> {
  public:
-  Clip(const OrtKernelInfo* /*info*/, void* /*state*/) {}
+  Clip(const OrtKernelInfo* info, void* /*state*/) {
+    Ort::ConstKernelInfo kernel_info(info);
+    // Through opset 10 the bounds are FLOAT attributes of the node and an
+    // absent one means "no bound"; the opset-11 schema replaced them with
+    // optional scalar inputs that match the element type of X.
+    const std::optional<float> min_attribute =
+        AttrOrNullopt<float>(kernel_info, "min");
+    const std::optional<float> max_attribute =
+        AttrOrNullopt<float>(kernel_info, "max");
+    has_min_attribute_ = min_attribute.has_value();
+    has_max_attribute_ = max_attribute.has_value();
+    min_attribute_ = min_attribute.value_or(0.0f);
+    max_attribute_ = max_attribute.value_or(0.0f);
+  }
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
+
+ private:
+  bool has_min_attribute_ = false;
+  bool has_max_attribute_ = false;
+  float min_attribute_ = 0.0f;
+  float max_attribute_ = 0.0f;
 };
 
 OrtStatus* Clip::Compute(Ort::KernelContext& ctx) const {
@@ -53,6 +72,10 @@ OrtStatus* Clip::Compute(Ort::KernelContext& ctx) const {
 
   MusaClipParams params{};
   params.count = NumElements(shape);
+  params.min_is_attribute = has_min_attribute_ ? 1 : 0;
+  params.max_is_attribute = has_max_attribute_ ? 1 : 0;
+  params.min_attribute = min_attribute_;
+  params.max_attribute = max_attribute_;
   DeviceInputBuffer min_buffer;
   DeviceInputBuffer max_buffer;
   if (ctx.GetInputCount() > 1 && ctx.GetInput(1) != nullptr) {
@@ -60,12 +83,16 @@ OrtStatus* Clip::Compute(Ort::KernelContext& ctx) const {
     RETURN_IF_ERROR(min_buffer.Bind(ctx.GetInput(1), stream));
     params.has_min = 1;
     params.min_data = min_buffer.data();
+  } else if (has_min_attribute_) {
+    params.has_min = 1;
   }
   if (ctx.GetInputCount() > 2 && ctx.GetInput(2) != nullptr) {
     RETURN_IF_ERROR(ValidateScalarInput(ctx.GetInput(2), elem_type, "max"));
     RETURN_IF_ERROR(max_buffer.Bind(ctx.GetInput(2), stream));
     params.has_max = 1;
     params.max_data = max_buffer.data();
+  } else if (has_max_attribute_) {
+    params.has_max = 1;
   }
 
   if (!IsGpuMemory(input.GetTensorMemoryInfo())) {
@@ -92,3 +119,20 @@ OrtStatus* Clip::Compute(Ort::KernelContext& ctx) const {
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Clip, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", ClipTensorTypes())), Clip)
+
+// opset 6-10 keeps the bounds in FLOAT attributes; the old schemas only allow
+// the floating-point element types. opset 11 moved the bounds to inputs and
+// opset 12 added the integer types, both without bfloat16.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Clip, kOnnxDomain, 6, 10,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Clip)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Clip, kOnnxDomain, 11, 11,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Clip)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Clip, kOnnxDomain, 12, 12,
+    (Ort::KernelDefBuilder().AddTypeConstraint(
+        "T", AllFixedSizeTensorTypesNoBoolNoBFloat16())),
+    Clip)

@@ -450,7 +450,7 @@ std::unique_ptr<FusionNodeCompute> CreateParallelMatMulConcatFusion(
   int64_t concat_axis = 0;
   Ort::ConstOpAttr axis_attr;
   Ort::Status status = concat_node.GetAttributeByName("axis", axis_attr);
-  if (!status.IsOK() || !axis_attr.GetValue(concat_axis).IsOK()) {
+  if (!status.IsOK() || !axis_attr || !axis_attr.GetValue(concat_axis).IsOK()) {
     throw std::runtime_error("ParallelMatMulConcat missing Concat axis");
   }
 

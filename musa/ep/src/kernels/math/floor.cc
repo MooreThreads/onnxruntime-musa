@@ -29,6 +29,10 @@ OrtStatus* Floor::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Floor, kOnnxDomain, 6, 12,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Floor)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Floor, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
     Floor)

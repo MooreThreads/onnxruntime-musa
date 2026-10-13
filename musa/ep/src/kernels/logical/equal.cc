@@ -176,6 +176,16 @@ OrtStatus* EqualString::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Equal, kOnnxDomain, 7, 10,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", EqualOpset7TensorTypes())),
+    Equal)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Equal, kOnnxDomain, 11, 12,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", EqualOpset11TensorTypes())),
+    Equal)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Equal, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", EqualTensorTypes())), Equal)
 

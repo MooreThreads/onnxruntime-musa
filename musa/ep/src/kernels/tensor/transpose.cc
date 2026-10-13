@@ -111,7 +111,15 @@ OrtStatus* Transpose::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Transpose, kOnnxDomain, 1, 12,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T",
+                                      AllFixedSizeTensorTypesNoBFloat16())),
+                                  Transpose)
+
+// opset 21 only added the float8*/int4/uint4 element types, which the kernel
+// does not implement, so the opset-13 behaviour still covers it.
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Transpose, kOnnxDomain, 13, 19,
+    Transpose, kOnnxDomain, 13, 21,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", AllFixedSizeTensorTypes())),
     Transpose)

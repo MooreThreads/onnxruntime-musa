@@ -3,6 +3,7 @@
 
 #include "fusion/silu_fusion.h"
 
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "graph/graph_utils.h"
 #include "kernels/activation/silu_impl.h"
 #include "kernels/shared_inc/blas_utils.h"
+#include "kernels/shared_inc/kernel_memory.h"
 #include "kernels/shared_inc/op_kernel_common.h"
 
 namespace musa_ep {
@@ -63,12 +65,11 @@ bool FindSiluGraphInput(Ort::ConstGraph graph, std::string& input_name) {
   return true;
 }
 
-bool TryMudnnSilu(Ort::KernelContext& ctx, Ort::ConstValue input,
+bool TryMudnnSilu(Ort::KernelContext& ctx, const void* input_data,
                   Ort::UnownedValue output, const std::vector<int64_t>& shape,
                   ONNXTensorElementDataType elem_type) {
   constexpr size_t kMudnnMaxElementwiseRank = 5;
   if (shape.size() > kMudnnMaxElementwiseRank ||
-      !IsGpuMemory(input.GetTensorMemoryInfo()) ||
       !IsGpuMemory(output.GetTensorMemoryInfo())) {
     return false;
   }
@@ -82,8 +83,7 @@ bool TryMudnnSilu(Ort::KernelContext& ctx, Ort::ConstValue input,
 
   ::musa::dnn::Tensor input_tensor;
   ::musa::dnn::Tensor output_tensor;
-  if (!SetMudnnTensor(input_tensor, input.GetTensorRawData(), shape,
-                      elem_type) ||
+  if (!SetMudnnTensor(input_tensor, input_data, shape, elem_type) ||
       !SetMudnnTensor(output_tensor, output.GetTensorMutableRawData(), shape,
                       elem_type)) {
     return false;
@@ -112,13 +112,23 @@ OrtStatus* SiluFusionCompute::Compute(OrtKernelContext* kernel_context) const {
     }
 
     Ort::UnownedValue output = ctx.GetOutput(0, shape);
-    if (!IsGpuMemory(input.GetTensorMemoryInfo()) ||
-        !IsGpuMemory(output.GetTensorMemoryInfo())) {
-      return Ort::GetApi().CreateStatus(
-          ORT_NOT_IMPLEMENTED, "Silu fusion requires MUSA input/output");
+    if (!IsGpuMemory(output.GetTensorMemoryInfo())) {
+      return Ort::GetApi().CreateStatus(ORT_NOT_IMPLEMENTED,
+                                        "Silu fusion requires MUSA output");
     }
 
-    if (TryMudnnSilu(ctx, input, output, shape, elem_type)) {
+    const bool input_is_gpu = IsGpuMemory(input.GetTensorMemoryInfo());
+    if (!input_is_gpu &&
+        std::getenv("ORT_MUSA_TEST_FAIL_SILU_CPU_INPUT") != nullptr) {
+      return Ort::GetApi().CreateStatus(
+          ORT_EP_FAIL, "test-only SiluFusion CPU-input route reached");
+    }
+
+    musaStream_t stream = GetComputeStream(ctx);
+    DeviceInputBuffer input_buffer;
+    RETURN_IF_ERROR(input_buffer.Bind(input, stream));
+
+    if (TryMudnnSilu(ctx, input_buffer.data(), output, shape, elem_type)) {
       return nullptr;
     }
 
@@ -127,8 +137,8 @@ OrtStatus* SiluFusionCompute::Compute(OrtKernelContext* kernel_context) const {
       return UnsupportedDeviceElementwiseStatus("SiluFusion", elem_type);
     }
     return LaunchStatus(LaunchMusaSiluKernel(
-        input.GetTensorRawData(), output.GetTensorMutableRawData(),
-        NumElements(shape), musa_elem_type, GetComputeStream(ctx)));
+        input_buffer.data(), output.GetTensorMutableRawData(),
+        NumElements(shape), musa_elem_type, stream));
   } catch (const Ort::Exception& ex) {
     Ort::Status status(ex);
     return status.release();

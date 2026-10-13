@@ -17,6 +17,7 @@ from op_test_utils import (
     float32_to_bfloat16_bits,
     musa_devices,
     run,
+    run_model_and_compare_with_cpu_fallback,
     run_with_iobinding,
 )
 
@@ -110,6 +111,35 @@ def test_silu_fusion_float_dtypes(np_dtype, tensor_type, rtol, atol, swapped, tm
         atol=atol,
     )
     _assert_silu_fused(model, {"X": x}, tmp_path, f"silu_{np_dtype}_{swapped}")
+
+
+def test_silu_fusion_float16_accepts_cpu_produced_input(monkeypatch):
+    x = np.array([[-3.5, -1.0, -0.0, 0.0, 1.0, 3.5]], dtype=np.float16)
+    model = build_graph_model(
+        [
+            helper.make_node("Sin", ["X"], ["cpu_output"]),
+            helper.make_node("Sigmoid", ["cpu_output"], ["S"]),
+            helper.make_node("Mul", ["cpu_output", "S"], ["Y"]),
+        ],
+        {"X": x},
+        [("Y", TensorProto.FLOAT16)],
+        name="silu_fusion_float16_cpu_produced_input_graph",
+    )
+
+    monkeypatch.setenv("ORT_MUSA_TEST_FAIL_SILU_CPU_INPUT", "1")
+    with pytest.raises(Exception, match="test-only SiluFusion CPU-input route"):
+        run_model_and_compare_with_cpu_fallback(
+            model, {"X": x}, disable_ep_error_fallback=True
+        )
+
+    monkeypatch.delenv("ORT_MUSA_TEST_FAIL_SILU_CPU_INPUT")
+    run_model_and_compare_with_cpu_fallback(
+        model,
+        {"X": x},
+        rtol=2e-3,
+        atol=2e-3,
+        disable_ep_error_fallback=True,
+    )
 
 
 def test_silu_fusion_bfloat16(tmp_path):

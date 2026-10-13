@@ -12,6 +12,7 @@
 // limitations under the License.
 
 #include <cstdint>
+#include <memory>
 
 #include "shared_inc/blas_utils.h"
 #include "shared_inc/op_kernel_common.h"
@@ -264,7 +265,9 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
   }
 
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
-  if (AllGpuInputs(ctx) && IsGpuMemory(y.GetTensorMemoryInfo())) {
+  const bool all_gpu_inputs = AllGpuInputs(ctx);
+  if (IsGpuMemory(y.GetTensorMemoryInfo())) {
+    musaStream_t stream = GetComputeStream(ctx);
     const int64_t outer =
         axis == 0 ? 1
                   : std::accumulate(out_shape.begin(), out_shape.begin() + axis,
@@ -275,6 +278,8 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
             : std::accumulate(out_shape.begin() + axis + 1, out_shape.end(),
                               int64_t{1}, std::multiplies<int64_t>());
     std::vector<const void*> input_data(shapes.size());
+    std::vector<std::unique_ptr<DeviceInputBuffer>> input_buffers;
+    input_buffers.reserve(shapes.size());
     std::vector<int64_t> input_axis_dims(shapes.size());
     int64_t max_input_axis = 0;
     void* output_data = y.GetTensorMutableRawData();
@@ -283,7 +288,10 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
     bool output_overlaps_input = false;
     for (size_t input_idx = 0; input_idx < shapes.size(); ++input_idx) {
       Ort::ConstValue v = ctx.GetInput(input_idx);
-      input_data[input_idx] = v.GetTensorRawData();
+      auto input_buffer = std::make_unique<DeviceInputBuffer>();
+      RETURN_IF_ERROR(input_buffer->Bind(v, stream));
+      input_data[input_idx] = input_buffer->data();
+      input_buffers.push_back(std::move(input_buffer));
       input_axis_dims[input_idx] = shapes[input_idx][static_cast<size_t>(axis)];
       max_input_axis = std::max(max_input_axis, input_axis_dims[input_idx]);
       const size_t input_bytes =
@@ -292,7 +300,6 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
           output_data, output_bytes, input_data[input_idx], input_bytes);
     }
 
-    musaStream_t stream = GetComputeStream(ctx);
     void* concat_output = output_data;
     void* temp_output = nullptr;
     if (output_overlaps_input && output_bytes > 0) {
@@ -376,7 +383,7 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
           output_row_elements, static_cast<int32_t>(elem_size), stream));
     }
 
-    if (!output_overlaps_input &&
+    if (all_gpu_inputs && !output_overlaps_input &&
         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
         TryMudnnConcat(ctx, shapes, out_shape, axis, elem_type, y)) {
       return nullptr;

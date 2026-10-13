@@ -133,6 +133,20 @@ OrtStatus* Cast::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Cast, kOnnxDomain, 6, 8,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T1", AllFixedSizeTensorTypesNoBFloat16())
+         .AddTypeConstraint("T2", AllFixedSizeTensorTypesNoBFloat16())),
+    Cast)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Cast, kOnnxDomain, 9, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T1", AllFixedSizeTensorTypesNoBFloat16())
+         .AddTypeConstraint("T2", AllFixedSizeTensorTypesNoBFloat16())),
+    Cast)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Cast, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T1", AllFixedSizeTensorTypes())

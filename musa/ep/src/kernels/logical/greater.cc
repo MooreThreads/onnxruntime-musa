@@ -82,6 +82,16 @@ OrtStatus* Greater::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Greater, kOnnxDomain, 7, 8,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T", CompareOpset7TensorTypes())),
+                                  Greater)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Greater, kOnnxDomain, 9, 12,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T", CompareTensorTypesNoBFloat16())),
+                                  Greater)
+
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Greater, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", CompareTensorTypes())),

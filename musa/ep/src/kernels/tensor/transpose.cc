@@ -111,6 +111,12 @@ OrtStatus* Transpose::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Transpose, kOnnxDomain, 1, 12,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T",
+                                      AllFixedSizeTensorTypesNoBFloat16())),
+                                  Transpose)
+
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Transpose, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", AllFixedSizeTensorTypes())),

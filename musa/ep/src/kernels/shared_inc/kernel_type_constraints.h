@@ -30,6 +30,18 @@ inline std::vector<const OrtDataType*> AllTensorTypes() {
   };
 }
 
+// Everything AllTensorTypes() covers except bfloat16, i.e. the type set of the
+// ONNX schemas that predate opset 13.
+inline std::vector<const OrtDataType*> AllTensorTypesNoBFloat16() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+  };
+}
+
 inline std::vector<const OrtDataType*> TensorTypesWithBool() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
@@ -74,6 +86,20 @@ inline std::vector<const OrtDataType*> AllFixedSizeTensorTypesNoBFloat16() {
   };
 }
 
+// ONNX binary elementwise ops through opset 12 share the opset-13 type set
+// without bfloat16, which the schemas only allow from opset 13 on.
+inline std::vector<const OrtDataType*> BinaryNumericOpset7TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+  };
+}
+
 inline std::vector<const OrtDataType*> BinaryNumericOpset13TensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
@@ -101,6 +127,19 @@ inline std::vector<const OrtDataType*> BinaryNumericOpset14TensorTypes() {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+  };
+}
+
+// Pow opset 12: integer bases and exponents join the floating-point types, and
+// the exponent may differ from the base in type. bfloat16 only arrives with the
+// opset-15 schema.
+inline std::vector<const OrtDataType*> PowOpset12TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
   };
 }
 
@@ -209,6 +248,18 @@ inline std::vector<const OrtDataType*> RangeTensorTypes() {
   };
 }
 
+// ReduceMean / ReduceL2 through opset 12: the floating-point subset plus
+// int32 that the pre-opset-13 schemas allow and the kernels implement (the
+// schemas only gain bfloat16 at opset 13).
+inline std::vector<const OrtDataType*> ReduceFloatOpset1TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+  };
+}
+
 inline std::vector<const OrtDataType*> ReduceMeanTensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
@@ -290,6 +341,23 @@ inline std::vector<const OrtDataType*> GatherNDTensorTypes() {
   };
 }
 
+// Abs opset 6-12: same as the opset-13 set without bfloat16.
+inline std::vector<const OrtDataType*> AbsOpset6TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+  };
+}
+
 inline std::vector<const OrtDataType*> AbsTensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
@@ -304,6 +372,19 @@ inline std::vector<const OrtDataType*> AbsTensorTypes() {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+  };
+}
+
+// Neg opset 6-12: same as the opset-13 set without bfloat16.
+inline std::vector<const OrtDataType*> NegOpset6TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
   };
 }
 
@@ -350,6 +431,19 @@ inline std::vector<const OrtDataType*> BitwiseIntegerTensorTypes() {
   };
 }
 
+// ReduceMax through opset 12: the opset-13 set without bfloat16.
+inline std::vector<const OrtDataType*> ReduceMaxOpset1TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+  };
+}
+
 inline std::vector<const OrtDataType*> ReduceMaxTensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
@@ -360,6 +454,16 @@ inline std::vector<const OrtDataType*> ReduceMaxTensorTypes() {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+  };
+}
+
+// Less / Greater opset 7-8 only accept floating-point tensors; integer support
+// arrives with the opset-9 schema.
+inline std::vector<const OrtDataType*> CompareOpset7TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
   };
 }
 
@@ -385,6 +489,30 @@ inline std::vector<const OrtDataType*> CompareTensorTypes() {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16),
+  };
+}
+
+// Equal opset 7-10 accepts bool and the integer types only; the remaining
+// numeric types arrive with the opset-11 schema.
+inline std::vector<const OrtDataType*> EqualOpset7TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL),
+  };
+}
+
+// Equal opset 11-12: the opset-13 set without bfloat16.
+inline std::vector<const OrtDataType*> EqualOpset11TensorTypes() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL),
   };
 }
 

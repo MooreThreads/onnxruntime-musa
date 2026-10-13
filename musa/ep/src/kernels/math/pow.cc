@@ -130,6 +130,20 @@ OrtStatus* Pow::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
+// Pow only grows a separate exponent type (T1) in opset 12; before that both
+// inputs share T, so the kernel def must not declare T1 for 7-11 - ORT resolves
+// the declared type strings against the operator schema of that opset.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Pow, kOnnxDomain, 7, 11,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Pow)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Pow, kOnnxDomain, 12, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", PowOpset12TensorTypes())
+         .AddTypeConstraint("T1", PowOpset12TensorTypes())),
+    Pow)
+
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Pow, kOnnxDomain, 13, 14,
     (Ort::KernelDefBuilder()

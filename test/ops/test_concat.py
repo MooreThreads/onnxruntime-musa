@@ -23,6 +23,7 @@ from op_test_utils import (
     float32_to_bfloat16_bits,
     run_and_compare,
     run_model_and_compare,
+    run_model_and_compare_with_cpu_fallback,
     run_with_iobinding,
 )
 
@@ -252,3 +253,32 @@ def test_concat_small_int64_shape_metadata_mixed_inputs():
         name="concat_shape_metadata_graph",
     )
     run_model_and_compare(model, {"dynamic_a": np.array(7, dtype=np.int64), "dynamic_b": np.array(11, dtype=np.int64)}, rtol=0, atol=0)
+
+
+def test_concat_rank4_mixed_cpu_and_musa_inputs():
+    nodes = [
+        helper.make_node(
+            "Resize",
+            ["X", "", "scales"],
+            ["resized"],
+            mode="nearest",
+            coordinate_transformation_mode="asymmetric",
+            nearest_mode="floor",
+        ),
+        helper.make_node("Relu", ["Y"], ["relu"]),
+        helper.make_node("Concat", ["resized", "relu"], ["Z"], axis=1),
+    ]
+    scales = helper.make_tensor(
+        "scales", TensorProto.FLOAT, [4], [1.0, 1.0, 2.0, 2.0]
+    )
+    x = np.arange(8, dtype=np.float32).reshape(1, 2, 2, 2)
+    y = np.linspace(-1.0, 1.0, 48, dtype=np.float32).reshape(1, 3, 4, 4)
+    model = build_graph_model(
+        nodes,
+        inputs={"X": x, "Y": y},
+        outputs=[("Z", TensorProto.FLOAT)],
+        initializers=[scales],
+        opset=17,
+        name="concat_rank4_mixed_cpu_and_musa_inputs_graph",
+    )
+    run_model_and_compare_with_cpu_fallback(model, {"X": x, "Y": y})

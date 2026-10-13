@@ -108,21 +108,21 @@ void TraceD2hDeviceSynchronize(const OrtValue* src_tensor,
 #endif
 }
 
-OrtStatus* CopyPageableHostToDevice(MusaDataTransfer& impl,
-                                    const void* src_data, void* dst_data,
-                                    size_t bytes, musaStream_t stream,
-                                    bool allow_pageable_bounce) {
-  constexpr size_t kDefaultBounceThresholdBytes = 1024;
-  const size_t bounce_threshold =
-      EnvSizeOrDefault("ORT_MUSA_PAGEABLE_H2D_BOUNCE_THRESHOLD_BYTES",
-                       kDefaultBounceThresholdBytes);
-  if (bytes < bounce_threshold) {
-    return MusaStatus(impl.ort_api_, musaMemcpy(dst_data, src_data, bytes,
-                                                musaMemcpyHostToDevice));
-  }
-
-  if (!allow_pageable_bounce || stream == nullptr ||
-      impl.pinned_host_pool_ == nullptr ||
+// Pageable host -> device transfer. Every such write must be issued on the
+// caller's stream: a blocking musaMemcpy() on the null stream is ordered
+// against neither the kernels that are still running on the EP's compute stream
+// nor the consumers enqueued after it. ORT's memory pattern routinely hands the
+// destination of a CPU->device boundary copy - a few bytes such as a Shape
+// output - the block of a tensor that is already dead on the host side but
+// whose producer kernel has not finished on the device, so the copy read back
+// the previous owner's bytes and the shape chain fed garbage sizes to its
+// consumers (Add/Mul broadcast mismatch, Reshape "invalid argument").
+// Staging through the pinned pool keeps the copy ordered on the caller's stream
+// and lets the pageable host source be released immediately.
+OrtStatus* CopyStagedPageableHostToDevice(MusaDataTransfer& impl,
+                                          const void* src_data, void* dst_data,
+                                          size_t bytes, musaStream_t stream) {
+  if (stream == nullptr || impl.pinned_host_pool_ == nullptr ||
       !EnvFlagEnabled("ORT_MUSA_ENABLE_PAGEABLE_H2D_BOUNCE", true)) {
     return CopyMemcpy(impl.ort_api_, src_data, dst_data, bytes,
                       musaMemcpyHostToDevice, stream);
@@ -144,6 +144,30 @@ OrtStatus* CopyPageableHostToDevice(MusaDataTransfer& impl,
 
   impl.pinned_host_pool_->FreeAsync(staging, stream);
   return nullptr;
+}
+
+OrtStatus* CopyPageableHostToDevice(MusaDataTransfer& impl,
+                                    const void* src_data, void* dst_data,
+                                    size_t bytes, musaStream_t stream,
+                                    bool allow_pageable_bounce) {
+  constexpr size_t kDefaultBounceThresholdBytes = 1024;
+  const size_t bounce_threshold =
+      EnvSizeOrDefault("ORT_MUSA_PAGEABLE_H2D_BOUNCE_THRESHOLD_BYTES",
+                       kDefaultBounceThresholdBytes);
+  if (bytes < bounce_threshold) {
+    return CopyStagedPageableHostToDevice(impl, src_data, dst_data, bytes,
+                                          stream);
+  }
+
+  if (!allow_pageable_bounce || stream == nullptr ||
+      impl.pinned_host_pool_ == nullptr ||
+      !EnvFlagEnabled("ORT_MUSA_ENABLE_PAGEABLE_H2D_BOUNCE", true)) {
+    return CopyMemcpy(impl.ort_api_, src_data, dst_data, bytes,
+                      musaMemcpyHostToDevice, stream);
+  }
+
+  return CopyStagedPageableHostToDevice(impl, src_data, dst_data, bytes,
+                                        stream);
 }
 
 OrtStatus* CopyImpl(MusaDataTransfer& impl, const OrtMemoryDevice* src_device,

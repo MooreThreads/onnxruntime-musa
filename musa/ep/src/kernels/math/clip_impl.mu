@@ -17,12 +17,18 @@ __device__ __forceinline__ T ClipDefaultMax() {
 
 template <typename T>
 __global__ void ClipKernel(const T* input, T* output, MusaClipParams params) {
-  const T min_value = params.has_min
-                          ? reinterpret_cast<const T*>(params.min_data)[0]
-                          : ClipDefaultMin<T>();
-  const T max_value = params.has_max
-                          ? reinterpret_cast<const T*>(params.max_data)[0]
-                          : ClipDefaultMax<T>();
+  // Through opset 10 the bounds come from the node's FLOAT attributes instead
+  // of scalar inputs; params.*_is_attribute selects which side is used.
+  const T min_value =
+      params.has_min ? (params.min_is_attribute
+                            ? static_cast<T>(params.min_attribute)
+                            : reinterpret_cast<const T*>(params.min_data)[0])
+                     : ClipDefaultMin<T>();
+  const T max_value =
+      params.has_max ? (params.max_is_attribute
+                            ? static_cast<T>(params.max_attribute)
+                            : reinterpret_cast<const T*>(params.max_data)[0])
+                     : ClipDefaultMax<T>();
   const int64_t thread_id =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const int64_t total_threads = static_cast<int64_t>(gridDim.x) * blockDim.x;
@@ -44,11 +50,17 @@ __global__ void ClipFloatLikeKernel(const T* input, T* output,
                                     MusaClipParams params) {
   const float min_value =
       params.has_min
-          ? MusaScalarToFloat(reinterpret_cast<const T*>(params.min_data)[0])
+          ? (params.min_is_attribute
+                 ? params.min_attribute
+                 : MusaScalarToFloat(
+                       reinterpret_cast<const T*>(params.min_data)[0]))
           : -INFINITY;
   const float max_value =
       params.has_max
-          ? MusaScalarToFloat(reinterpret_cast<const T*>(params.max_data)[0])
+          ? (params.max_is_attribute
+                 ? params.max_attribute
+                 : MusaScalarToFloat(
+                       reinterpret_cast<const T*>(params.max_data)[0]))
           : INFINITY;
   const int64_t thread_id =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;

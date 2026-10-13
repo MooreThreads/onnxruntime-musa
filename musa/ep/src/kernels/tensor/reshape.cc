@@ -113,8 +113,11 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
          .SetInputMemType(1, OrtMemTypeCPUInput)),
     Reshape)
 
+// The opset-21 schema only adds the int4/uint4 element types, which this
+// kernel does not implement (and does not declare), so the opset-13 behaviour
+// still covers the node.
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Reshape, kOnnxDomain, 13, 19,
+    Reshape, kOnnxDomain, 13, 21,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .SetInputMemType(1, OrtMemTypeCPUInput)),

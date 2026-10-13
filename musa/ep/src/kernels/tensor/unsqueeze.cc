@@ -46,9 +46,29 @@ OrtStatus* Unsqueeze::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Unsqueeze, kOnnxDomain, 13, 19,
+    // opset 21 only added the float8*/int4/uint4 element types, which the
+    // kernel does not implement, so the opset-13 behaviour still covers it.
+    Unsqueeze, kOnnxDomain, 13, 21,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .SetInputMemType(1, OrtMemTypeCPUInput)
+         .AddInputOutputAlias(0, 0)),
+    Unsqueeze)
+
+// Through opset 12 `axes` is an attribute; the kernel reads it as well and
+// only prefers the input when the schema provides one. The pre-13 schemas do
+// not have bfloat16. opset 11 only documented negative axes, which the kernel
+// already accepts, so the two old ranges can share the class.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Unsqueeze, kOnnxDomain, 1, 10,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
+         .AddInputOutputAlias(0, 0)),
+    Unsqueeze)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Unsqueeze, kOnnxDomain, 11, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
          .AddInputOutputAlias(0, 0)),
     Unsqueeze)

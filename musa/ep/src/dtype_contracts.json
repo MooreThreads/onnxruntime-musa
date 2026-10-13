@@ -32,29 +32,31 @@
     {
       "op": "Reshape",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "5-21",
       "storage": "bfloat16,float16,float32,float64,integer,bool",
       "output": "same as data input",
       "compute": "alias/copy",
       "accumulation": "none",
-      "path": "device alias/copy",
+      "path": "device alias/copy; opset 21 only added element types",
       "verified_dtypes": "float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
       "tests": [
-        "test/ops/test_reshape.py"
+        "test/ops/test_reshape.py",
+        "test/ops/test_opset_semantics.py"
       ]
     },
     {
       "op": "Transpose",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "1-21",
       "storage": "bfloat16,float16,float32,float64,integer,bool",
       "output": "same as input",
       "compute": "copy",
       "accumulation": "none",
-      "path": "muDNN transpose or device kernel",
+      "path": "muDNN transpose or device kernel; opset 21 only added element types",
       "verified_dtypes": "float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool",
       "tests": [
-        "test/ops/test_transpose.py"
+        "test/ops/test_transpose.py",
+        "test/ops/test_opset_semantics.py"
       ]
     },
     {
@@ -148,15 +150,16 @@
     {
       "op": "Gemm",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "7-19",
       "storage": "bfloat16,float16,float32,float64",
       "output": "same as inputs",
       "compute": "library tensor mode",
       "accumulation": "FP32 for BF16/FP16 library path",
-      "path": "muDNN MatMul+bias or muBLAS+device post kernel",
+      "path": "muDNN MatMul+bias or muBLAS+device post kernel; the pre-13 version differences are type sets and the optional C input only",
       "verified_dtypes": "float32,float16,float64,bfloat16",
       "tests": [
-        "test/ops/test_gemm.py"
+        "test/ops/test_gemm.py",
+        "test/ops/test_opset_semantics.py"
       ]
     },
     {
@@ -190,15 +193,16 @@
     {
       "op": "Softmax",
       "domain": "ai.onnx",
-      "opset": "13-17",
+      "opset": "1-17",
       "storage": "bfloat16,float16,float32,float64",
       "output": "same as input",
       "compute": "FP32 intermediates for BF16/FP16 device path",
       "accumulation": "FP32 for BF16/FP16 device path",
-      "path": "muDNN softmax or stable device kernel",
+      "path": "muDNN softmax or stable device kernel; through opset 12 the input is flattened at `axis` first (axis defaults to 1), from 13 on only `axis` is reduced",
       "verified_dtypes": "float32,float16,float64,bfloat16",
       "tests": [
-        "test/ops/test_softmax.py"
+        "test/ops/test_softmax.py",
+        "test/ops/test_opset_semantics.py"
       ]
     },
     {
@@ -430,15 +434,16 @@
     {
       "op": "ReduceMax",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "1-20",
       "storage": "uint8,int8,float16,float32,float64,bfloat16,int32,int64",
       "output": "same as input",
       "compute": "device reduction",
       "accumulation": "FP32 for BF16/FP16; storage-compatible accumulator otherwise",
-      "path": "MUSA reduction kernel",
+      "path": "MUSA reduction kernel; opset 20 only added the bool element type",
       "verified_dtypes": "uint8,int8,float32,float16,float64,bfloat16,int32,int64",
       "tests": [
-        "test/ops/test_reduce_max.py"
+        "test/ops/test_reduce_max.py",
+        "test/ops/test_opset_semantics.py"
       ]
     },
     {
@@ -491,30 +496,32 @@
     {
       "op": "Slice",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "1-19",
       "storage": "data: all fixed-size numeric and bool; starts,ends,axes,steps: int32,int64 CPU metadata",
       "output": "same as data input",
       "compute": "bytewise strided copy",
       "accumulation": "none",
-      "path": "MUSA slice kernel, device 2D copy, or device raw copy",
+      "path": "MUSA slice kernel, device 2D copy, or device raw copy; the opset 1-9 starts/ends/axes are attributes (step is fixed to 1 by those schemas)",
       "verified_dtypes": "data uint8,uint16,uint32,uint64,int8,int16,int32,int64,float16,float32,float64,bfloat16,bool; metadata int32,int64",
       "tests": [
-        "test/ops/test_slice.py"
+        "test/ops/test_slice.py",
+        "test/ops/test_opset_semantics.py"
       ],
       "unsupported_reasons": "negative or zero steps are explicitly rejected; generic device path rank is limited by kMusaMaxBroadcastRank; string and complex data are not registered"
     },
     {
       "op": "Split",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "2-19",
       "storage": "data: all fixed-size numeric and bool; split sizes: int64 CPU metadata",
       "output": "each output same as data input",
       "compute": "bytewise partition copy",
       "accumulation": "none",
-      "path": "MUSA split copy kernels; host-built device copy descriptors for irregular partitions",
+      "path": "MUSA split copy kernels; host-built device copy descriptors for irregular partitions; the opset 2-12 sizes are the `split` attribute (the opset-1 tensor-input form is not registered)",
       "verified_dtypes": "data float32,float16,float64,bfloat16,int8,int16,int32,int64,uint8,uint16,uint32,uint64,bool; split sizes int64",
       "tests": [
-        "test/ops/test_split.py"
+        "test/ops/test_split.py",
+        "test/ops/test_opset_semantics.py"
       ],
       "unsupported_reasons": "split sizes must be non-negative and sum to the selected axis extent; string and complex data are not registered"
     },
@@ -536,15 +543,16 @@
     {
       "op": "Pad",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "2-19",
       "storage": "data and constant_value: same all fixed-size numeric or bool dtype; pads,axes: int64 CPU metadata",
       "output": "same as data input",
       "compute": "bytewise constant fill or copy",
       "accumulation": "none",
-      "path": "MUSA constant-pad kernel",
+      "path": "MUSA constant-pad kernel; the opset 2-10 pads/value are attributes and the kernel converts the FLOAT value to the element type",
       "verified_dtypes": "data uint8,uint16,uint32,uint64,int8,int16,int32,int64,float16,float32,float64,bfloat16,bool; pads,axes int64",
       "tests": [
-        "test/ops/test_pad.py"
+        "test/ops/test_pad.py",
+        "test/ops/test_opset_semantics.py"
       ],
       "unsupported_reasons": "only constant mode and non-negative pads are supported; rank is limited by kMusaMaxBroadcastRank; string and complex data are not registered"
     },
@@ -710,16 +718,17 @@
     {
       "op": "Clip",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "6-19",
       "storage": "bfloat16,float16,float32,float64,uint8,uint16,uint32,uint64,int8,int16,int32,int64",
       "output": "same as input",
       "compute": "FP32 for BF16/FP16; storage dtype otherwise",
       "accumulation": "none",
-      "path": "MUSA Clip device kernel; optional scalar bounds are staged to device",
+      "path": "MUSA Clip device kernel; optional scalar bounds are staged to device; the opset 6-10 bounds are FLOAT attributes the kernel converts to the element type",
       "verified_dtypes": "float32,float16,float64,bfloat16,int8,int16,int32,int64,uint8,uint16,uint32,uint64",
       "tests": [
         "test/ops/test_clip.py",
-        "test/ops/test_unary_dtype_matrix.py"
+        "test/ops/test_unary_dtype_matrix.py",
+        "test/ops/test_opset_semantics.py"
       ],
       "unsupported_reasons": "bounds must be scalar and match input dtype; bool,string,complex are excluded by ONNX Clip"
     },
@@ -831,45 +840,48 @@
     {
       "op": "Squeeze",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "1-21",
       "storage": "all fixed-size numeric and bool; axes int64 CPU metadata",
       "output": "same storage as data input",
       "compute": "alias or device byte copy",
       "accumulation": "none",
-      "path": "MUSA device alias/copy",
+      "path": "MUSA device alias/copy; through opset 12 `axes` is an attribute; opset 21 only added element types",
       "verified_dtypes": "float32,int64,uint8,bool,float16,float64,int8,int16,uint16,uint32,uint64,bfloat16",
       "tests": [
-        "test/ops/test_squeeze.py"
+        "test/ops/test_squeeze.py",
+        "test/ops/test_opset_semantics.py"
       ],
       "unsupported_reasons": "string and complex data are not registered; axes input must be int64 and selected dimensions must be singleton"
     },
     {
       "op": "Unsqueeze",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "1-21",
       "storage": "all fixed-size numeric and bool; axes int64 CPU metadata",
       "output": "same storage as data input",
       "compute": "alias or device byte copy",
       "accumulation": "none",
-      "path": "MUSA device alias/copy",
+      "path": "MUSA device alias/copy; through opset 12 `axes` is an attribute; opset 21 only added element types",
       "verified_dtypes": "float32,float16,int32,bool,float64,int8,int16,int64,uint8,uint16,uint32,uint64,bfloat16",
       "tests": [
-        "test/ops/test_unsqueeze.py"
+        "test/ops/test_unsqueeze.py",
+        "test/ops/test_opset_semantics.py"
       ],
       "unsupported_reasons": "string and complex data are not registered; axes input must be int64 and axes must be unique/in range"
     },
     {
       "op": "Shape",
       "domain": "ai.onnx",
-      "opset": "13-19",
+      "opset": "1-21",
       "storage": "input all fixed-size numeric and bool; output int64",
       "output": "int64 rank-length vector",
       "compute": "host shape metadata materialization",
       "accumulation": "none",
-      "path": "CPU metadata output by explicit KernelDef memory contract",
+      "path": "CPU metadata output by explicit KernelDef memory contract; opset 21 only added element types",
       "verified_dtypes": "input float32,float16,float64,bfloat16,uint8,uint16,uint32,uint64,int8,int16,int32,int64,bool; output int64",
       "tests": [
-        "test/ops/test_shape.py"
+        "test/ops/test_shape.py",
+        "test/ops/test_opset_semantics.py"
       ],
       "unsupported_reasons": "Shape consumes tensor metadata only; string and complex inputs are not registered"
     },

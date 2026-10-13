@@ -55,11 +55,18 @@ class Pad : public OpKernelBase<Pad> {
   Pad(const OrtKernelInfo* info, void* /*state*/) {
     Ort::ConstKernelInfo kernel_info(info);
     mode_ = AttrOrDefault<std::string>(kernel_info, "mode", "constant");
+    // Through opset 10 the pads and the pad value are node attributes; the
+    // kernel reads them as well and only prefers a tensor input when the
+    // schema provides one.
+    pads_attr_ = AttrsOrEmpty(kernel_info, "pads");
+    value_attr_ = AttrOrNullopt<float>(kernel_info, "value");
   }
   OrtStatus* Compute(Ort::KernelContext& ctx) const;
 
  private:
   std::string mode_ = "constant";
+  std::vector<int64_t> pads_attr_;
+  std::optional<float> value_attr_;
 };
 
 OrtStatus* Pad::Compute(Ort::KernelContext& ctx) const {
@@ -84,7 +91,23 @@ OrtStatus* Pad::Compute(Ort::KernelContext& ctx) const {
   }
   musaStream_t stream = GetComputeStream(ctx);
 
-  std::vector<int64_t> pads = ReadIntTensor(ctx, 1);
+  std::vector<int64_t> pads;
+  int32_t value_from_attribute = 0;
+  float attribute_value = 0.0f;
+  if (ctx.GetInputCount() > 1 && ctx.GetInput(1) != nullptr) {
+    pads = ReadIntTensor(ctx, 1);
+  } else {
+    // opset 2-10: `pads` and `value` are attributes. The attribute form has no
+    // third input, so the value always comes from the attribute (0 when it is
+    // absent, which is the schema default).
+    pads = pads_attr_;
+    value_from_attribute = 1;
+    attribute_value = value_attr_.value_or(0.0f);
+  }
+  if (pads.empty()) {
+    return Ort::GetApi().CreateStatus(ORT_INVALID_ARGUMENT,
+                                      "Pad requires pads");
+  }
   std::vector<int64_t> axes;
   if (ctx.GetInputCount() > 3 && ctx.GetInput(3) != nullptr) {
     axes = ReadIntTensor(ctx, 3);
@@ -126,11 +149,13 @@ OrtStatus* Pad::Compute(Ort::KernelContext& ctx) const {
                                       "Pad requires MUSA output");
   }
 
+  MusaPadParams params = MakePadParams(input_shape, output_shape, pads_begin);
+  params.value_from_attribute = value_from_attribute;
+  params.attribute_value = attribute_value;
   return LaunchStatus(LaunchMusaPadKernel(
       input.GetTensorRawData(), output.GetTensorMutableRawData(),
       ScalarInputOrZero(ctx, 2, elem_size, stream),
-      static_cast<int32_t>(elem_size),
-      MakePadParams(input_shape, output_shape, pads_begin), stream));
+      static_cast<int32_t>(elem_size), params, stream));
 }
 }  // namespace
 
@@ -142,3 +167,20 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
          .SetInputMemType(2, OrtMemTypeCPUInput)
          .SetInputMemType(3, OrtMemTypeCPUInput)),
     Pad)
+
+// opset 11-12 moved pads and the constant value to inputs; both are
+// non-optional, so the same kernel def as opset 13+ applies. The schemas do
+// not have bool (opset 13) or bfloat16 (opset 13) yet.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Pad, kOnnxDomain, 11, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBoolNoBFloat16())
+         .SetInputMemType(1, OrtMemTypeCPUInput)
+         .SetInputMemType(2, OrtMemTypeCPUInput)),
+    Pad)
+
+// opset 2-10 keeps `pads` and `value` in node attributes and only allows the
+// floating-point element types, which the attribute path in the kernel covers.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Pad, kOnnxDomain, 2, 10,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Pad)

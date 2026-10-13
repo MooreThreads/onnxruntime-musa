@@ -42,8 +42,11 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
          .SetInputMemType(1, OrtMemTypeCPUInput)),
     ReduceMax)
 
+// opset 20 only added the bool element type, which this kernel does not
+// implement (and does not declare), so the opset-13 behaviour still covers the
+// node.
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    ReduceMax, kOnnxDomain, 13, 19,
+    ReduceMax, kOnnxDomain, 13, 20,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", ReduceMaxTensorTypes())
          .SetInputMemType(1, OrtMemTypeCPUInput)),

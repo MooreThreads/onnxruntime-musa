@@ -225,6 +225,25 @@ inline std::vector<const OrtDataType*> ClipTensorTypes() {
   };
 }
 
+// The opset-11/12 Clip and Pad schemas: every fixed-size numeric type but bool
+// (which Pad only gains at opset 13) and bfloat16 (opset 13).
+inline std::vector<const OrtDataType*>
+AllFixedSizeTensorTypesNoBoolNoBFloat16() {
+  return {
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE),
+  };
+}
+
 inline std::vector<const OrtDataType*> PReluOpset16TensorTypes() {
   return {
       GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),

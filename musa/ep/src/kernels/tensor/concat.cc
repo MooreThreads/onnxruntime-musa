@@ -401,6 +401,18 @@ OrtStatus* Concat::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Concat, kOnnxDomain, 4, 10,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T",
+                                      AllFixedSizeTensorTypesNoBFloat16())),
+                                  Concat)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Concat, kOnnxDomain, 11, 12,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T",
+                                      AllFixedSizeTensorTypesNoBFloat16())),
+                                  Concat)
+
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Concat, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", AllFixedSizeTensorTypes())),

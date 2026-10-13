@@ -107,6 +107,13 @@ OrtStatus* ReshapeString::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Reshape, kOnnxDomain, 5, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
+         .SetInputMemType(1, OrtMemTypeCPUInput)),
+    Reshape)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Reshape, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())

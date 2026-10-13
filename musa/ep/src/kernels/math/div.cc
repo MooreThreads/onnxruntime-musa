@@ -47,6 +47,11 @@ OrtStatus* Div::Compute(Ort::KernelContext& ctx) const {
 }
 }  // namespace
 
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(Div, kOnnxDomain, 7, 12,
+                                  (Ort::KernelDefBuilder().AddTypeConstraint(
+                                      "T", BinaryNumericOpset7TensorTypes())),
+                                  Div)
+
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(Div, kOnnxDomain, 13, 13,
                                   (Ort::KernelDefBuilder().AddTypeConstraint(
                                       "T", BinaryNumericOpset13TensorTypes())),

@@ -14,6 +14,14 @@
 #include "shared_inc/blas_utils.h"
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    MatMul, kOnnxDomain, 1, 8,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), MatMul)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    MatMul, kOnnxDomain, 9, 12,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), MatMul)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     MatMul, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
     MatMul)

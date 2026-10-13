@@ -77,6 +77,10 @@ OrtStatus* Sigmoid::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Sigmoid, kOnnxDomain, 6, 12,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Sigmoid)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Sigmoid, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
     Sigmoid)

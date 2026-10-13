@@ -36,6 +36,13 @@ class ReduceMax : public OpKernelBase<ReduceMax> {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    ReduceMax, kOnnxDomain, 1, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", ReduceMaxOpset1TensorTypes())
+         .SetInputMemType(1, OrtMemTypeCPUInput)),
+    ReduceMax)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     ReduceMax, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", ReduceMaxTensorTypes())

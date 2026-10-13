@@ -305,5 +305,9 @@ OrtStatus* Conv::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Conv, kOnnxDomain, 1, 10,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), Conv)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Conv, kOnnxDomain, 11, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatTensorTypes())), Conv)

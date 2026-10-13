@@ -307,6 +307,29 @@ OrtStatus* CopyDeviceToHostBatch(MusaDataTransfer& impl,
 
 }  // namespace
 
+OrtStatus* MusaCopyTensorOnStream(OrtDataTransferImpl& impl_base,
+                                  const OrtValue* src_tensor,
+                                  OrtValue* dst_tensor, musaStream_t stream) {
+  auto& impl = static_cast<MusaDataTransfer&>(impl_base);
+
+  const OrtMemoryDevice* src_device =
+      impl.ep_api_.Value_GetMemoryDevice(src_tensor);
+  const OrtMemoryDevice* dst_device =
+      impl.ep_api_.Value_GetMemoryDevice(dst_tensor);
+
+  const void* src_data = nullptr;
+  void* dst_data = nullptr;
+  size_t bytes = 0;
+  RETURN_IF_ERROR(impl.ort_api_.GetTensorData(src_tensor, &src_data));
+  RETURN_IF_ERROR(impl.ort_api_.GetTensorMutableData(dst_tensor, &dst_data));
+  RETURN_IF_ERROR(impl.ort_api_.GetTensorSizeInBytes(src_tensor, &bytes));
+
+  // A single boundary transfer never batches, so pageable host memory may be
+  // bounced through the pinned pool to keep the copy on the caller's stream.
+  return CopyImpl(impl, src_device, dst_device, src_data, dst_data, bytes,
+                  stream, /*allow_pageable_bounce*/ true);
+}
+
 bool ORT_API_CALL MusaDataTransfer::CanCopyImpl(
     const OrtDataTransferImpl* this_ptr,
     const OrtMemoryDevice* src_memory_device,

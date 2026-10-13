@@ -127,10 +127,12 @@ def test_silu_fusion_float16_accepts_cpu_produced_input(monkeypatch):
     )
 
     monkeypatch.setenv("ORT_MUSA_TEST_FAIL_SILU_CPU_INPUT", "1")
-    with pytest.raises(Exception, match="test-only SiluFusion CPU-input route"):
-        run_model_and_compare_with_cpu_fallback(
-            model, {"X": x}, disable_ep_error_fallback=True
-        )
+    # The plugin now runs the MemcpyFromHost node, so the CPU-produced tensor
+    # reaches SiluFusion in device memory and the test-only CPU-input route must
+    # not be taken.
+    run_model_and_compare_with_cpu_fallback(
+        model, {"X": x}, disable_ep_error_fallback=True
+    )
 
     monkeypatch.delenv("ORT_MUSA_TEST_FAIL_SILU_CPU_INPUT")
     run_model_and_compare_with_cpu_fallback(

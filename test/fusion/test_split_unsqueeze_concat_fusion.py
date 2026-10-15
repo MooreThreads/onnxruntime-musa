@@ -263,9 +263,10 @@ def test_split_unsqueeze_concat_fusion_axis2_to_axis0(
 def test_split_unsqueeze_concat_fusion_runtime_shape(with_transpose):
     """Reshape target computed at runtime (not an initializer).
 
-    The fused node must read the target from host memory. Regression guard: the
-    chain that computes the target must stay on the CPU, otherwise the fusion
-    fails with 'SplitUnsqueezeConcat requires CPU shape input'.
+    Covers the runtime-shape fusion path end to end. Note: this synthetic graph
+    does not reproduce the device-placement failure that a graph model hits
+    (the shape chain here stays on the CPU by itself), so it is coverage rather
+    than a discriminator for that fix.
     """
     part_count, part_width, sequence, batch = 2, 5, 4, 3
     packed_width = part_count * part_width

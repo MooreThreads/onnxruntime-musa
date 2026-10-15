@@ -356,7 +356,20 @@ std::vector<std::vector<Ort::ConstNode>> FindSplitUnsqueezeConcatFusions(
         accepted_node_ids.count(producer.node.GetId()) == 0) {
       std::vector<Ort::ConstValueInfo> reshape_outputs =
           producer.node.GetOutputs();
-      if (reshape_outputs.size() == 1 &&
+      std::vector<Ort::ConstValueInfo> reshape_inputs =
+          producer.node.GetInputs();
+      // Only fold the Reshape into the fusion when its target shape is a
+      // constant. A runtime-computed target must be read from host memory, but a
+      // fused node has no KernelDef and so cannot declare an input as CPU
+      // memory: once this EP claims the CPU->device boundary copies (the Memcpy
+      // kernels) ORT places the target on the device and the fusion fails with
+      // "requires CPU shape input". Leaving the Reshape standalone lets its own
+      // kernel declare the shape input as CPU memory (as ONNX Reshape does), so
+      // ORT keeps the target on the host.
+      const bool static_target =
+          reshape_inputs.size() < 2 || reshape_inputs[1] == nullptr ||
+          ReadIntInitializerNoLimit(reshape_inputs[1]).has_value();
+      if (static_target && reshape_outputs.size() == 1 &&
           reshape_outputs[0].GetConsumers().size() == 1) {
         reshape_node = producer.node;
       }

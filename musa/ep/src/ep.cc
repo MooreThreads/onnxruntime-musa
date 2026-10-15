@@ -30,7 +30,6 @@
 #include "fusion/fusion_node_compute.h"
 #include "graph/capability_predicates.h"
 #include "graph/cpu_preferred_nodes.h"
-#include "graph/graph_utils.h"
 #include "graph_mermaid_dump.h"
 #include "plugin_ep_utils.h"
 
@@ -251,97 +250,11 @@ OrtStatus* CollectSupportedNodeCandidates(
   return nullptr;
 }
 
-// Ops whose (integer/bool) outputs are shape/metadata rather than model data.
-// Used to walk back the chain that produces a runtime-computed reshape target.
-bool IsShapeMetadataOp(Ort::ConstNode node) {
-  if (IsOnnxOp(node, "Cast")) {
-    auto to = GetIntAttribute(node, "to");
-    return to.has_value() &&
-           (*to == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
-            *to == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
-  }
-  return IsOnnxOp(node, "Shape") || IsOnnxOp(node, "Gather") ||
-         IsOnnxOp(node, "Concat") || IsOnnxOp(node, "Slice") ||
-         IsOnnxOp(node, "Unsqueeze") || IsOnnxOp(node, "Squeeze") ||
-         IsOnnxOp(node, "Reshape") || IsOnnxOp(node, "Split") ||
-         IsOnnxOp(node, "Add") || IsOnnxOp(node, "Sub") ||
-         IsOnnxOp(node, "Mul") || IsOnnxOp(node, "Div") ||
-         IsOnnxOp(node, "Max") || IsOnnxOp(node, "Min") ||
-         IsOnnxOp(node, "ReduceProd") || IsOnnxOp(node, "ReduceMax") ||
-         IsOnnxOp(node, "Equal") || IsOnnxOp(node, "Where") ||
-         IsOnnxOp(node, "ConstantOfShape");
-}
-
-bool IsIntegerOrBoolTensor(Ort::ConstValueInfo value) {
-  if (value == nullptr) {
-    return false;
-  }
-  Ort::ConstTypeInfo type_info = value.TypeInfo();
-  if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
-    return false;
-  }
-  ONNXTensorElementDataType elem_type =
-      type_info.GetTensorTypeAndShapeInfo().GetElementType();
-  return elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 ||
-         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 ||
-         elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
-}
-
-// SplitUnsqueezeConcat fuses the Reshape/Split/Unsqueeze/Concat chain and reads
-// the Reshape target at runtime, which must live in host memory (see
-// split_unsqueeze_concat_fusion.cc). Because the fused node has no KernelDef,
-// ORT cannot know that and may place the target on the device once the
-// CPU->device boundary copies are claimed by this EP (the Memcpy kernels).
-// Keep the integer/bool metadata chain that produces the target on the CPU so
-// the fused node can read it - the same effect as ONNX Reshape declaring its
-// shape input as OrtMemTypeCPUInput.
-std::unordered_set<const OrtNode*> CollectSplitUnsqueezeConcatShapeChainNodes(
-    const std::vector<FusionMatch>& fusion_matches) {
-  std::unordered_set<const OrtNode*> nodes;
-  for (const FusionMatch& match : fusion_matches) {
-    if (std::string(match.finder) != "FindSplitUnsqueezeConcatFusions") {
-      continue;
-    }
-    for (const auto& fusion_nodes : match.fusions) {
-      for (Ort::ConstNode node : fusion_nodes) {
-        if (!IsOnnxOp(node, "Reshape")) {
-          continue;
-        }
-        std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
-        if (inputs.size() < 2 || inputs[1] == nullptr) {
-          continue;
-        }
-        std::vector<Ort::ConstValueInfo> frontier{inputs[1]};
-        std::unordered_set<std::string> seen;
-        while (!frontier.empty()) {
-          Ort::ConstValueInfo current = frontier.back();
-          frontier.pop_back();
-          if (current == nullptr || !seen.insert(current.GetName()).second) {
-            continue;
-          }
-          Ort::ValueInfoConsumerProducerInfo producer = current.GetProducerNode();
-          if (producer.node == nullptr || !IsShapeMetadataOp(producer.node)) {
-            continue;  // graph input / initializer / data-path producer
-          }
-          nodes.insert(producer.node);
-          for (Ort::ConstValueInfo input : producer.node.GetInputs()) {
-            if (IsIntegerOrBoolTensor(input)) {
-              frontier.push_back(input);
-            }
-          }
-        }
-      }
-    }
-  }
-  return nodes;
-}
-
 OrtStatus* RegisterSingleNodeCapabilities(
     const OrtEpApi& ep_api, const OrtGraph& ort_graph,
     OrtEpGraphSupportInfo& graph_support_info,
     const SupportedNodeCandidates& candidates,
-    std::unordered_set<size_t>& registered_node_ids,
-    const std::unordered_set<const OrtNode*>& forced_cpu_nodes) {
+    std::unordered_set<size_t>& registered_node_ids) {
   std::unordered_set<const OrtNode*> cpu_preferred_nodes;
   if (!candidates.tentative_nodes.empty()) {
     RETURN_IF_ERROR(GetCpuPreferredNodes(
@@ -349,9 +262,6 @@ OrtStatus* RegisterSingleNodeCapabilities(
         std::span<const OrtNode* const>(candidates.tentative_nodes.data(),
                                         candidates.tentative_nodes.size()),
         cpu_preferred_nodes));
-  }
-  for (const OrtNode* node : forced_cpu_nodes) {
-    cpu_preferred_nodes.insert(node);
   }
 
   for (const auto& node : candidates.nodes) {
@@ -479,11 +389,9 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
         GetFusedNodeIds(fusion_matches), candidates));
     std::unordered_set<size_t> registered_node_ids =
         GetFusedNodeIds(fusion_matches);
-    std::unordered_set<const OrtNode*> forced_cpu_nodes =
-        CollectSplitUnsqueezeConcatShapeChainNodes(fusion_matches);
     RETURN_IF_ERROR(RegisterSingleNodeCapabilities(
         ep->ep_api_, *ort_graph, *graph_support_info, candidates,
-        registered_node_ids, forced_cpu_nodes));
+        registered_node_ids));
     EmitDTypeDiagnostics(all_nodes, registered_node_ids, fusion_matches,
                          ep->config_.provider_options);
   } catch (const Ort::Exception& ex) {

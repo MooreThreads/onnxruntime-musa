@@ -74,6 +74,14 @@ bool CanFuseTileConcat(
       return false;
     }
 
+    // A fused node cannot declare CPU inputs, so a runtime repeats would be
+    // copied to the device by ORT's MemcpyTransformer. Leave such a Tile
+    // unfused: the standalone Tile kernel declares its repeats as an
+    // OrtMemTypeCPUInput and reads it without a device copy or stream sync.
+    if (producers.find(Name(tile_inputs[1])) != producers.end()) {
+      return false;
+    }
+
     found_tile_input = true;
     if (!AddFusionNode(tile_node, accepted_node_ids, selected_node_ids,
                        fusion_nodes)) {

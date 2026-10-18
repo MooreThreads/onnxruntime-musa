@@ -16,14 +16,17 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <numeric>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "fusion/shape_expr.h"
 #include "kernels/shared_inc/op_kernel_common.h"
 #include "kernels/tensor/concat_impl.h"
 #include "kernels/tensor/tile_impl.h"
@@ -35,11 +38,19 @@ constexpr size_t kConcatManySmallMaxWidthBytes = 4096;
 constexpr size_t kConcatRelaxedSmallInputCount = 2;
 constexpr size_t kConcatRelaxedSmallMaxWidthBytes = 32 * 1024;
 constexpr size_t kConcatManySmallMaxMapBytes = 4 * 1024 * 1024;
+constexpr size_t kNoInputIndex = std::numeric_limits<size_t>::max();
 
 struct ConcatInputPlan {
   size_t data_input_index;
+  // Set unless the repeats producer was absorbed into the fused node; then the
+  // tensor is not an input of the fused node and the expression is the only way
+  // to obtain the value.
   size_t repeats_input_index;
   bool is_tile;
+  // Non-empty when repeats was proven to be a pure function of the shapes of
+  // the fused inputs: recompute it instead of reading the device tensor, which
+  // would cost a device-to-host copy plus a compute-stream synchronize.
+  musa_ep::ShapeExpr repeats_expr;
 };
 
 struct TileConcatFusionCompute : FusionNodeCompute {
@@ -94,8 +105,28 @@ struct TileConcatFusionCompute : FusionNodeCompute {
         std::vector<int64_t> effective_shape = input_shape;
         const void* effective_data = input.GetTensorRawData();
         if (input_plan.is_tile) {
-          std::vector<int64_t> repeats =
-              ReadIntTensor(ctx, input_plan.repeats_input_index);
+          std::vector<int64_t> repeats;
+          bool recomputed = false;
+          if (!input_plan.repeats_expr.Empty()) {
+            std::vector<std::vector<int64_t>> source_shapes;
+            source_shapes.reserve(
+                input_plan.repeats_expr.source_input_indices.size());
+            for (size_t index : input_plan.repeats_expr.source_input_indices) {
+              source_shapes.push_back(
+                  ctx.GetInput(index).GetTensorTypeAndShapeInfo().GetShape());
+            }
+            recomputed = musa_ep::EvaluateShapeExpr(input_plan.repeats_expr,
+                                                    source_shapes, &repeats);
+          }
+          if (!recomputed) {
+            if (input_plan.repeats_input_index == kNoInputIndex) {
+              cleanup_temps();
+              return Ort::GetApi().CreateStatus(
+                  ORT_EP_FAIL,
+                  "TileConcat could not recompute the fused Tile repeats");
+            }
+            repeats = ReadIntTensor(ctx, input_plan.repeats_input_index);
+          }
           if (repeats.size() < input_shape.size()) {
             repeats.insert(repeats.begin(), input_shape.size() - repeats.size(),
                            1);
@@ -340,7 +371,6 @@ struct TileConcatFusionCompute : FusionNodeCompute {
   int64_t axis;
   size_t output_index;
   std::vector<ConcatInputPlan> inputs;
-
 };
 
 bool IsOnnxDomain(const std::string& domain) {
@@ -429,14 +459,31 @@ std::unique_ptr<FusionNodeCompute> CreateTileConcatFusion(
   auto input_indices = FusedInputIndices(fused_node);
   auto output_indices = FusedOutputIndices(fused_node);
 
+  // The absorbed repeats chain may contain a Concat of its own (for example
+  // Concat([batch, 1])). The Concat this fusion produces is the one that takes
+  // a Tile output.
   Ort::ConstNode concat_node{nullptr};
   for (Ort::ConstNode node : nodes) {
-    if (IsOnnxOp(node, "Concat")) {
-      if (concat_node) {
-        throw std::runtime_error("TileConcat expects one Concat node");
-      }
-      concat_node = node;
+    if (!IsOnnxOp(node, "Concat")) {
+      continue;
     }
+    bool consumes_tile = false;
+    for (Ort::ConstValueInfo input : node.GetInputs()) {
+      auto producer_it = producers.find(Name(input));
+      if (producer_it != producers.end() &&
+          IsOnnxOp(producer_it->second, "Tile")) {
+        consumes_tile = true;
+        break;
+      }
+    }
+    if (!consumes_tile) {
+      continue;
+    }
+    if (concat_node) {
+      throw std::runtime_error(
+          "TileConcat expects one Concat node consuming a Tile output");
+    }
+    concat_node = node;
   }
   if (!concat_node) {
     throw std::runtime_error("TileConcat missing Concat node");
@@ -446,6 +493,33 @@ std::unique_ptr<FusionNodeCompute> CreateTileConcatFusion(
   std::vector<Ort::ConstValueInfo> concat_outputs = concat_node.GetOutputs();
   if (concat_inputs.empty() || concat_outputs.size() != 1) {
     throw std::runtime_error("invalid TileConcat Concat node");
+  }
+
+  // Constant leaves of the repeats chain are resolved here: ORT keeps them in
+  // the fused graph's initializer list and also declares them as inputs of the
+  // fused node (drop_constant_initializers is false). Read both so the lookup
+  // does not depend on which of the two views the runtime populates.
+  std::unordered_set<std::string> initializer_names;
+  std::unordered_map<std::string, musa_ep::ShapeExprConstant>
+      initializer_values;
+  auto add_initializer = [&](Ort::ConstValueInfo value_info) {
+    if (value_info == nullptr || !value_info.IsConstantInitializer()) {
+      return;
+    }
+    const std::string initializer_name = Name(value_info);
+    if (initializer_name.empty() || initializer_names.count(initializer_name)) {
+      return;
+    }
+    if (auto constant = musa_ep::ReadShapeExprConstant(value_info)) {
+      initializer_names.insert(initializer_name);
+      initializer_values.emplace(initializer_name, std::move(*constant));
+    }
+  };
+  for (Ort::ConstValueInfo initializer : graph.GetInitializers()) {
+    add_initializer(initializer);
+  }
+  for (Ort::ConstValueInfo input : fused_node.GetInputs()) {
+    add_initializer(input);
   }
 
   std::vector<ConcatInputPlan> plans;
@@ -460,14 +534,36 @@ std::unique_ptr<FusionNodeCompute> CreateTileConcatFusion(
       if (tile_inputs.size() != 2) {
         throw std::runtime_error("invalid TileConcat Tile node");
       }
+      const std::string repeats_name = Name(tile_inputs[1]);
+      if (producers.find(repeats_name) != producers.end()) {
+        // The matcher absorbed the shape-only chain that produced repeats, so
+        // the value is not an input of this node any more. Recompute it from
+        // the shapes of the fused inputs.
+        musa_ep::ShapeExpr repeats_expr =
+            musa_ep::BuildShapeExpr(repeats_name, producers, input_indices,
+                                    initializer_names, initializer_values);
+        if (repeats_expr.Empty()) {
+          throw std::runtime_error(
+              "TileConcat repeats chain absorbed by the matcher is not "
+              "recomputable from the fused inputs");
+        }
+        plans.push_back(
+            {GetIndex(input_indices, Name(tile_inputs[0]), "Tile data input"),
+             kNoInputIndex, true, std::move(repeats_expr)});
+        continue;
+      }
+      const size_t repeats_input_index =
+          GetIndex(input_indices, repeats_name, "Tile repeats input");
+      musa_ep::ShapeExpr repeats_expr =
+          musa_ep::BuildShapeExpr(repeats_name, producers, input_indices,
+                                  initializer_names, initializer_values);
       plans.push_back(
           {GetIndex(input_indices, Name(tile_inputs[0]), "Tile data input"),
-           GetIndex(input_indices, Name(tile_inputs[1]), "Tile repeats input"),
-           true});
+           repeats_input_index, true, std::move(repeats_expr)});
     } else {
       plans.push_back(
-          {GetIndex(input_indices, concat_input_name, "Concat input"), 0,
-           false});
+          {GetIndex(input_indices, concat_input_name, "Concat input"),
+           kNoInputIndex, false});
     }
   }
 

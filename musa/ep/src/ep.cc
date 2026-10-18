@@ -61,6 +61,15 @@ bool DisableShapeReshapeFusion() {
   return disabled;
 }
 
+// Same-submit A/B switch: disabling only stops the matcher from claiming
+// Tile+Concat nodes, so a latency difference under one binary can be attributed
+// to the fusion itself instead of to a different build.
+bool DisableTileConcatFusion() {
+  static const bool disabled =
+      EnvFlagEnabled("ORT_MUSA_DISABLE_TILE_CONCAT_FUSION");
+  return disabled;
+}
+
 OrtStatus* RegisterFusionMatches(
     const OrtEpApi& ep_api, OrtEpGraphSupportInfo* graph_support_info,
     const std::vector<FusionMatch>& fusion_matches) {
@@ -376,6 +385,15 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
                            [](const FusionMatch& match) {
                              return std::string(match.finder) ==
                                     "FindShapeReshapeFusions";
+                           }),
+            fusion_matches.end());
+      }
+      if (DisableTileConcatFusion()) {
+        fusion_matches.erase(
+            std::remove_if(fusion_matches.begin(), fusion_matches.end(),
+                           [](const FusionMatch& match) {
+                             return std::string(match.finder) ==
+                                    "FindTileConcatFusions";
                            }),
             fusion_matches.end());
       }

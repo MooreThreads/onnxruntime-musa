@@ -17,7 +17,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 
 ## Extracted ONNX Ops
 
-`Concat`, `Tile`
+`Concat`, `Tile`, `Gather`
 
 ## Mermaid
 

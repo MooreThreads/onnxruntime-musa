@@ -21,7 +21,6 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -41,20 +40,12 @@ struct ConcatInputPlan {
   size_t data_input_index;
   size_t repeats_input_index;
   bool is_tile;
-  // Set when the Tile repeats value is a pure function of the shapes of the
-  // listed fused inputs (see RepeatsDependsOnlyOnInputShapes). Only then may
-  // Compute cache the value across runs and key it by those shapes.
-  bool repeats_cacheable = false;
-  std::vector<size_t> repeats_source_indices;
 };
 
 struct TileConcatFusionCompute : FusionNodeCompute {
   TileConcatFusionCompute(int64_t axis, size_t output_index,
                           std::vector<ConcatInputPlan> inputs)
-      : axis(axis),
-        output_index(output_index),
-        inputs(std::move(inputs)),
-        repeats_cache(this->inputs.size()) {}
+      : axis(axis), output_index(output_index), inputs(std::move(inputs)) {}
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override {
     try {
@@ -103,30 +94,8 @@ struct TileConcatFusionCompute : FusionNodeCompute {
         std::vector<int64_t> effective_shape = input_shape;
         const void* effective_data = input.GetTensorRawData();
         if (input_plan.is_tile) {
-          const size_t plan_index =
-              static_cast<size_t>(&input_plan - inputs.data());
-          std::vector<int64_t> repeats;
-          if (input_plan.repeats_cacheable) {
-            std::vector<int64_t> key;
-            for (size_t index : input_plan.repeats_source_indices) {
-              auto dims =
-                  ctx.GetInput(index).GetTensorTypeAndShapeInfo().GetShape();
-              key.insert(key.end(), dims.begin(), dims.end());
-              key.push_back(-1);
-            }
-            std::lock_guard<std::mutex> lock(repeats_cache_mutex);
-            RepeatsCacheEntry& entry = repeats_cache[plan_index];
-            if (entry.valid && entry.key == key) {
-              repeats = entry.repeats;
-            } else {
-              repeats = ReadIntTensor(ctx, input_plan.repeats_input_index);
-              entry.valid = true;
-              entry.key = std::move(key);
-              entry.repeats = repeats;
-            }
-          } else {
-            repeats = ReadIntTensor(ctx, input_plan.repeats_input_index);
-          }
+          std::vector<int64_t> repeats =
+              ReadIntTensor(ctx, input_plan.repeats_input_index);
           if (repeats.size() < input_shape.size()) {
             repeats.insert(repeats.begin(), input_shape.size() - repeats.size(),
                            1);
@@ -372,17 +341,6 @@ struct TileConcatFusionCompute : FusionNodeCompute {
   size_t output_index;
   std::vector<ConcatInputPlan> inputs;
 
-  // Reading repeats from device memory costs a stream synchronize per run
-  // once the EP registers MemcpyFromHost. Cache them only when the matcher
-  // proved they are a pure function of input shapes, and key the cache by
-  // exactly those shapes.
-  struct RepeatsCacheEntry {
-    bool valid = false;
-    std::vector<int64_t> key;
-    std::vector<int64_t> repeats;
-  };
-  mutable std::mutex repeats_cache_mutex;
-  mutable std::vector<RepeatsCacheEntry> repeats_cache;
 };
 
 bool IsOnnxDomain(const std::string& domain) {
@@ -452,73 +410,6 @@ std::unordered_map<std::string, Ort::ConstNode> BuildProducers(
   return producers;
 }
 
-// Returns true when the Tile repeats value is fully determined by the shapes
-// of fused inputs (plus constants), and fills their input indices. This is the
-// precondition for caching repeats across runs: the cache key is exactly those
-// shapes, so a value that could change without them changing (e.g. a repeats
-// derived from a tensor outside this fusion) must not be cached.
-bool RepeatsDependsOnlyOnInputShapes(
-    const std::string& repeats_name,
-    const std::unordered_map<std::string, Ort::ConstNode>& producers,
-    const std::unordered_map<std::string, size_t>& input_indices,
-    const std::unordered_set<std::string>& initializer_names,
-    std::vector<size_t>* source_indices) {
-  // Shape-only arithmetic. Anything else may consume data and is rejected.
-  static const std::unordered_set<std::string> kShapeOnlyOps = {
-      "Gather", "Unsqueeze", "Squeeze", "Concat", "Add", "Sub", "Mul", "Div",
-      "Cast",   "Slice",     "Identity", "Mod",    "Floor", "Ceil",
-      "ReduceProd", "Reshape", "Constant", "ConstantOfShape"};
-  std::vector<std::string> pending{repeats_name};
-  std::unordered_set<std::string> visited;
-  std::unordered_set<size_t> sources;
-  while (!pending.empty()) {
-    const std::string name = std::move(pending.back());
-    pending.pop_back();
-    if (!visited.insert(name).second) {
-      continue;
-    }
-    auto producer_it = producers.find(name);
-    if (producer_it == producers.end()) {
-      // A leaf must be a constant. A graph input or a fused data input used
-      // as a value would make the repeats data-dependent.
-      if (initializer_names.count(name) == 0) {
-        return false;
-      }
-      continue;
-    }
-    Ort::ConstNode node = producer_it->second;
-    const std::string op = node.GetOperatorType();
-    std::vector<Ort::ConstValueInfo> node_inputs = node.GetInputs();
-    if (op == "Shape") {
-      if (node_inputs.size() != 1) {
-        return false;
-      }
-      const std::string source = Name(node_inputs[0]);
-      auto index_it = input_indices.find(source);
-      if (index_it == input_indices.end()) {
-        // Shape of a constant is constant and needs no runtime key.
-        if (initializer_names.count(source) == 0) {
-          return false;
-        }
-      } else {
-        sources.insert(index_it->second);
-      }
-      continue;
-    }
-    if (kShapeOnlyOps.count(op) == 0) {
-      return false;
-    }
-    for (Ort::ConstValueInfo input : node_inputs) {
-      if (!Name(input).empty()) {
-        pending.push_back(Name(input));
-      }
-    }
-  }
-  source_indices->assign(sources.begin(), sources.end());
-  std::sort(source_indices->begin(), source_indices->end());
-  return true;
-}
-
 }  // namespace
 
 bool IsTileConcatFusionGraph(Ort::ConstGraph graph) {
@@ -537,10 +428,6 @@ std::unique_ptr<FusionNodeCompute> CreateTileConcatFusion(
   auto producers = BuildProducers(nodes);
   auto input_indices = FusedInputIndices(fused_node);
   auto output_indices = FusedOutputIndices(fused_node);
-  std::unordered_set<std::string> initializer_names;
-  for (Ort::ConstValueInfo initializer : graph.GetInitializers()) {
-    initializer_names.insert(Name(initializer));
-  }
 
   Ort::ConstNode concat_node{nullptr};
   for (Ort::ConstNode node : nodes) {
@@ -573,18 +460,14 @@ std::unique_ptr<FusionNodeCompute> CreateTileConcatFusion(
       if (tile_inputs.size() != 2) {
         throw std::runtime_error("invalid TileConcat Tile node");
       }
-      std::vector<size_t> repeats_source_indices;
-      const bool repeats_cacheable = RepeatsDependsOnlyOnInputShapes(
-          Name(tile_inputs[1]), producers, input_indices, initializer_names,
-          &repeats_source_indices);
       plans.push_back(
           {GetIndex(input_indices, Name(tile_inputs[0]), "Tile data input"),
            GetIndex(input_indices, Name(tile_inputs[1]), "Tile repeats input"),
-           true, repeats_cacheable, std::move(repeats_source_indices)});
+           true});
     } else {
       plans.push_back(
           {GetIndex(input_indices, concat_input_name, "Concat input"), 0,
-           false, false, {}});
+           false});
     }
   }
 

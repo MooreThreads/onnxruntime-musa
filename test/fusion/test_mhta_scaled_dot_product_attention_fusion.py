@@ -928,3 +928,97 @@ def test_mhta_scaled_dot_product_attention_sim_rank3_div_temperature_fusion(
     assert "Einsum" not in musa_ops
     assert "Div" not in musa_ops
     assert "Softmax" not in musa_ops
+
+
+def _mhta_dynamic_end_model(batch, heads, head_dim):
+    """Raw INT32 mask whose Slice end comes from Shape(Transpose(K)).
+
+    Q/K/V follow the plain bshd layout used by the other raw-mask tests. K is
+    [batch, heads, head_dim, seqlen] with a symbolic seqlen; a shape-only
+    `Transpose(K, perm=[0, 1, 3, 2])` (no other consumer, like
+    `Transpose_1` in ranking-gr) feeds Shape -> Gather(2) -> Unsqueeze, so the
+    mask Slice end equals the runtime seqlen. A cache keyed on K's shape must
+    therefore change when seqlen changes.
+    """
+    def vi(name, elem_type, dims):
+        return helper.make_tensor_value_info(name, elem_type, dims)
+
+    nodes = [
+        helper.make_node("Transpose", ["K", "shape_only_perm"], ["KShapeOnly"]),
+        helper.make_node("Shape", ["KShapeOnly"], ["KShape"]),
+        helper.make_node("Gather", ["KShape", "seqlen_index"], ["Seqlen"], axis=0),
+        helper.make_node("Unsqueeze", ["Seqlen", "axis0"], ["Ends"]),
+        helper.make_node("Slice", ["RawMask", "starts", "Ends", "axes", "steps"], ["MaskSlice"]),
+        helper.make_node("Cast", ["MaskSlice"], ["MaskInt64"], to=TensorProto.INT64),
+        helper.make_node("Equal", ["MaskInt64", "one"], ["Mask"]),
+        helper.make_node("MatMul", ["Q", "K"], ["Score"]),
+        helper.make_node("Mul", ["Score", "scale"], ["Scaled"]),
+        helper.make_node("Where", ["Mask", "Scaled", "neg_inf"], ["MaskedScore"]),
+        helper.make_node("Softmax", ["MaskedScore"], ["Prob"], axis=-1),
+        helper.make_node("Where", ["Mask", "Prob", "zero"], ["MaskedProb"]),
+        helper.make_node("MatMul", ["MaskedProb", "V"], ["Y"]),
+    ]
+    initializers = [
+        numpy_helper.from_array(np.asarray(v, dtype=dtype), name=name)
+        for name, v, dtype in [
+            ("shape_only_perm", [0, 1, 3, 2], np.int64),
+            ("seqlen_index", np.asarray(2, dtype=np.int64), np.int64),
+            ("axis0", [0], np.int64),
+            ("starts", [0], np.int64),
+            ("axes", [3], np.int64),
+            ("steps", [1], np.int64),
+            ("one", np.asarray(1, dtype=np.int64), np.int64),
+            ("scale", np.asarray(1.0 / np.sqrt(head_dim), dtype=np.float32), np.float32),
+            ("neg_inf", np.asarray(-np.inf, dtype=np.float32), np.float32),
+            ("zero", np.asarray(0.0, dtype=np.float32), np.float32),
+        ]
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "mhta_dynamic_slice_end_graph",
+        [
+            vi("Q", TensorProto.FLOAT, [batch, heads, "seqlen", head_dim]),
+            vi("K", TensorProto.FLOAT, [batch, heads, head_dim, "seqlen"]),
+            vi("V", TensorProto.FLOAT, [batch, heads, "seqlen", head_dim]),
+            vi("RawMask", TensorProto.INT32, [batch, 1, "mask_rows", "mask_cols"]),
+        ],
+        [vi("Y", TensorProto.FLOAT, None)],
+        initializer=initializers,
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = min(model.ir_version, 10)
+    return model.SerializeToString()
+
+
+def _mhta_dynamic_feeds(rng, batch, heads, head_dim, seqlen):
+    raw_mask = rng.integers(0, 3, (batch, 1, seqlen, seqlen + 2), dtype=np.int32)
+    raw_mask[:, :, -1, :seqlen] = 0
+    return {
+        "Q": rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float32),
+        "K": rng.standard_normal((batch, heads, head_dim, seqlen)).astype(np.float32),
+        "V": rng.standard_normal((batch, heads, seqlen, head_dim)).astype(np.float32),
+        "RawMask": raw_mask,
+    }
+
+
+def test_mhta_slice_end_cache_follows_k_shape(capfd):
+    """The cached Slice end must be keyed on K's shape, not reused blindly."""
+    rng = np.random.default_rng(61)
+    batch, heads, head_dim = 1, 3, 4
+    model = _mhta_dynamic_end_model(batch, heads, head_dim)
+
+    so = ort.SessionOptions()
+    so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    so.add_provider_for_devices(musa_devices(), {})
+    capfd.readouterr()
+    musa_session = ort.InferenceSession(model, sess_options=so)
+    err = capfd.readouterr().err
+    assert "MUSA_MHTA_SLICE_END cacheable=1" in err, err
+
+    for seqlen in (5, 4, 5):
+        feeds = _mhta_dynamic_feeds(rng, batch, heads, head_dim, seqlen)
+        cpu = ort.InferenceSession(model, providers=["CPUExecutionProvider"]).run(None, feeds)
+        out = musa_session.run(None, feeds)
+        np.testing.assert_allclose(out[0], cpu[0], rtol=1e-4, atol=1e-4,
+                                   err_msg=f"seqlen={seqlen}")
+        np.testing.assert_array_equal(out[0][:, :, -1, :], 0.0)

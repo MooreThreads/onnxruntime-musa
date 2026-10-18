@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -1494,6 +1495,12 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
         mask_end_cacheable = musa_ep::ValueDependsOnlyOnInputShapes(
             Name(slice_it->second.GetInputs()[2]), producers, fused_indices,
             initializer_names, &mask_end_source_indices);
+        // One line per fused raw-INT32-mask attention node at session
+        // creation: 0 means the end is read from the device every run.
+        std::fprintf(stderr,
+                     "MUSA_MHTA_SLICE_END cacheable=%d sources=%zu\n",
+                     mask_end_cacheable ? 1 : 0,
+                     mask_end_source_indices.size());
       }
       boolean_mask_int32 = true;
     }

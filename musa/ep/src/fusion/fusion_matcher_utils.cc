@@ -283,6 +283,56 @@ bool HasCastBoundary(const std::vector<Ort::ConstNode>& fusion_nodes) {
   return false;
 }
 
+// Ops whose output shape is a pure function of their input shapes. A Shape
+// node reading their output can therefore be keyed on the shapes of the fused
+// inputs that feed them, without the fused node taking a new input.
+bool IsShapePreservingDataOp(const std::string& op) {
+  return op == "Transpose" || op == "Cast" || op == "Identity";
+}
+
+// Walk from `value_name` through shape-preserving producers to the fused
+// inputs that determine its shape. Returns false when the walk leaves the
+// fused boundary through anything whose output shape is data-dependent.
+bool CollectShapePreservingSources(
+    const std::string& value_name,
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    const std::unordered_map<std::string, size_t>& input_indices,
+    const std::unordered_set<std::string>& initializer_names,
+    std::unordered_set<size_t>* sources) {
+  std::vector<std::string> pending{value_name};
+  std::unordered_set<std::string> visited;
+  while (!pending.empty()) {
+    const std::string name = std::move(pending.back());
+    pending.pop_back();
+    if (!visited.insert(name).second) {
+      continue;
+    }
+    auto index_it = input_indices.find(name);
+    if (index_it != input_indices.end()) {
+      sources->insert(index_it->second);
+      continue;
+    }
+    if (initializer_names.count(name) != 0) {
+      continue;  // a constant's shape is static and needs no runtime key
+    }
+    auto producer_it = producers.find(name);
+    if (producer_it == producers.end()) {
+      return false;
+    }
+    Ort::ConstNode node = producer_it->second;
+    if (!IsShapePreservingDataOp(node.GetOperatorType())) {
+      return false;
+    }
+    for (Ort::ConstValueInfo input : node.GetInputs()) {
+      const std::string input_name = input.GetName();
+      if (!input_name.empty()) {
+        pending.push_back(input_name);
+      }
+    }
+  }
+  return true;
+}
+
 bool ValueDependsOnlyOnInputShapes(
     const std::string& value_name,
     const std::unordered_map<std::string, Ort::ConstNode>& producers,
@@ -325,8 +375,12 @@ bool ValueDependsOnlyOnInputShapes(
       const std::string source = node_inputs[0].GetName();
       auto index_it = input_indices.find(source);
       if (index_it == input_indices.end()) {
-        // Shape of a constant is constant and needs no runtime key.
-        if (initializer_names.count(source) == 0) {
+        // Shape of a constant is constant and needs no runtime key. Otherwise
+        // follow shape-preserving producers (a Transpose kept only for its
+        // shape, for example) back to the fused inputs that determine it.
+        if (initializer_names.count(source) == 0 &&
+            !CollectShapePreservingSources(source, producers, input_indices,
+                                           initializer_names, &sources)) {
           return false;
         }
       } else {

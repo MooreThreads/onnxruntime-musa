@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -306,6 +307,13 @@ class MhtaScaledDotProductAttentionFusionCompute final
   int64_t static_mask_end_;
   bool lseq_last_key_mask_;
   bool no_external_mask_;
+  // The raw INT32 mask's Slice end is produced by shape arithmetic, so it can
+  // only change when the input shapes change. Cache the value resolved from the
+  // device so the per-iteration D2H read and stream synchronize happen once.
+  mutable std::mutex mask_end_mutex_;
+  mutable bool mask_end_cached_ = false;
+  mutable int64_t mask_end_cached_value_ = -1;
+  mutable std::vector<int64_t> mask_end_cached_shape_key_;
 };
 
 bool IsMhtaSdpaTensorType(ONNXTensorElementDataType elem_type) {
@@ -563,6 +571,34 @@ bool SetupMhtaSdpaMaskParams(const std::vector<int64_t>& mask_shape,
   return true;
 }
 
+OrtStatus* ReadMaskEndValue(Ort::ConstValue mask_end, musaStream_t stream,
+                            int64_t* value) {
+  if (IsGpuMemory(mask_end.GetTensorMemoryInfo())) {
+    // The EP registers MemcpyFromHost (PR #6), so a CPU-produced scalar that
+    // the fused node consumes is copied onto the device before this node runs.
+    // Read the single value back on the compute stream; the copy node precedes
+    // us on that stream. Callers cache the result, so this path runs only when
+    // the input shapes change.
+    int64_t host_value = 0;
+    musaError_t copy_status = musaMemcpyAsync(
+        &host_value, mask_end.GetTensorData<int64_t>(), sizeof(int64_t),
+        musaMemcpyDeviceToHost, stream);
+    if (copy_status != musaSuccess) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                        MusaErrorString(copy_status));
+    }
+    musaError_t sync_status = musaStreamSynchronize(stream);
+    if (sync_status != musaSuccess) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                        MusaErrorString(sync_status));
+    }
+    *value = host_value;
+    return nullptr;
+  }
+  *value = mask_end.GetTensorData<int64_t>()[0];
+  return nullptr;
+}
+
 OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     OrtKernelContext* kernel_context) const {
   try {
@@ -756,13 +792,35 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
         Ort::ConstValue mask_end = ctx.GetInput(mask_end_index_);
         auto end_info = mask_end.GetTensorTypeAndShapeInfo();
         if (end_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 ||
-            end_info.GetElementCount() != 1 ||
-            IsGpuMemory(mask_end.GetTensorMemoryInfo())) {
+            end_info.GetElementCount() != 1) {
           return Ort::GetApi().CreateStatus(
               ORT_NOT_IMPLEMENTED,
               "MHTA raw INT32 mask requires a scalar CPU Slice end");
         }
-        mask_end_value = mask_end.GetTensorData<int64_t>()[0];
+        std::vector<int64_t> shape_key;
+        shape_key.insert(shape_key.end(), q_shape.begin(), q_shape.end());
+        shape_key.insert(shape_key.end(), k_shape.begin(), k_shape.end());
+        shape_key.insert(shape_key.end(), v_shape.begin(), v_shape.end());
+        if (has_external_mask) {
+          const auto mask_dims = mask.GetTensorTypeAndShapeInfo().GetShape();
+          shape_key.insert(shape_key.end(), mask_dims.begin(), mask_dims.end());
+        }
+        std::lock_guard<std::mutex> lock(mask_end_mutex_);
+        const bool cache_hit =
+            mask_end_cached_ && mask_end_cached_shape_key_ == shape_key;
+        if (cache_hit) {
+          mask_end_value = mask_end_cached_value_;
+        } else {
+          RETURN_IF_ERROR(ReadMaskEndValue(mask_end, stream, &mask_end_value));
+          mask_end_cached_ = true;
+          mask_end_cached_value_ = mask_end_value;
+          mask_end_cached_shape_key_ = shape_key;
+        }
+        if (mask_end_value != seqlen_k && cache_hit) {
+          // Not shape-derived after all: re-read once and refresh the cache.
+          RETURN_IF_ERROR(ReadMaskEndValue(mask_end, stream, &mask_end_value));
+          mask_end_cached_value_ = mask_end_value;
+        }
       }
       if (mask_end_value != seqlen_k) {
         return Ort::GetApi().CreateStatus(

@@ -15,6 +15,7 @@
 
 #include <musa_runtime.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -814,9 +815,11 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
             shape_key.push_back(-1);
           }
         }
+        const size_t key_size = shape_key.size();
         std::lock_guard<std::mutex> lock(mask_end_mutex_);
         const bool cache_hit = mask_end_cacheable_ && mask_end_cached_ &&
                                mask_end_cached_shape_key_ == shape_key;
+        bool reread = false;
         if (cache_hit) {
           mask_end_value = mask_end_cached_value_;
         } else {
@@ -831,6 +834,22 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
           // Not shape-derived after all: re-read once and refresh the cache.
           RETURN_IF_ERROR(ReadMaskEndValue(mask_end, stream, &mask_end_value));
           mask_end_cached_value_ = mask_end_value;
+          reread = true;
+        }
+        if (std::getenv("ORT_MUSA_MHTA_END_TRACE") != nullptr) {
+          static std::atomic<int> trace_left{64};
+          if (trace_left.load() > 0) {
+            trace_left.fetch_sub(1);
+            std::fprintf(
+                stderr,
+                "MUSA_MHTA_END node=%p cacheable=%d cached=%d hit=%d reread=%d "
+                "key=%zu sel=%zu value=%lld seqlen_k=%lld\n",
+                static_cast<const void*>(this), mask_end_cacheable_ ? 1 : 0,
+                mask_end_cached_ ? 1 : 0, cache_hit ? 1 : 0, reread ? 1 : 0,
+                key_size, mask_end_source_indices_.size(),
+                static_cast<long long>(mask_end_value),
+                static_cast<long long>(seqlen_k));
+          }
         }
       }
       if (mask_end_value != seqlen_k) {

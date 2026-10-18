@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cstdio>
 #include <cstdlib>
 
 #include "shared_inc/op_kernel_common.h"
@@ -70,6 +71,16 @@ OrtStatus* Reshape::Compute(Ort::KernelContext& ctx) const {
   std::vector<int64_t> out_shape =
       ResolveReshapeOutputShape(shape0, ReadIntTensor(ctx, 1), allowzero_);
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+  const void* src = input0.GetTensorRawData();
+  const void* dst = y.GetTensorMutableRawData();
+  const bool inplace = src == dst;
+  if (std::getenv("ORT_MUSA_RESHAPE_TRACE") != nullptr) {
+    std::fprintf(stderr, "MUSA_RESHAPE inplace=%d\n", inplace ? 1 : 0);
+  }
+  if (inplace) {
+    // May-inplace: the allocator reused the input buffer for the output.
+    return nullptr;
+  }
   return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes(),
                        GetComputeStream(ctx));
 }
@@ -110,7 +121,11 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Reshape, kOnnxDomain, 5, 12,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
-         .SetInputMemType(1, OrtMemTypeCPUInput)),
+         .SetInputMemType(1, OrtMemTypeCPUInput)
+         // May-inplace: reuse the input buffer for the output whenever the
+         // allocator proves it safe. Compute() skips the copy when src == dst
+         // and copies otherwise, so a staged input keeps c4's safe path.
+         .AddInputOutputMutableAlias(0, 0)),
     Reshape)
 
 // The opset-21 schema only adds the int4/uint4 element types, which this
@@ -120,7 +135,8 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Reshape, kOnnxDomain, 13, 21,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
-         .SetInputMemType(1, OrtMemTypeCPUInput)),
+         .SetInputMemType(1, OrtMemTypeCPUInput)
+         .AddInputOutputMutableAlias(0, 0)),
     Reshape)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(

@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <limits>
 #include <mutex>
@@ -42,14 +43,14 @@ constexpr size_t kNoInputIndex = std::numeric_limits<size_t>::max();
 
 struct ConcatInputPlan {
   size_t data_input_index;
-  // Set unless the repeats producer was absorbed into the fused node; then the
-  // tensor is not an input of the fused node and the expression is the only way
-  // to obtain the value.
+  // Index of the repeats input, or kNoInputIndex for a Concat input that is not
+  // a Tile.
   size_t repeats_input_index;
   bool is_tile;
   // Non-empty when repeats was proven to be a pure function of the shapes of
   // the fused inputs: recompute it instead of reading the device tensor, which
-  // would cost a device-to-host copy plus a compute-stream synchronize.
+  // would cost a device-to-host copy plus a compute-stream synchronize. The
+  // tensor stays an input, so a failed evaluation can still fall back to it.
   musa_ep::ShapeExpr repeats_expr;
 };
 
@@ -440,7 +441,44 @@ std::unordered_map<std::string, Ort::ConstNode> BuildProducers(
   return producers;
 }
 
+musa_ep::ShapeExpr RemapShapeExprHint(
+    const musa_ep::ShapeExprHint& hint,
+    const std::unordered_map<std::string, size_t>& input_indices) {
+  if (hint.expr.Empty() ||
+      hint.source_input_names.size() != hint.expr.source_input_indices.size()) {
+    return musa_ep::ShapeExpr{};
+  }
+  musa_ep::ShapeExpr expr = hint.expr;
+  for (size_t slot = 0; slot < hint.source_input_names.size(); ++slot) {
+    auto index_it = input_indices.find(hint.source_input_names[slot]);
+    if (index_it == input_indices.end()) {
+      return musa_ep::ShapeExpr{};  // source is not a fused input after all
+    }
+    expr.source_input_indices[slot] = index_it->second;
+  }
+  return expr;
+}
+
 }  // namespace
+
+std::string TileConcatFusionKey(const std::vector<std::string>& input_names,
+                                const std::vector<std::string>& output_names) {
+  auto normalize = [](std::vector<std::string> names) {
+    names.erase(
+        std::remove_if(names.begin(), names.end(),
+                       [](const std::string& name) { return name.empty(); }),
+        names.end());
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    std::string key;
+    for (const std::string& name : names) {
+      key += name;
+      key += '\x1e';
+    }
+    return key;
+  };
+  return normalize(input_names) + "|" + normalize(output_names);
+}
 
 bool IsTileConcatFusionGraph(Ort::ConstGraph graph) {
   bool has_concat = false;
@@ -453,7 +491,8 @@ bool IsTileConcatFusionGraph(Ort::ConstGraph graph) {
 }
 
 std::unique_ptr<FusionNodeCompute> CreateTileConcatFusion(
-    Ort::ConstGraph graph, Ort::ConstNode fused_node) {
+    Ort::ConstGraph graph, Ort::ConstNode fused_node,
+    const musa_ep::FusionShapeExprHints* shape_expr_hints) {
   std::vector<Ort::ConstNode> nodes = graph.GetNodes();
   auto producers = BuildProducers(nodes);
   auto input_indices = FusedInputIndices(fused_node);
@@ -522,6 +561,30 @@ std::unique_ptr<FusionNodeCompute> CreateTileConcatFusion(
     add_initializer(input);
   }
 
+  // The repeats expressions were proved on the whole graph in GetCapability();
+  // this subgraph only holds Tile + Concat, so look them up by the fusion
+  // boundary. Both sides build the same key from names that ORT keeps.
+  const std::unordered_map<std::string, musa_ep::ShapeExprHint>* repeats_hints =
+      nullptr;
+  if (shape_expr_hints != nullptr) {
+    std::vector<std::string> boundary_names;
+    for (Ort::ConstValueInfo input : fused_node.GetInputs()) {
+      boundary_names.push_back(Name(input));
+    }
+    for (const std::string& initializer_name : initializer_names) {
+      boundary_names.push_back(initializer_name);
+    }
+    std::vector<std::string> output_names;
+    for (Ort::ConstValueInfo output : fused_node.GetOutputs()) {
+      output_names.push_back(Name(output));
+    }
+    auto hint_it = shape_expr_hints->find(
+        TileConcatFusionKey(boundary_names, output_names));
+    if (hint_it != shape_expr_hints->end()) {
+      repeats_hints = &hint_it->second;
+    }
+  }
+
   std::vector<ConcatInputPlan> plans;
   plans.reserve(concat_inputs.size());
   for (Ort::ConstValueInfo concat_input : concat_inputs) {
@@ -535,28 +598,30 @@ std::unique_ptr<FusionNodeCompute> CreateTileConcatFusion(
         throw std::runtime_error("invalid TileConcat Tile node");
       }
       const std::string repeats_name = Name(tile_inputs[1]);
-      if (producers.find(repeats_name) != producers.end()) {
-        // The matcher absorbed the shape-only chain that produced repeats, so
-        // the value is not an input of this node any more. Recompute it from
-        // the shapes of the fused inputs.
-        musa_ep::ShapeExpr repeats_expr =
-            musa_ep::BuildShapeExpr(repeats_name, producers, input_indices,
-                                    initializer_names, initializer_values);
-        if (repeats_expr.Empty()) {
-          throw std::runtime_error(
-              "TileConcat repeats chain absorbed by the matcher is not "
-              "recomputable from the fused inputs");
-        }
-        plans.push_back(
-            {GetIndex(input_indices, Name(tile_inputs[0]), "Tile data input"),
-             kNoInputIndex, true, std::move(repeats_expr)});
-        continue;
-      }
       const size_t repeats_input_index =
           GetIndex(input_indices, repeats_name, "Tile repeats input");
-      musa_ep::ShapeExpr repeats_expr =
-          musa_ep::BuildShapeExpr(repeats_name, producers, input_indices,
-                                  initializer_names, initializer_values);
+      musa_ep::ShapeExpr repeats_expr;
+      if (repeats_hints != nullptr) {
+        auto hint_it = repeats_hints->find(repeats_name);
+        if (hint_it != repeats_hints->end()) {
+          repeats_expr = RemapShapeExprHint(hint_it->second, input_indices);
+        }
+      }
+      if (repeats_expr.Empty()) {
+        // Secondary source of truth: a chain ORT did keep inside the fusion.
+        repeats_expr =
+            musa_ep::BuildShapeExpr(repeats_name, producers, input_indices,
+                                    initializer_names, initializer_values);
+      }
+      if (initializer_names.count(repeats_name) == 0) {
+        // One line per runtime repeats at session creation: it tells the
+        // verification round whether the matcher's expression arrived. A zero
+        // is correct but slower - the kernel then reads the tensor back with a
+        // device-to-host copy and a stream synchronize on every run.
+        std::fprintf(stderr,
+                     "MUSA_TILE_CONCAT_REPEATS repeats=%s shape_expr=%d\n",
+                     repeats_name.c_str(), repeats_expr.Empty() ? 0 : 1);
+      }
       plans.push_back(
           {GetIndex(input_indices, Name(tile_inputs[0]), "Tile data input"),
            repeats_input_index, true, std::move(repeats_expr)});

@@ -54,6 +54,18 @@ struct ShapeExpr {
   bool Empty() const { return root < 0; }
 };
 
+// An expression computed before the fused node exists, carried to Compile().
+//
+// GetCapability() sees the whole graph, so that is where a chain outside the
+// fusion can be resolved. Compile() only receives the fused subgraph, so the
+// proof has to travel with the fusion: `source_input_names[i]` is the name of
+// the fused input whose shape fills source slot i, and Compile() translates
+// those names into the indices of the fused node that ORT built.
+struct ShapeExprHint {
+  ShapeExpr expr;
+  std::vector<std::string> source_input_names;
+};
+
 // A constant tensor that a shape chain reads: an int32/int64 initializer, or
 // the tensor carried by a Constant node.
 struct ShapeExprConstant {

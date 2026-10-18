@@ -474,7 +474,7 @@ musa_ep::ShapeExpr RemapShapeExprHint(
 
 std::string TileConcatFusionKey(const std::vector<std::string>& input_names,
                                 const std::vector<std::string>& output_names) {
-  return FusionBoundaryKey(input_names, output_names);
+  return musa_ep::FusionBoundaryKey(input_names, output_names);
 }
 
 bool IsTileConcatFusionGraph(Ort::ConstGraph graph) {

@@ -63,6 +63,20 @@ class MusaEp : public OrtEp {
     }
   }
 
+  // Mask-end provenance a finder proved while it could still see the whole
+  // graph; Compile() remaps the source names to fused input indices.
+  const musa_ep::FusionMaskEndHints& MaskEndHints() const {
+    return mask_end_hints_;
+  }
+  void AddMaskEndHints(musa_ep::FusionMaskEndHints hints) {
+    for (auto& [key, values] : hints) {
+      auto& stored = mask_end_hints_[key];
+      for (auto& [name, sources] : values) {
+        stored[name] = std::move(sources);
+      }
+    }
+  }
+
  private:
   static const char* ORT_API_CALL GetNameImpl(const OrtEp* this_ptr) noexcept;
 
@@ -100,4 +114,5 @@ class MusaEp : public OrtEp {
   std::unordered_map<std::string, std::unique_ptr<FusionNodeCompute>>
       fusion_computes_;
   musa_ep::FusionShapeExprHints shape_expr_hints_;
+  musa_ep::FusionMaskEndHints mask_end_hints_;
 };

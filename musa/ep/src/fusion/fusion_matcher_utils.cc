@@ -299,6 +299,20 @@ bool CollectShapePreservingSources(
     const std::unordered_map<std::string, size_t>& input_indices,
     const std::unordered_set<std::string>& initializer_names,
     std::unordered_set<size_t>* sources) {
+  // A value can also be pinned down from the other side: when another
+  // Transpose reads the *same* value and produces one of the fusion's inputs,
+  // that input's shape is this value's shape under a fixed permutation (every
+  // valid ONNX Transpose perm is invertible), so it can key the cache too.
+  std::unordered_map<std::string, std::vector<Ort::ConstNode>> consumers;
+  for (const auto& [output, producer] : producers) {
+    for (Ort::ConstValueInfo input : producer.GetInputs()) {
+      const std::string input_name = input.GetName();
+      if (!input_name.empty()) {
+        consumers[input_name].push_back(producer);
+      }
+    }
+  }
+
   std::vector<std::string> pending{value_name};
   std::unordered_set<std::string> visited;
   while (!pending.empty()) {
@@ -314,6 +328,29 @@ bool CollectShapePreservingSources(
     }
     if (initializer_names.count(name) != 0) {
       continue;  // a constant's shape is static and needs no runtime key
+    }
+    bool keyed_from_consumer = false;
+    auto consumer_it = consumers.find(name);
+    if (consumer_it != consumers.end()) {
+      for (Ort::ConstNode consumer : consumer_it->second) {
+        if (!IsOnnxOp(consumer, "Transpose") ||
+            consumer.GetInputs().size() != 1) {
+          continue;
+        }
+        for (Ort::ConstValueInfo output : consumer.GetOutputs()) {
+          auto fused_it = input_indices.find(Name(output));
+          if (fused_it != input_indices.end()) {
+            sources->insert(fused_it->second);
+            keyed_from_consumer = true;
+          }
+        }
+        if (keyed_from_consumer) {
+          break;
+        }
+      }
+    }
+    if (keyed_from_consumer) {
+      continue;
     }
     auto producer_it = producers.find(name);
     if (producer_it == producers.end()) {
@@ -331,6 +368,25 @@ bool CollectShapePreservingSources(
     }
   }
   return true;
+}
+
+std::string FusionBoundaryKey(const std::vector<std::string>& input_names,
+                              const std::vector<std::string>& output_names) {
+  auto normalize = [](std::vector<std::string> names) {
+    names.erase(
+        std::remove_if(names.begin(), names.end(),
+                       [](const std::string& name) { return name.empty(); }),
+        names.end());
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    std::string key;
+    for (const std::string& name : names) {
+      key += name;
+      key += '\x1e';
+    }
+    return key;
+  };
+  return normalize(input_names) + "|" + normalize(output_names);
 }
 
 bool ValueDependsOnlyOnInputShapes(

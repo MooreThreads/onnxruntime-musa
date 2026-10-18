@@ -590,7 +590,8 @@ bool TryAppendRawInt32MaskPreprocessing(
     const std::unordered_set<std::string>& graph_output_names,
     const std::unordered_set<size_t>& accepted_node_ids,
     std::unordered_set<size_t>& selected,
-    std::vector<Ort::ConstNode>& fusion_nodes) {
+    std::vector<Ort::ConstNode>& fusion_nodes,
+    std::string* mask_end_name = nullptr) {
   Ort::ConstNode equal{nullptr};
   if (!GetProducer(boolean_mask, equal) || !IsOnnxOp(equal, "Equal")) {
     return true;
@@ -649,6 +650,9 @@ bool TryAppendRawInt32MaskPreprocessing(
   if (!starts.has_value() || *starts != std::vector<int64_t>{0}) return false;
   if (!axes.has_value() || *axes != std::vector<int64_t>{3}) return false;
   if (!steps.has_value() || *steps != std::vector<int64_t>{1}) return false;
+  if (mask_end_name != nullptr) {
+    *mask_end_name = Name(slice_inputs[2]);
+  }
 
   for (Ort::ConstNode node : {slice, cast, equal}) {
     if (!AddFusionNode(node, accepted_node_ids, selected, fusion_nodes)) {
@@ -714,7 +718,8 @@ bool CanFuseBooleanMhtaScaledDotProductAttention(
     Ort::ConstNode value_matmul,
     const std::unordered_set<std::string>& graph_output_names,
     const std::unordered_set<size_t>& accepted_node_ids,
-    std::vector<Ort::ConstNode>& fusion_nodes) {
+    std::vector<Ort::ConstNode>& fusion_nodes,
+    std::string* mask_end_name = nullptr) {
   if (!IsOnnxOp(value_matmul, "MatMul") ||
       accepted_node_ids.count(value_matmul.GetId()) != 0)
     return false;
@@ -808,7 +813,8 @@ bool CanFuseBooleanMhtaScaledDotProductAttention(
   }
   if (!TryAppendRawInt32MaskPreprocessing(pre_inputs[0], pre_where, post_where,
                                           graph_output_names, accepted_node_ids,
-                                          selected, fusion_nodes)) {
+                                          selected, fusion_nodes,
+                                          mask_end_name)) {
     return false;
   }
   TryAppendBshdBoundaryTransposes(score_matmul, value_matmul,
@@ -1313,24 +1319,119 @@ bool CanFuseSimRank3MhtaScaledDotProductAttention(
   return true;
 }
 
+// Prove, on the whole graph, that the raw-mask Slice end depends only on the
+// shapes of the fusion's own inputs. Compile() only receives the fused
+// subgraph, so the answer has to travel through the hint map, keyed by the
+// fusion boundary both sides can see.
+void AddMaskEndHint(
+    const std::string& end_name,
+    const std::vector<Ort::ConstNode>& fusion_nodes,
+    const std::unordered_set<std::string>& graph_output_names,
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    const std::unordered_set<std::string>& initializer_names,
+    musa_ep::FusionMaskEndHints* hints) {
+  if (hints == nullptr || end_name.empty() || fusion_nodes.empty()) {
+    return;
+  }
+  std::unordered_set<std::string> internal;
+  std::unordered_set<size_t> node_ids;
+  for (Ort::ConstNode node : fusion_nodes) {
+    node_ids.insert(node.GetId());
+    for (Ort::ConstValueInfo output : node.GetOutputs()) {
+      if (output != nullptr) {
+        internal.insert(Name(output));
+      }
+    }
+  }
+  std::vector<std::string> input_names;
+  std::unordered_map<std::string, size_t> input_indices;
+  for (Ort::ConstNode node : fusion_nodes) {
+    for (Ort::ConstValueInfo input : node.GetInputs()) {
+      if (input == nullptr) {
+        continue;
+      }
+      const std::string name = Name(input);
+      if (name.empty() || internal.count(name) != 0) {
+        continue;
+      }
+      if (input_indices.emplace(name, input_indices.size()).second) {
+        input_names.push_back(name);
+      }
+    }
+  }
+  std::vector<std::string> output_names;
+  for (Ort::ConstNode node : fusion_nodes) {
+    for (Ort::ConstValueInfo output : node.GetOutputs()) {
+      if (output == nullptr) {
+        continue;
+      }
+      bool external = graph_output_names.count(Name(output)) != 0;
+      for (const auto& consumer : output.GetConsumers()) {
+        if (node_ids.count(consumer.node.GetId()) == 0) {
+          external = true;
+        }
+      }
+      if (external) {
+        output_names.push_back(Name(output));
+      }
+    }
+  }
+  std::vector<size_t> source_indices;
+  if (!musa_ep::ValueDependsOnlyOnInputShapes(end_name, producers, input_indices,
+                                              initializer_names,
+                                              &source_indices)) {
+    return;
+  }
+  if (source_indices.empty()) {
+    return;  // constant end: nothing to key on
+  }
+  std::vector<std::string> source_names;
+  source_names.reserve(source_indices.size());
+  for (size_t index : source_indices) {
+    if (index >= input_names.size()) {
+      return;
+    }
+    source_names.push_back(input_names[index]);
+  }
+  (*hints)[musa_ep::FusionBoundaryKey(input_names, output_names)][end_name] =
+      std::move(source_names);
+}
+
 }  // namespace
 
 std::vector<std::vector<Ort::ConstNode>>
 FindMhtaScaledDotProductAttentionFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& accepted_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids,
+    musa_ep::FusionMaskEndHints* mask_end_hints) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
+  const auto producers = BuildProducerMap(all_nodes);
+  std::unordered_set<std::string> initializer_names;
+  for (const Ort::ConstNode& node : all_nodes) {
+    for (Ort::ConstValueInfo input : node.GetInputs()) {
+      if (IsConstantInitializerValueInfo(input)) {
+        initializer_names.insert(Name(input));
+      }
+    }
+  }
   for (Ort::ConstNode node : all_nodes) {
     std::vector<Ort::ConstNode> fusion_nodes;
-    if (CanFuseBooleanMhtaScaledDotProductAttention(
-            node, graph_output_names, accepted_node_ids, fusion_nodes) ||
+    std::string mask_end_name;
+    const bool boolean_fused = CanFuseBooleanMhtaScaledDotProductAttention(
+        node, graph_output_names, accepted_node_ids, fusion_nodes,
+        &mask_end_name);
+    if (boolean_fused ||
         CanFuseLseqPreMaskMhtaScaledDotProductAttention(
             node, graph_output_names, accepted_node_ids, fusion_nodes) ||
         CanFuseMhtaScaledDotProductAttention(node, graph_output_names,
                                              accepted_node_ids, fusion_nodes) ||
         CanFuseSimRank3MhtaScaledDotProductAttention(
             node, graph_output_names, accepted_node_ids, fusion_nodes)) {
+      if (boolean_fused) {
+        AddMaskEndHint(mask_end_name, fusion_nodes, graph_output_names,
+                       producers, initializer_names, mask_end_hints);
+      }
       fusions.push_back(std::move(fusion_nodes));
     }
   }

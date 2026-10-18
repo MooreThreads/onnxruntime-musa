@@ -122,10 +122,11 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
          .SetInputMemType(1, OrtMemTypeCPUInput)
-         // May-inplace: reuse the input buffer for the output whenever the
-         // allocator proves it safe. Compute() skips the copy when src == dst
-         // and copies otherwise, so a staged input keeps c4's safe path.
-         .AddInputOutputMutableAlias(0, 0)),
+         // Hard alias: c5 registers MemcpyFromHost, so ORT stages any
+         // CPU-produced input before this kernel runs and Reshape only sees
+         // device tensors (c4 predates c5). Compute() skips the copy when
+         // src == dst and still copies on the defensive different-pointer path.
+         .AddInputOutputAlias(0, 0)),
     Reshape)
 
 // The opset-21 schema only adds the int4/uint4 element types, which this
@@ -136,7 +137,7 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .SetInputMemType(1, OrtMemTypeCPUInput)
-         .AddInputOutputMutableAlias(0, 0)),
+         .AddInputOutputAlias(0, 0)),
     Reshape)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(

@@ -1030,8 +1030,9 @@ def _run_dynamic_end_cache_case(capfd, end_source, expected_cacheable):
     rng = np.random.default_rng(61)
     batch, heads, head_dim = 1, 3, 4
     model = _mhta_dynamic_end_model(batch, heads, head_dim, end_source)
+    # The end chain itself legitimately runs on the CPU EP, so this session
+    # must keep the CPU fallback enabled; only the attention body is fused.
     so = ort.SessionOptions()
-    so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
     so.add_provider_for_devices(musa_devices(), {})
     capfd.readouterr()
     musa_session = ort.InferenceSession(model, sess_options=so)

@@ -283,4 +283,70 @@ bool HasCastBoundary(const std::vector<Ort::ConstNode>& fusion_nodes) {
   return false;
 }
 
+bool ValueDependsOnlyOnInputShapes(
+    const std::string& value_name,
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    const std::unordered_map<std::string, size_t>& input_indices,
+    const std::unordered_set<std::string>& initializer_names,
+    std::vector<size_t>* source_indices) {
+  // Ops that only reshape or combine shape values. Reshape is included because
+  // its output shape is fixed by its (constant) shape input; a data dependency
+  // would surface as a non-initializer leaf and be rejected below.
+  static const std::unordered_set<std::string> kShapeOnlyOps = {
+      "Gather",   "Unsqueeze", "Squeeze",   "Concat",  "Add",
+      "Sub",      "Mul",       "Div",       "Cast",    "Slice",
+      "Identity", "Mod",       "Floor",     "Ceil",    "Reshape",
+      "ReduceProd", "Constant", "ConstantOfShape"};
+  std::vector<std::string> pending{value_name};
+  std::unordered_set<std::string> visited;
+  std::unordered_set<size_t> sources;
+  while (!pending.empty()) {
+    const std::string name = std::move(pending.back());
+    pending.pop_back();
+    if (!visited.insert(name).second) {
+      continue;
+    }
+    auto producer_it = producers.find(name);
+    if (producer_it == producers.end()) {
+      // A leaf must be a constant. A graph input or fused data input used as a
+      // value would make the result data-dependent.
+      if (initializer_names.count(name) == 0) {
+        return false;
+      }
+      continue;
+    }
+    Ort::ConstNode node = producer_it->second;
+    const std::string op = node.GetOperatorType();
+    std::vector<Ort::ConstValueInfo> node_inputs = node.GetInputs();
+    if (op == "Shape") {
+      if (node_inputs.size() != 1) {
+        return false;
+      }
+      const std::string source = node_inputs[0].GetName();
+      auto index_it = input_indices.find(source);
+      if (index_it == input_indices.end()) {
+        // Shape of a constant is constant and needs no runtime key.
+        if (initializer_names.count(source) == 0) {
+          return false;
+        }
+      } else {
+        sources.insert(index_it->second);
+      }
+      continue;
+    }
+    if (kShapeOnlyOps.count(op) == 0) {
+      return false;
+    }
+    for (Ort::ConstValueInfo input : node_inputs) {
+      const std::string input_name = input.GetName();
+      if (!input_name.empty()) {
+        pending.push_back(input_name);
+      }
+    }
+  }
+  source_indices->assign(sources.begin(), sources.end());
+  std::sort(source_indices->begin(), source_indices->end());
+  return true;
+}
+
 }  // namespace musa_ep

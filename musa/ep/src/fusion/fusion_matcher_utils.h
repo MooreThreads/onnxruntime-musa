@@ -59,4 +59,17 @@ bool ValueHasExternalConsumerOrGraphOutput(
 std::optional<int64_t> ReadScalarIntInitializer(Ort::ConstValueInfo value_info);
 bool HasCastBoundary(const std::vector<Ort::ConstNode>& fusion_nodes);
 
+// Returns true when `value_name` is produced only from shape arithmetic:
+// constants, plus Shape ops over inputs of the current fusion. The output is
+// then a pure function of the shapes of the fused inputs listed in
+// `source_indices` (empty means the value is constant). Anything that could
+// make the value depend on data, on a tensor outside the fusion, or on an op
+// that is not shape-only returns false.
+bool ValueDependsOnlyOnInputShapes(
+    const std::string& value_name,
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    const std::unordered_map<std::string, size_t>& input_indices,
+    const std::unordered_set<std::string>& initializer_names,
+    std::vector<size_t>* source_indices);
+
 }  // namespace musa_ep

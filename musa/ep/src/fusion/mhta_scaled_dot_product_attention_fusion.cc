@@ -1590,7 +1590,8 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
         InputIndex(fused_indices, value_inputs[1]),
         InputIndex(fused_indices, mask_input), scale, 0.0f,
         MhtaSdpaLayout::kBhsd, true, boolean_mask_int32, mask_end_index,
-        static_mask_end);
+        static_mask_end, false, false, mask_end_cacheable,
+        mask_end_source_indices);
   }
 
   if (where_nodes.size() == 1 && !add_node && !div_node && !einsum_node &&

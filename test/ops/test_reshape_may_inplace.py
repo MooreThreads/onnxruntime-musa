@@ -49,7 +49,10 @@ def test_reshape_may_inplace_reuses_single_consumer_device_output(
     model = build_graph_model(
         [
             helper.make_node("Add", ["X", "one"], ["added"]),
-            helper.make_node("Reshape", ["added", "shape"], ["Y"]),
+            helper.make_node("Reshape", ["added", "shape"], ["reshaped"]),
+            # Keep the Reshape output internal: a graph output does not share
+            # a buffer with the input, so the alias cannot be observed there.
+            helper.make_node("Relu", ["reshaped"], ["Y"]),
         ],
         {"X": x, "shape": shape},
         [("Y", TensorProto.FLOAT)],
@@ -61,7 +64,9 @@ def test_reshape_may_inplace_reuses_single_consumer_device_output(
     session = _musa_session(model)
     out = session.run(None, {"X": x, "shape": shape})[0]
     err = capfd.readouterr().err
-    np.testing.assert_allclose(out, (x + 1.0).reshape(3, 2), rtol=0, atol=0)
+    np.testing.assert_allclose(
+        out, np.maximum((x + 1.0).reshape(3, 2), 0.0), rtol=0, atol=0
+    )
     assert "MUSA_RESHAPE inplace=1" in err, err
 
 

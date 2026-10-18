@@ -22,6 +22,7 @@
 #include "fusion/fusion_matcher.h"
 #include "fusion/fusion_matcher_utils.h"
 #include "fusion/shape_expr.h"
+#include "fusion/tile_concat_fusion.h"
 #include "graph/graph_utils.h"
 #include "plugin_ep_utils.h"
 
@@ -55,7 +56,6 @@ const std::unordered_set<std::string>& ShapeOnlyOps() {
 }
 
 struct ShapeChain {
-  std::vector<Ort::ConstNode> nodes;  // inputs precede their consumers
   std::unordered_set<size_t> node_ids;
   // Values the chain reads that no node in the graph produces: initializers
   // (which carry their tensor) or data leaves (which make the chain unusable).
@@ -99,13 +99,12 @@ bool CollectShapeChain(
   }
   visiting.erase(value_name);
   chain.node_ids.insert(node.GetId());
-  chain.nodes.push_back(node);
   return true;
 }
 
-// The values a fused node would declare as inputs, before any chain is
-// absorbed. A Shape source has to be one of them, otherwise absorbing the chain
-// would add an input (and possibly a device copy) to the fused node.
+// The values a fused node declares as inputs. A Shape source has to be one of
+// them: the fused node cannot gain an input that Tile+Concat do not already
+// read, so a chain reaching outside would not be recomputable at run time.
 std::unordered_map<std::string, size_t> ExternalInputs(
     const std::vector<Ort::ConstNode>& nodes) {
   std::unordered_set<std::string> internal;
@@ -133,29 +132,6 @@ std::unordered_map<std::string, size_t> ExternalInputs(
   return inputs;
 }
 
-bool ChainHasExternalConsumer(
-    const ShapeChain& chain, const std::unordered_set<size_t>& fusion_ids,
-    const std::unordered_set<std::string>& graph_output_names) {
-  std::unordered_set<size_t> allowed = fusion_ids;
-  allowed.insert(chain.node_ids.begin(), chain.node_ids.end());
-  for (Ort::ConstNode node : chain.nodes) {
-    for (Ort::ConstValueInfo output : node.GetOutputs()) {
-      if (output == nullptr) {
-        continue;
-      }
-      if (graph_output_names.count(Name(output)) != 0) {
-        return true;
-      }
-      for (const auto& consumer : output.GetConsumers()) {
-        if (allowed.count(consumer.node.GetId()) == 0) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
 }  // namespace
 
 bool CanFuseTileConcat(
@@ -163,7 +139,8 @@ bool CanFuseTileConcat(
     const std::unordered_map<std::string, Ort::ConstNode>& producers,
     const std::unordered_set<std::string>& graph_output_names,
     const std::unordered_set<size_t>& accepted_node_ids,
-    std::vector<Ort::ConstNode>& fusion_nodes) {
+    std::vector<Ort::ConstNode>& fusion_nodes,
+    FusionShapeExprHints* shape_expr_hints) {
   if (!IsOnnxOp(concat_node, "Concat") ||
       accepted_node_ids.count(concat_node.GetId()) != 0) {
     return false;
@@ -204,59 +181,37 @@ bool CanFuseTileConcat(
   }
 
   // A fused node cannot declare CPU inputs, so ORT copies a runtime repeats
-  // tensor onto the device. Recompute such a repeats value inside the fused
-  // node instead: absorb the shape-only chain that produces it, then read only
-  // the shapes of the fused inputs at run time (no device read, no sync).
-  std::vector<Ort::ConstNode> base_nodes = tile_nodes;
-  base_nodes.push_back(concat_node);
-  const std::unordered_map<std::string, size_t> base_inputs =
-      ExternalInputs(base_nodes);
-
-  std::unordered_set<size_t> fusion_ids;
-  for (Ort::ConstNode node : base_nodes) {
-    fusion_ids.insert(node.GetId());
-  }
-
-  ShapeChain chain;
-  std::vector<std::string> chain_roots;
-  for (Ort::ConstNode tile_node : tile_nodes) {
-    const std::string repeats = Name(tile_node.GetInputs()[1]);
+  // tensor onto the device. Do not absorb the shape-only chain that produces
+  // it: the dnn models also read its intermediate values from other branches
+  // (MathConcatLog and friends), a fused node owns every value it absorbs, and
+  // such a chain would have vetoed the fusion outright. Keep the chain in the
+  // graph, leave `repeats` an input of the fused node, and prove here that the
+  // value is a pure function of the shapes of the fused inputs. The fused node
+  // then recomputes it from those shapes (no device read, no stream sync) and
+  // still falls back to reading the tensor if evaluation ever fails.
+  //
+  // Compile() only receives the Tile+Concat subgraph, so the proof is handed
+  // over through `shape_expr_hints`: GetCapability() is the last point that can
+  // see the chain. A Tile whose repeats cannot be proven shape-only keeps its
+  // standalone kernel and becomes an input of the fused Concat.
+  std::unordered_set<std::string> initializer_names;
+  std::unordered_map<std::string, ShapeExprConstant> initializer_values;
+  std::vector<bool> recomputable(tile_nodes.size(), true);
+  for (size_t i = 0; i < tile_nodes.size(); ++i) {
+    const std::string repeats = Name(tile_nodes[i].GetInputs()[1]);
     if (producers.find(repeats) == producers.end()) {
       continue;  // initializer or graph input: keep reading it as today
     }
+    ShapeChain chain;
     std::unordered_set<std::string> visiting;
     if (!CollectShapeChain(repeats, producers, visiting, chain)) {
-      return false;
+      recomputable[i] = false;  // not a shape-only chain
+      continue;
     }
-    chain_roots.push_back(repeats);
-  }
-
-  if (!chain.nodes.empty() &&
-      ChainHasExternalConsumer(chain, fusion_ids, graph_output_names)) {
-    return false;
-  }
-
-  // Compile() picks the factory by scanning its detectors in a fixed order, and
-  // IsShapeReshapeFusionGraph is a loose presence check (Gather + Concat +
-  // Reshape). The fused body always carries this fusion's Concat, so a chain
-  // that also brings a Gather and a Reshape would be handed to the ShapeReshape
-  // factory. Leave such a Tile unfused instead of changing that detector.
-  if (!chain.nodes.empty()) {
-    bool has_gather = false;
-    bool has_reshape = false;
-    for (Ort::ConstNode node : chain.nodes) {
-      has_gather = has_gather || IsOnnxOp(node, "Gather");
-      has_reshape = has_reshape || node.GetOperatorType() == "Reshape";
-    }
-    if (has_gather && has_reshape) {
-      return false;
-    }
-  }
-
-  if (!chain_roots.empty()) {
-    std::unordered_set<std::string> initializer_names;
-    std::unordered_map<std::string, ShapeExprConstant> initializer_values;
     for (const auto& [name, value_info] : chain.leaves) {
+      if (initializer_names.count(name) != 0) {
+        continue;
+      }
       auto constant = ReadShapeExprConstant(value_info);
       if (!constant.has_value()) {
         continue;
@@ -264,47 +219,118 @@ bool CanFuseTileConcat(
       initializer_names.insert(name);
       initializer_values.emplace(name, std::move(*constant));
     }
-    for (const std::string& repeats : chain_roots) {
-      if (BuildShapeExpr(repeats, producers, base_inputs, initializer_names,
-                         initializer_values)
-              .Empty()) {
-        return false;
+  }
+
+  // Dropping a Tile shrinks the fusion boundary, which can invalidate another
+  // Tile whose Shape source lived on the dropped Tile's input. Rebuild until
+  // the set stops shrinking.
+  std::vector<Ort::ConstNode> fused_tiles;
+  std::unordered_map<std::string, ShapeExprHint> repeats_hints;
+  for (;;) {
+    fused_tiles.clear();
+    for (size_t i = 0; i < tile_nodes.size(); ++i) {
+      if (recomputable[i]) {
+        fused_tiles.push_back(tile_nodes[i]);
       }
+    }
+    if (fused_tiles.empty()) {
+      return false;
+    }
+
+    std::vector<Ort::ConstNode> base_nodes = fused_tiles;
+    base_nodes.push_back(concat_node);
+    const std::unordered_map<std::string, size_t> base_inputs =
+        ExternalInputs(base_nodes);
+    std::vector<std::string> input_names(base_inputs.size());
+    for (const auto& [name, index] : base_inputs) {
+      input_names[index] = name;
+    }
+
+    repeats_hints.clear();
+    bool dropped = false;
+    for (size_t i = 0; i < tile_nodes.size(); ++i) {
+      if (!recomputable[i]) {
+        continue;
+      }
+      const std::string repeats = Name(tile_nodes[i].GetInputs()[1]);
+      if (producers.find(repeats) == producers.end()) {
+        continue;
+      }
+      ShapeExpr expr = BuildShapeExpr(repeats, producers, base_inputs,
+                                      initializer_names, initializer_values);
+      if (expr.Empty()) {
+        // A Shape source that is not an input of Tile+Concat cannot be
+        // recomputed inside the fusion.
+        recomputable[i] = false;
+        dropped = true;
+        continue;
+      }
+      ShapeExprHint hint;
+      hint.source_input_names.reserve(expr.source_input_indices.size());
+      for (size_t source_index : expr.source_input_indices) {
+        hint.source_input_names.push_back(input_names[source_index]);
+      }
+      hint.expr = std::move(expr);
+      repeats_hints.emplace(repeats, std::move(hint));
+    }
+    if (!dropped) {
+      break;
     }
   }
 
+  // Compile() picks the factory by scanning its detectors in a fixed order, and
+  // IsShapeReshapeFusionGraph is a loose presence check (Gather + Concat +
+  // Reshape). That used to matter: while the repeats chain was absorbed, the
+  // fused body carried the chain's Gather and Reshape next to this fusion's
+  // Concat, so such a body was handed to the ShapeReshape factory and the Tile
+  // was left unfused. The chain now stays in the graph, the fused body holds
+  // only Tile + Concat, and the collision cannot arise.
+  const std::vector<std::string> fusion_outputs = {Name(concat_outputs[0])};
+
   fusion_nodes.clear();
   std::unordered_set<size_t> selected_node_ids;
-  for (Ort::ConstNode node : base_nodes) {
+  for (Ort::ConstNode node : fused_tiles) {
     if (!AddFusionNode(node, accepted_node_ids, selected_node_ids,
                        fusion_nodes)) {
       return false;
     }
   }
-  for (Ort::ConstNode node : chain.nodes) {
-    if (!AddFusionNode(node, accepted_node_ids, selected_node_ids,
-                       fusion_nodes)) {
-      return false;
-    }
+  if (!AddFusionNode(concat_node, accepted_node_ids, selected_node_ids,
+                     fusion_nodes)) {
+    return false;
   }
   std::sort(fusion_nodes.begin(), fusion_nodes.end(),
             [](Ort::ConstNode lhs, Ort::ConstNode rhs) {
               return lhs.GetId() < rhs.GetId();
             });
-  return FusionHasNoExternalPathBetweenSelectedNodes(fusion_nodes,
-                                                     selected_node_ids);
+  if (!FusionHasNoExternalPathBetweenSelectedNodes(fusion_nodes,
+                                                   selected_node_ids)) {
+    return false;
+  }
+
+  if (shape_expr_hints != nullptr && !repeats_hints.empty()) {
+    std::vector<std::string> boundary_names;
+    boundary_names.reserve(fusion_nodes.size() * 2);
+    for (const auto& [name, index] : ExternalInputs(fusion_nodes)) {
+      boundary_names.push_back(name);
+    }
+    (*shape_expr_hints)[TileConcatFusionKey(boundary_names, fusion_outputs)] =
+        std::move(repeats_hints);
+  }
+  return true;
 }
 
 std::vector<std::vector<Ort::ConstNode>> FindTileConcatFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& accepted_node_ids) {
+    const std::unordered_set<size_t>& accepted_node_ids,
+    FusionShapeExprHints* shape_expr_hints) {
   std::vector<std::vector<Ort::ConstNode>> fusions;
   auto producers = BuildProducerMap(all_nodes);
   for (Ort::ConstNode node : all_nodes) {
     std::vector<Ort::ConstNode> fusion_nodes;
     if (!CanFuseTileConcat(node, producers, graph_output_names,
-                           accepted_node_ids, fusion_nodes)) {
+                           accepted_node_ids, fusion_nodes, shape_expr_hints)) {
       continue;
     }
     fusions.push_back(std::move(fusion_nodes));

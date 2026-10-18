@@ -420,7 +420,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateShapeReshapeFusion(graph, fused_node);
         finder_name = "FindShapeReshapeFusions";
       } else if (IsTileConcatFusionGraph(graph)) {
-        fusion_compute = CreateTileConcatFusion(graph, fused_node);
+        fusion_compute =
+            CreateTileConcatFusion(graph, fused_node, &ep->ShapeExprHints());
         finder_name = "FindTileConcatFusions";
       } else if (IsSliceConcatFusionGraph(graph)) {
         fusion_compute = CreateSliceConcatFusion(graph, fused_node);

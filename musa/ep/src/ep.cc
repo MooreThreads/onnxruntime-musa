@@ -377,8 +377,12 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
     std::unordered_set<std::string> graph_output_names =
         GetGraphOutputNames(graph);
     std::vector<FusionMatch> fusion_matches;
+    // Filled while the whole graph is still visible: Compile() only gets the
+    // fused subgraph, which no longer holds the chain a shape value comes from.
+    FusionShapeExprHints shape_expr_hints;
     if (!DisableAllFusions()) {
-      fusion_matches = FindFusionMatches(all_nodes, graph_output_names);
+      fusion_matches =
+          FindFusionMatches(all_nodes, graph_output_names, &shape_expr_hints);
       if (DisableShapeReshapeFusion()) {
         fusion_matches.erase(
             std::remove_if(fusion_matches.begin(), fusion_matches.end(),
@@ -396,7 +400,9 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
                                     "FindTileConcatFusions";
                            }),
             fusion_matches.end());
+        shape_expr_hints.clear();
       }
+      ep->AddShapeExprHints(std::move(shape_expr_hints));
       RETURN_IF_ERROR(RegisterFusionMatches(ep->ep_api_, graph_support_info,
                                             fusion_matches));
     }

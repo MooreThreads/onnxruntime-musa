@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -100,6 +102,16 @@ bool CollectShapeChain(
   visiting.erase(value_name);
   chain.node_ids.insert(node.GetId());
   return true;
+}
+
+// Same-build A/B switch. With it enabled a Tile whose repeats is not provably
+// shape-only is still fused: the fused kernel reads the repeats tensor once
+// per execution (one device copy plus one read-back) instead of leaving the
+// Tile standalone. Disabled by default so the tree keeps the safe fallback
+// until a measurement round accepts the trade.
+bool RuntimeRepeatsEnabled() {
+  const char* value = std::getenv("ORT_MUSA_TILE_CONCAT_RUNTIME_REPEATS");
+  return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
 }
 
 // The values a fused node declares as inputs. A Shape source has to be one of
@@ -205,7 +217,9 @@ bool CanFuseTileConcat(
     ShapeChain chain;
     std::unordered_set<std::string> visiting;
     if (!CollectShapeChain(repeats, producers, visiting, chain)) {
-      recomputable[i] = false;  // not a shape-only chain
+      // Not a shape-only chain. With the runtime-repeats switch on, keep the
+      // Tile fused and let the kernel read the repeats tensor itself.
+      recomputable[i] = RuntimeRepeatsEnabled();
       continue;
     }
     for (const auto& [name, value_info] : chain.leaves) {
@@ -259,6 +273,11 @@ bool CanFuseTileConcat(
       ShapeExpr expr = BuildShapeExpr(repeats, producers, base_inputs,
                                       initializer_names, initializer_values);
       if (expr.Empty()) {
+        if (RuntimeRepeatsEnabled()) {
+          // A Shape source that is not an input of Tile+Concat: keep the Tile
+          // fused and let the kernel read the repeats once per execution.
+          continue;
+        }
         // A Shape source that is not an input of Tile+Concat cannot be
         // recomputed inside the fusion.
         recomputable[i] = false;

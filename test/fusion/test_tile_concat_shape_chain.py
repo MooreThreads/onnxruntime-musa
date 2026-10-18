@@ -449,3 +449,49 @@ def test_tile_concat_repeats_chain_with_reshape_element_mismatch():
         _session(model, use_musa=False).run(None, feeds)
     with pytest.raises(Exception):
         _session(model, use_musa=True).run(None, feeds)
+
+
+def test_tile_concat_runtime_repeats_switch_fuses_outside_source(
+    tmp_path, monkeypatch
+):
+    """With runtime repeats enabled the outside-source Tile joins the fusion.
+
+    The fused kernel then reads the repeats tensor once per execution instead
+    of leaving the Tile standalone; the result must stay identical.
+    """
+    monkeypatch.setenv("ORT_MUSA_TILE_CONCAT_RUNTIME_REPEATS", "1")
+    rng = np.random.default_rng(42)
+    nodes = [
+        helper.make_node("Shape", ["other"], ["other_shape"]),
+        helper.make_node("Gather", ["other_shape", "zero_scalar"], ["other_dim"], axis=0),
+        helper.make_node("Unsqueeze", ["other_dim", "zero"], ["other_dim_1d"]),
+        helper.make_node("Concat", ["other_dim_1d", "one"], ["repeats"], axis=0),
+        helper.make_node("Tile", ["data", "repeats"], ["tiled"]),
+        helper.make_node("Concat", ["tiled", "query"], ["y_pre"], axis=1),
+        helper.make_node("Relu", ["y_pre"], ["y"]),
+    ]
+    initializers = _batch_chain_initializers()
+    model = _build_model(
+        "tile_concat_runtime_repeats_outside_source",
+        nodes,
+        [
+            helper.make_tensor_value_info("query", TensorProto.FLOAT, [3, 4]),
+            helper.make_tensor_value_info("other", TensorProto.FLOAT, ["m"]),
+        ],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, None)],
+        initializers,
+    )
+    feeds = {
+        "query": rng.standard_normal((3, 4)).astype(np.float32),
+        "other": rng.standard_normal(3).astype(np.float32),
+    }
+    expected = _session(model, use_musa=False).run(None, feeds)[0]
+    musa = _session(
+        model, use_musa=True, profile_prefix=str(tmp_path / "runtime_repeats")
+    )
+    actual = musa.run(None, feeds)[0]
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+    musa_ops = _musa_ops(_read_ops_by_provider(musa))
+    assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
+    assert "Tile" not in musa_ops
+    assert "Concat" not in musa_ops

@@ -67,6 +67,10 @@ struct TileConcatFusionCompute : FusionNodeCompute {
       std::vector<std::vector<int64_t>> shapes;
       std::vector<const void*> input_data;
       std::vector<std::pair<void*, size_t>> temp_buffers;
+      // Runtime repeats shared by several Tiles (a multi-task model's second group
+      // feeds 13 Tiles from one tensor): read the tensor back once per
+      // execution instead of once per Tile.
+      std::unordered_map<size_t, std::vector<int64_t>> repeats_cache;
       shapes.reserve(inputs.size());
       input_data.reserve(inputs.size());
 
@@ -126,7 +130,13 @@ struct TileConcatFusionCompute : FusionNodeCompute {
                   ORT_EP_FAIL,
                   "TileConcat could not recompute the fused Tile repeats");
             }
-            repeats = ReadIntTensor(ctx, input_plan.repeats_input_index);
+            auto cached = repeats_cache.find(input_plan.repeats_input_index);
+            if (cached != repeats_cache.end()) {
+              repeats = cached->second;
+            } else {
+              repeats = ReadIntTensor(ctx, input_plan.repeats_input_index);
+              repeats_cache.emplace(input_plan.repeats_input_index, repeats);
+            }
           }
           if (repeats.size() < input_shape.size()) {
             repeats.insert(repeats.begin(), input_shape.size() - repeats.size(),

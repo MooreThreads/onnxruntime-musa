@@ -37,8 +37,11 @@ def _musa_session(model: bytes) -> ort.InferenceSession:
     return ort.InferenceSession(model, sess_options=options)
 
 
-def test_reshape_may_inplace_reuses_single_consumer_device_output(capfd):
+def test_reshape_may_inplace_reuses_single_consumer_device_output(
+    capfd, monkeypatch
+):
     """Add's device output feeds only Reshape: the buffer can be reused."""
+    monkeypatch.setenv("ORT_MUSA_RESHAPE_TRACE", "1")
     rng = np.random.default_rng(7)
     x = rng.standard_normal((2, 3)).astype(np.float32)
     shape = np.array([3, 2], dtype=np.int64)
@@ -58,12 +61,15 @@ def test_reshape_may_inplace_reuses_single_consumer_device_output(capfd):
     session = _musa_session(model)
     out = session.run(None, {"X": x, "shape": shape})[0]
     err = capfd.readouterr().err
-    np.testing.assert_allclose(out, x + 1.0, rtol=0, atol=0)
+    np.testing.assert_allclose(out, (x + 1.0).reshape(3, 2), rtol=0, atol=0)
     assert "MUSA_RESHAPE inplace=1" in err, err
 
 
-def test_reshape_may_inplace_copies_with_another_consumer(capfd):
+def test_reshape_may_inplace_copies_with_another_consumer(
+    capfd, monkeypatch
+):
     """Add's output has a second consumer, so Reshape must copy."""
+    monkeypatch.setenv("ORT_MUSA_RESHAPE_TRACE", "1")
     rng = np.random.default_rng(8)
     x = rng.standard_normal((2, 3)).astype(np.float32)
     shape = np.array([3, 2], dtype=np.int64)

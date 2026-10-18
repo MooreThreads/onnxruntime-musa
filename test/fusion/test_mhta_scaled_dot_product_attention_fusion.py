@@ -944,7 +944,7 @@ def _mhta_dynamic_end_model(batch, heads, head_dim):
         return helper.make_tensor_value_info(name, elem_type, dims)
 
     nodes = [
-        helper.make_node("Transpose", ["K", "shape_only_perm"], ["KShapeOnly"]),
+        helper.make_node("Transpose", ["K"], ["KShapeOnly"], perm=[0, 1, 3, 2]),
         helper.make_node("Shape", ["KShapeOnly"], ["KShape"]),
         helper.make_node("Gather", ["KShape", "seqlen_index"], ["Seqlen"], axis=0),
         helper.make_node("Unsqueeze", ["Seqlen", "axis0"], ["Ends"]),
@@ -961,7 +961,6 @@ def _mhta_dynamic_end_model(batch, heads, head_dim):
     initializers = [
         numpy_helper.from_array(np.asarray(v, dtype=dtype), name=name)
         for name, v, dtype in [
-            ("shape_only_perm", [0, 1, 3, 2], np.int64),
             ("seqlen_index", np.asarray(2, dtype=np.int64), np.int64),
             ("axis0", [0], np.int64),
             ("starts", [0], np.int64),

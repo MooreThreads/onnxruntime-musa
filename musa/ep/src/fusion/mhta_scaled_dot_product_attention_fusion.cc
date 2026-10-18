@@ -1537,8 +1537,9 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
           end.has_value()) {
         static_mask_end = *end;
       } else {
-        const std::string end_name = Name(slice_it->second.GetInputs()[2]);
-        mask_end_index = InputIndex(fused_indices, end_name);
+        Ort::ConstValueInfo end_value = slice_it->second.GetInputs()[2];
+        const std::string end_name = Name(end_value);
+        mask_end_index = InputIndex(fused_indices, end_value);
         MaskEndCacheHint(mask_end_hints, graph, fused_node, fused_indices,
                          end_name, &mask_end_cacheable,
                          &mask_end_source_indices);

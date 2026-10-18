@@ -14,9 +14,12 @@
 
 `Shape`/`Gather`/`Unsqueeze` arithmetic produces the runtime shapes of a graph.
 Where that arithmetic derives from a device tensor it must not be executed as a
-device-side subgraph: the values belong on the CPU EP, and the operators that
-consume them (`Slice` starts/ends/axes/steps, `Reshape` shape, ...) declare those
-inputs as `OrtMemTypeCPUInput`, exactly like the in-tree CUDA kernels do.
+device-side subgraph: the values belong on the CPU EP, and most operators that
+consume them (`Reshape` shape, `Tile` repeats, ...) declare those inputs as
+`OrtMemTypeCPUInput`, exactly like the in-tree CUDA kernels do. `Slice` no
+longer declares starts/ends/axes/steps; its kernel reads them through
+`ReadIntTensors` on the compute stream, so a device-resident metadata chain is
+read correctly without ORT-inserting a host copy for every execution.
 
 Regression cover for sherpa_whisper_base / campplus_3dspeaker and
 zipformer_encoder_en: with ORT graph optimisation on, their `Slice` received

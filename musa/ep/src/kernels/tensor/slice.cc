@@ -209,13 +209,12 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .AddTypeConstraint("Tind", IntTensorTypes())
-         // starts/ends/axes/steps are shape metadata: keep them in host memory
-         // (the in-tree CUDA kernel declares the same) so ORT orders the
-         // CPU/device boundary itself instead of leaving it inside the kernel.
-         .SetInputMemType(1, OrtMemTypeCPUInput)
-         .SetInputMemType(2, OrtMemTypeCPUInput)
-         .SetInputMemType(3, OrtMemTypeCPUInput)
-         .SetInputMemType(4, OrtMemTypeCPUInput)),
+         // starts/ends/axes/steps are read by ReadIntTensors on the compute
+         // stream, so a device-produced metadata chain needs no per-execution
+         // host copy. Declaring them CPUInput made ORT insert a D2H copy for
+         // every execution, which showed up as six copies per GRU Loop
+         // iteration in dien (300+ per inference).
+         ),
     Slice)
 
 // opset 10 moved starts/ends/axes/steps from attributes to inputs; opset 11
@@ -225,22 +224,14 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Slice, kOnnxDomain, 10, 10,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
-         .AddTypeConstraint("Tind", IntTensorTypes())
-         .SetInputMemType(1, OrtMemTypeCPUInput)
-         .SetInputMemType(2, OrtMemTypeCPUInput)
-         .SetInputMemType(3, OrtMemTypeCPUInput)
-         .SetInputMemType(4, OrtMemTypeCPUInput)),
+         .AddTypeConstraint("Tind", IntTensorTypes())),
     Slice)
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Slice, kOnnxDomain, 11, 12,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
-         .AddTypeConstraint("Tind", IntTensorTypes())
-         .SetInputMemType(1, OrtMemTypeCPUInput)
-         .SetInputMemType(2, OrtMemTypeCPUInput)
-         .SetInputMemType(3, OrtMemTypeCPUInput)
-         .SetInputMemType(4, OrtMemTypeCPUInput)),
+         .AddTypeConstraint("Tind", IntTensorTypes())),
     Slice)
 
 // opset 1-9 keeps starts/ends/axes in node attributes; those schemas do not

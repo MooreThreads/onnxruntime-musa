@@ -35,6 +35,14 @@ using FusionShapeExprHints =
     std::unordered_map<std::string,
                        std::unordered_map<std::string, ShapeExprHint>>;
 
+// Mask-end provenance a finder proved on the whole graph, keyed the same way:
+// boundary signature -> end value name -> names of the fused inputs whose
+// shapes determine that value. Compile() cannot see the end's producer chain
+// and remaps these names to fused input indices.
+using FusionMaskEndHints =
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string, std::vector<std::string>>>;
+
 struct FusionDTypeRejection {
   std::vector<Ort::ConstNode> nodes;
   std::string reason;
@@ -51,7 +59,8 @@ struct FusionMatch {
 std::vector<FusionMatch> FindFusionMatches(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    FusionShapeExprHints* shape_expr_hints = nullptr);
+    FusionShapeExprHints* shape_expr_hints = nullptr,
+    FusionMaskEndHints* mask_end_hints = nullptr);
 
 std::vector<std::vector<Ort::ConstNode>> FindSplitUnsqueezeConcatFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
@@ -178,7 +187,8 @@ std::vector<std::vector<Ort::ConstNode>>
 FindMhtaScaledDotProductAttentionFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& accepted_node_ids);
+    const std::unordered_set<size_t>& accepted_node_ids,
+    FusionMaskEndHints* mask_end_hints = nullptr);
 std::vector<std::vector<Ort::ConstNode>>
 FindQkvAttentionOutputProjectionFusions(
     const std::vector<Ort::ConstNode>& all_nodes,

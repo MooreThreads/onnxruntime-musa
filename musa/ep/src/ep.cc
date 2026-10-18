@@ -380,9 +380,10 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
     // Filled while the whole graph is still visible: Compile() only gets the
     // fused subgraph, which no longer holds the chain a shape value comes from.
     FusionShapeExprHints shape_expr_hints;
+    FusionMaskEndHints mask_end_hints;
     if (!DisableAllFusions()) {
-      fusion_matches =
-          FindFusionMatches(all_nodes, graph_output_names, &shape_expr_hints);
+      fusion_matches = FindFusionMatches(all_nodes, graph_output_names,
+                                         &shape_expr_hints, &mask_end_hints);
       if (DisableShapeReshapeFusion()) {
         fusion_matches.erase(
             std::remove_if(fusion_matches.begin(), fusion_matches.end(),
@@ -403,6 +404,7 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
         shape_expr_hints.clear();
       }
       ep->AddShapeExprHints(std::move(shape_expr_hints));
+      ep->AddMaskEndHints(std::move(mask_end_hints));
       RETURN_IF_ERROR(RegisterFusionMatches(ep->ep_api_, graph_support_info,
                                             fusion_matches));
     }

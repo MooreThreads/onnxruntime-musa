@@ -463,21 +463,7 @@ musa_ep::ShapeExpr RemapShapeExprHint(
 
 std::string TileConcatFusionKey(const std::vector<std::string>& input_names,
                                 const std::vector<std::string>& output_names) {
-  auto normalize = [](std::vector<std::string> names) {
-    names.erase(
-        std::remove_if(names.begin(), names.end(),
-                       [](const std::string& name) { return name.empty(); }),
-        names.end());
-    std::sort(names.begin(), names.end());
-    names.erase(std::unique(names.begin(), names.end()), names.end());
-    std::string key;
-    for (const std::string& name : names) {
-      key += name;
-      key += '\x1e';
-    }
-    return key;
-  };
-  return normalize(input_names) + "|" + normalize(output_names);
+  return FusionBoundaryKey(input_names, output_names);
 }
 
 bool IsTileConcatFusionGraph(Ort::ConstGraph graph) {

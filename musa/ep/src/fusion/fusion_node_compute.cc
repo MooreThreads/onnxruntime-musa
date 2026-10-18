@@ -331,7 +331,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         finder_name = "FindMultiKqvMhaOutputProjectionFusions";
       } else if (IsMhtaScaledDotProductAttentionFusionGraph(graph)) {
         fusion_compute =
-            CreateMhtaScaledDotProductAttentionFusion(graph, fused_node);
+            CreateMhtaScaledDotProductAttentionFusion(graph, fused_node,
+                                                      &ep->MaskEndHints());
         finder_name = "FindMhtaScaledDotProductAttentionFusions";
       } else if (IsQkvAttentionOutputProjectionFusionGraph(graph)) {
         fusion_compute =

@@ -1363,8 +1363,60 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
           lseq_bf16_shd_boundary);
 }
 
+namespace {
+
+// Compile() only holds the fused subgraph, so the matcher's proof that the
+// end is a function of fused input shapes arrives through the hint map. Both
+// sides key it by the same boundary signature.
+void MaskEndCacheHint(
+    const musa_ep::FusionMaskEndHints* hints, Ort::ConstGraph graph,
+    Ort::ConstNode fused_node,
+    const std::unordered_map<std::string, size_t>& fused_indices,
+    const std::string& end_name, bool* cacheable,
+    std::vector<size_t>* source_indices) {
+  *cacheable = false;
+  source_indices->clear();
+  if (hints == nullptr) {
+    return;
+  }
+  std::vector<std::string> input_names;
+  for (Ort::ConstValueInfo input : fused_node.GetInputs()) {
+    input_names.push_back(Name(input));
+  }
+  for (Ort::ConstValueInfo initializer : graph.GetInitializers()) {
+    input_names.push_back(Name(initializer));
+  }
+  std::vector<std::string> output_names;
+  for (Ort::ConstValueInfo output : fused_node.GetOutputs()) {
+    output_names.push_back(Name(output));
+  }
+  auto hint_it =
+      hints->find(musa_ep::FusionBoundaryKey(input_names, output_names));
+  if (hint_it == hints->end()) {
+    return;
+  }
+  auto end_it = hint_it->second.find(end_name);
+  if (end_it == hint_it->second.end() || end_it->second.empty()) {
+    return;
+  }
+  std::vector<size_t> indices;
+  indices.reserve(end_it->second.size());
+  for (const std::string& name : end_it->second) {
+    auto index_it = fused_indices.find(name);
+    if (index_it == fused_indices.end()) {
+      return;
+    }
+    indices.push_back(index_it->second);
+  }
+  *cacheable = true;
+  *source_indices = std::move(indices);
+}
+
+}  // namespace
+
 std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
-    Ort::ConstGraph graph, Ort::ConstNode fused_node) {
+    Ort::ConstGraph graph, Ort::ConstNode fused_node,
+    const musa_ep::FusionMaskEndHints* mask_end_hints) {
   Ort::ConstNode value_matmul{nullptr};
   Ort::ConstNode score_matmul{nullptr};
   Ort::ConstNode mul_node{nullptr};
@@ -1405,11 +1457,6 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
   }
 
   auto fused_indices = FusedInputIndices(fused_node);
-  std::unordered_set<std::string> initializer_names;
-  for (Ort::ConstValueInfo initializer : graph.GetInitializers()) {
-    initializer_names.insert(Name(initializer));
-  }
-
   if (where_nodes.size() == 2) {
     Ort::ConstNode post_where{nullptr};
     for (Ort::ConstNode node : graph.GetNodes()) {
@@ -1490,11 +1537,11 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
           end.has_value()) {
         static_mask_end = *end;
       } else {
-        mask_end_index =
-            InputIndex(fused_indices, slice_it->second.GetInputs()[2]);
-        mask_end_cacheable = musa_ep::ValueDependsOnlyOnInputShapes(
-            Name(slice_it->second.GetInputs()[2]), producers, fused_indices,
-            initializer_names, &mask_end_source_indices);
+        const std::string end_name = Name(slice_it->second.GetInputs()[2]);
+        mask_end_index = InputIndex(fused_indices, end_name);
+        MaskEndCacheHint(mask_end_hints, graph, fused_node, fused_indices,
+                         end_name, &mask_end_cacheable,
+                         &mask_end_source_indices);
         // One line per fused raw-INT32-mask attention node at session
         // creation: 0 means the end is read from the device every run.
         std::fprintf(stderr,

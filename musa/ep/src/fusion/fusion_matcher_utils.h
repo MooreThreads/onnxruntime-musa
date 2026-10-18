@@ -62,9 +62,13 @@ bool HasCastBoundary(const std::vector<Ort::ConstNode>& fusion_nodes);
 // Returns true when `value_name` is produced only from shape arithmetic:
 // constants, plus Shape ops over inputs of the current fusion. The output is
 // then a pure function of the shapes of the fused inputs listed in
-// `source_indices` (empty means the value is constant). Anything that could
-// make the value depend on data, on a tensor outside the fusion, or on an op
-// that is not shape-only returns false.
+// `source_indices` (empty means the value is constant). A Shape whose source
+// is not itself a fused input is accepted when the source is reached from one
+// through shape-preserving ops only (Transpose with a perm attribute, Cast,
+// Identity): its output shape, and therefore the Shape value, is still a pure
+// function of those inputs' shapes. Anything that could make the value depend
+// on data, on a tensor outside the fusion by another path, or on an op that is
+// not shape-only returns false.
 bool ValueDependsOnlyOnInputShapes(
     const std::string& value_name,
     const std::unordered_map<std::string, Ort::ConstNode>& producers,

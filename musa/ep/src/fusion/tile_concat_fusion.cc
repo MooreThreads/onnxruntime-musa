@@ -27,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "fusion/fusion_matcher_utils.h"
 #include "fusion/shape_expr.h"
 #include "kernels/shared_inc/op_kernel_common.h"
 #include "kernels/tensor/concat_impl.h"

@@ -981,7 +981,7 @@ def _mhta_dynamic_end_model(batch, heads, head_dim):
             vi("V", TensorProto.FLOAT, [batch, heads, "seqlen", head_dim]),
             vi("RawMask", TensorProto.INT32, [batch, 1, "mask_rows", "mask_cols"]),
         ],
-        [vi("Y", TensorProto.FLOAT, None)],
+        [vi("Y", TensorProto.FLOAT, [batch, heads, "seqlen", head_dim])],
         initializer=initializers,
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])

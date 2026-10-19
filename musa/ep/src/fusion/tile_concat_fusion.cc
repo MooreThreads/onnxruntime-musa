@@ -72,6 +72,10 @@ struct TileConcatFusionCompute : FusionNodeCompute {
       // feeds 13 Tiles from one tensor): read the tensor back once per
       // execution instead of once per Tile.
       std::unordered_map<size_t, std::vector<int64_t>> repeats_cache;
+      // Each repeats input has one expression and one set of source indices.
+      // Reuse successful evaluations only within this Compute: source shapes
+      // can change on the next run, and failures must keep the tensor fallback.
+      std::unordered_map<size_t, std::vector<int64_t>> expr_repeats_cache;
       shapes.reserve(inputs.size());
       input_data.reserve(inputs.size());
 
@@ -114,15 +118,27 @@ struct TileConcatFusionCompute : FusionNodeCompute {
           std::vector<int64_t> repeats;
           bool recomputed = false;
           if (!input_plan.repeats_expr.Empty()) {
-            std::vector<std::vector<int64_t>> source_shapes;
-            source_shapes.reserve(
-                input_plan.repeats_expr.source_input_indices.size());
-            for (size_t index : input_plan.repeats_expr.source_input_indices) {
-              source_shapes.push_back(
-                  ctx.GetInput(index).GetTensorTypeAndShapeInfo().GetShape());
+            auto cached =
+                expr_repeats_cache.find(input_plan.repeats_input_index);
+            if (cached != expr_repeats_cache.end()) {
+              repeats = cached->second;
+              recomputed = true;
+            } else {
+              std::vector<std::vector<int64_t>> source_shapes;
+              source_shapes.reserve(
+                  input_plan.repeats_expr.source_input_indices.size());
+              for (size_t index :
+                   input_plan.repeats_expr.source_input_indices) {
+                source_shapes.push_back(
+                    ctx.GetInput(index).GetTensorTypeAndShapeInfo().GetShape());
+              }
+              recomputed = musa_ep::EvaluateShapeExpr(input_plan.repeats_expr,
+                                                      source_shapes, &repeats);
+              if (recomputed) {
+                expr_repeats_cache.emplace(input_plan.repeats_input_index,
+                                           repeats);
+              }
             }
-            recomputed = musa_ep::EvaluateShapeExpr(input_plan.repeats_expr,
-                                                    source_shapes, &repeats);
           }
           if (!recomputed) {
             if (input_plan.repeats_input_index == kNoInputIndex) {

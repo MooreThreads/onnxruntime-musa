@@ -495,3 +495,66 @@ def test_tile_concat_runtime_repeats_switch_fuses_outside_source(
     assert any(str(op).startswith("MUSAExecutionProvider_") for op in musa_ops)
     assert "Tile" not in musa_ops
     assert "Concat" not in musa_ops
+
+
+@pytest.mark.parametrize("trace_enabled", [False, True])
+def test_tile_concat_repeats_shared_expression_cache(
+    tmp_path, capfd, monkeypatch, trace_enabled
+):
+    """Two Tiles share one evaluation per run; a new batch recomputes it."""
+    if trace_enabled:
+        monkeypatch.setenv("ORT_MUSA_TILE_CONCAT_EXPR_TRACE", "1")
+    else:
+        monkeypatch.delenv("ORT_MUSA_TILE_CONCAT_EXPR_TRACE", raising=False)
+    monkeypatch.delenv("ORT_MUSA_TILE_CONCAT_RUNTIME_REPEATS", raising=False)
+    nodes = [
+        helper.make_node("Shape", ["query"], ["query_shape"]),
+        helper.make_node("Gather", ["query_shape", "zero_scalar"], ["batch"], axis=0),
+        helper.make_node("Reshape", ["batch", "one_shape"], ["batch_1d"]),
+        helper.make_node("Concat", ["batch_1d", "one"], ["repeats"], axis=0),
+        helper.make_node("Tile", ["data", "repeats"], ["tiled"]),
+        helper.make_node("Tile", ["data2", "repeats"], ["tiled2"]),
+        helper.make_node("Concat", ["tiled", "tiled2", "query"], ["y_pre"], axis=1),
+        helper.make_node("Relu", ["y_pre"], ["y"]),
+    ]
+    initializers = _batch_chain_initializers() + [
+        _int64_initializer("one_shape", [1]),
+        _float_initializer("data2", np.arange(4, dtype=np.float32) + 10, (1, 4)),
+    ]
+    model = _build_model(
+        "tile_concat_shared_repeats_expression_cache",
+        nodes,
+        [helper.make_tensor_value_info("query", TensorProto.FLOAT, ["batch", 4])],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, None)],
+        initializers,
+    )
+    cpu = _session(model, use_musa=False)
+    musa = _session(
+        model, use_musa=True, profile_prefix=str(tmp_path / "shared_expression")
+    )
+    musa.disable_fallback()
+    factory_lines = [
+        line
+        for line in capfd.readouterr().err.splitlines()
+        if REPEATS_DIAGNOSTIC in line
+    ]
+    assert len(factory_lines) == 2
+    assert all(RECOMPUTED_DIAGNOSTIC in line for line in factory_lines)
+    rng = np.random.default_rng(47)
+    for batch in (3, 5):
+        feeds = {"query": rng.standard_normal((batch, 4)).astype(np.float32)}
+        expected = cpu.run(None, feeds)[0]
+        actual = musa.run(None, feeds)[0]
+        np.testing.assert_array_equal(actual, expected)
+        assert actual.shape == (batch, 12)
+        trace_lines = [
+            line
+            for line in capfd.readouterr().err.splitlines()
+            if "MUSA_TILE_CONCAT_EXPR_EVALS" in line
+        ]
+        expected_trace = "MUSA_TILE_CONCAT_EXPR_EVALS evals=1 distinct=1"
+        assert trace_lines == ([expected_trace] if trace_enabled else [])
+    ops = _read_ops_by_provider(musa)
+    assert _fused_ops(ops)
+    assert "Tile" not in _musa_ops(ops)
+    assert "Concat" not in _musa_ops(ops)

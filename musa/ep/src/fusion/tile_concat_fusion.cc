@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <limits>
 #include <mutex>
@@ -61,6 +62,31 @@ struct TileConcatFusionCompute : FusionNodeCompute {
       : axis(axis), output_index(output_index), inputs(std::move(inputs)) {}
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override {
+    // The guard reports every exit, including errors and empty outputs. With
+    // tracing off it neither counts evaluations nor allocates a distinct set.
+    struct ExprTrace {
+      bool enabled;
+      size_t evals = 0;
+      std::unordered_set<size_t> distinct;
+
+      void Record(size_t repeats_index) {
+        if (enabled) {
+          ++evals;
+          distinct.insert(repeats_index);
+        }
+      }
+
+      ~ExprTrace() {
+        if (enabled) {
+          std::fprintf(stderr,
+                       "MUSA_TILE_CONCAT_EXPR_EVALS evals=%zu distinct=%zu\n",
+                       evals, distinct.size());
+        }
+      }
+    };
+    const char* trace_env = std::getenv("ORT_MUSA_TILE_CONCAT_EXPR_TRACE");
+    ExprTrace expr_trace{trace_env != nullptr && trace_env[0] == '1' &&
+                         trace_env[1] == '\0'};
     try {
       Ort::KernelContext ctx(kernel_context);
       musaStream_t stream = GetComputeStream(ctx);
@@ -132,6 +158,7 @@ struct TileConcatFusionCompute : FusionNodeCompute {
                 source_shapes.push_back(
                     ctx.GetInput(index).GetTensorTypeAndShapeInfo().GetShape());
               }
+              expr_trace.Record(input_plan.repeats_input_index);
               recomputed = musa_ep::EvaluateShapeExpr(input_plan.repeats_expr,
                                                       source_shapes, &repeats);
               if (recomputed) {

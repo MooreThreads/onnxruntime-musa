@@ -130,6 +130,86 @@ musaError_t LaunchMaxPoolTyped(const void* input, void* output,
   return musaGetLastError();
 }
 
+// Sums the window and divides by the number of elements it averages: the
+// kernel window itself when count_include_pad is set (padding contributes 0),
+// otherwise the number of window positions that land inside the input.
+template <typename T, typename AccT>
+__global__ void AveragePoolKernel(const T* input, T* output,
+                                  MusaAveragePoolParams params) {
+  const int64_t thread_id =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t total_threads = static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t output_index = thread_id; output_index < params.output_elements;
+       output_index += total_threads) {
+    int64_t remaining = output_index;
+    int64_t output_coord[kMusaMaxBroadcastRank];
+    for (int32_t dim = 0; dim < params.rank; ++dim) {
+      const int64_t stride = params.output_strides[dim];
+      output_coord[dim] = stride == 0 ? 0 : remaining / stride;
+      remaining -= output_coord[dim] * stride;
+    }
+
+    int64_t base_input_offset = 0;
+    for (int32_t dim = 0; dim < 2; ++dim) {
+      base_input_offset += output_coord[dim] * params.input_strides[dim];
+    }
+
+    const int32_t spatial_rank = params.spatial_rank;
+    int64_t kernel_elements = 1;
+    for (int32_t dim = 0; dim < spatial_rank; ++dim) {
+      kernel_elements *= params.kernel_shape[dim];
+    }
+
+    AccT sum = static_cast<AccT>(0);
+    int64_t in_input_count = 0;
+    for (int64_t kernel_index = 0; kernel_index < kernel_elements;
+         ++kernel_index) {
+      int64_t kernel_remaining = kernel_index;
+      int64_t input_offset = base_input_offset;
+      bool in_input = true;
+      for (int32_t dim = spatial_rank - 1; dim >= 0; --dim) {
+        const int64_t kernel_dim = params.kernel_shape[dim];
+        const int64_t k_coord = kernel_remaining % kernel_dim;
+        kernel_remaining /= kernel_dim;
+        const int32_t full_dim = dim + 2;
+        const int64_t in_coord = output_coord[full_dim] * params.strides[dim] -
+                                 params.pads_begin[dim] + k_coord;
+        if (in_coord < 0 || in_coord >= params.input_dims[full_dim]) {
+          in_input = false;
+          break;
+        }
+        input_offset += in_coord * params.input_strides[full_dim];
+      }
+      if (!in_input) {
+        continue;
+      }
+      sum += static_cast<AccT>(MusaScalarToDouble(input[input_offset]));
+      ++in_input_count;
+    }
+
+    const int64_t divisor =
+        params.count_include_pad != 0 ? kernel_elements : in_input_count;
+    const AccT averaged =
+        divisor == 0 ? static_cast<AccT>(0)
+                     : sum / static_cast<AccT>(divisor);
+    output[output_index] = MusaScalarFromDouble<T>(static_cast<double>(averaged));
+  }
+}
+
+template <typename T, typename AccT>
+musaError_t LaunchAveragePoolTyped(const void* input, void* output,
+                                   MusaAveragePoolParams params,
+                                   musaStream_t stream) {
+  if (params.output_elements == 0) {
+    return musaSuccess;
+  }
+  AveragePoolKernel<T, AccT>
+      <<<BlocksForCount(params.output_elements), kThreadsPerBlock, 0, stream>>>(
+          reinterpret_cast<const T*>(input), reinterpret_cast<T*>(output),
+          params);
+  return musaGetLastError();
+}
+
 }  // namespace
 
 musaError_t LaunchMusaGlobalAveragePoolKernel(
@@ -166,6 +246,25 @@ musaError_t LaunchMusaMaxPoolKernel(const void* input, void* output,
     case MusaElementType::Uint8:
       return LaunchMaxPoolTyped<uint8_t>(input, output, indices, params,
                                          stream);
+    default:
+      return musaErrorNotSupported;
+  }
+}
+
+musaError_t LaunchMusaAveragePoolKernel(const void* input, void* output,
+                                        MusaAveragePoolParams params,
+                                        MusaElementType elem_type,
+                                        musaStream_t stream) {
+  switch (elem_type) {
+    case MusaElementType::Float:
+      return LaunchAveragePoolTyped<float, double>(input, output, params,
+                                                   stream);
+    case MusaElementType::Double:
+      return LaunchAveragePoolTyped<double, double>(input, output, params,
+                                                    stream);
+    case MusaElementType::Float16:
+      return LaunchAveragePoolTyped<__half, float>(input, output, params,
+                                                   stream);
     default:
       return musaErrorNotSupported;
   }

@@ -283,4 +283,180 @@ bool HasCastBoundary(const std::vector<Ort::ConstNode>& fusion_nodes) {
   return false;
 }
 
+// Ops whose output shape is a pure function of their input shapes. A Shape
+// node reading their output can therefore be keyed on the shapes of the fused
+// inputs that feed them, without the fused node taking a new input.
+bool IsShapePreservingDataOp(const std::string& op) {
+  return op == "Transpose" || op == "Cast" || op == "Identity";
+}
+
+// Walk from `value_name` through shape-preserving producers to the fused
+// inputs that determine its shape. Returns false when the walk leaves the
+// fused boundary through anything whose output shape is data-dependent.
+bool CollectShapePreservingSources(
+    const std::string& value_name,
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    const std::unordered_map<std::string, size_t>& input_indices,
+    const std::unordered_set<std::string>& initializer_names,
+    std::unordered_set<size_t>* sources) {
+  // A value can also be pinned down from the other side: when another
+  // Transpose reads the *same* value and produces one of the fusion's inputs,
+  // that input's shape is this value's shape under a fixed permutation (every
+  // valid ONNX Transpose perm is invertible), so it can key the cache too.
+  std::unordered_map<std::string, std::vector<Ort::ConstNode>> consumers;
+  for (const auto& [output, producer] : producers) {
+    for (Ort::ConstValueInfo input : producer.GetInputs()) {
+      const std::string input_name = input.GetName();
+      if (!input_name.empty()) {
+        consumers[input_name].push_back(producer);
+      }
+    }
+  }
+
+  std::vector<std::string> pending{value_name};
+  std::unordered_set<std::string> visited;
+  while (!pending.empty()) {
+    const std::string name = std::move(pending.back());
+    pending.pop_back();
+    if (!visited.insert(name).second) {
+      continue;
+    }
+    auto index_it = input_indices.find(name);
+    if (index_it != input_indices.end()) {
+      sources->insert(index_it->second);
+      continue;
+    }
+    if (initializer_names.count(name) != 0) {
+      continue;  // a constant's shape is static and needs no runtime key
+    }
+    bool keyed_from_consumer = false;
+    auto consumer_it = consumers.find(name);
+    if (consumer_it != consumers.end()) {
+      for (Ort::ConstNode consumer : consumer_it->second) {
+        if (!IsOnnxOp(consumer, "Transpose") ||
+            consumer.GetInputs().size() != 1) {
+          continue;
+        }
+        for (Ort::ConstValueInfo output : consumer.GetOutputs()) {
+          auto fused_it = input_indices.find(Name(output));
+          if (fused_it != input_indices.end()) {
+            sources->insert(fused_it->second);
+            keyed_from_consumer = true;
+          }
+        }
+        if (keyed_from_consumer) {
+          break;
+        }
+      }
+    }
+    if (keyed_from_consumer) {
+      continue;
+    }
+    auto producer_it = producers.find(name);
+    if (producer_it == producers.end()) {
+      return false;
+    }
+    Ort::ConstNode node = producer_it->second;
+    if (!IsShapePreservingDataOp(node.GetOperatorType())) {
+      return false;
+    }
+    for (Ort::ConstValueInfo input : node.GetInputs()) {
+      const std::string input_name = input.GetName();
+      if (!input_name.empty()) {
+        pending.push_back(input_name);
+      }
+    }
+  }
+  return true;
+}
+
+std::string FusionBoundaryKey(const std::vector<std::string>& input_names,
+                              const std::vector<std::string>& output_names) {
+  auto normalize = [](std::vector<std::string> names) {
+    names.erase(
+        std::remove_if(names.begin(), names.end(),
+                       [](const std::string& name) { return name.empty(); }),
+        names.end());
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    std::string key;
+    for (const std::string& name : names) {
+      key += name;
+      key += '\x1e';
+    }
+    return key;
+  };
+  return normalize(input_names) + "|" + normalize(output_names);
+}
+
+bool ValueDependsOnlyOnInputShapes(
+    const std::string& value_name,
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    const std::unordered_map<std::string, size_t>& input_indices,
+    const std::unordered_set<std::string>& initializer_names,
+    std::vector<size_t>* source_indices) {
+  // Ops that only reshape or combine shape values. Reshape is included because
+  // its output shape is fixed by its (constant) shape input; a data dependency
+  // would surface as a non-initializer leaf and be rejected below.
+  static const std::unordered_set<std::string> kShapeOnlyOps = {
+      "Gather",   "Unsqueeze", "Squeeze",   "Concat",  "Add",
+      "Sub",      "Mul",       "Div",       "Cast",    "Slice",
+      "Identity", "Mod",       "Floor",     "Ceil",    "Reshape",
+      "ReduceProd", "Constant", "ConstantOfShape"};
+  std::vector<std::string> pending{value_name};
+  std::unordered_set<std::string> visited;
+  std::unordered_set<size_t> sources;
+  while (!pending.empty()) {
+    const std::string name = std::move(pending.back());
+    pending.pop_back();
+    if (!visited.insert(name).second) {
+      continue;
+    }
+    auto producer_it = producers.find(name);
+    if (producer_it == producers.end()) {
+      // A leaf must be a constant. A graph input or fused data input used as a
+      // value would make the result data-dependent.
+      if (initializer_names.count(name) == 0) {
+        return false;
+      }
+      continue;
+    }
+    Ort::ConstNode node = producer_it->second;
+    const std::string op = node.GetOperatorType();
+    std::vector<Ort::ConstValueInfo> node_inputs = node.GetInputs();
+    if (op == "Shape") {
+      if (node_inputs.size() != 1) {
+        return false;
+      }
+      const std::string source = node_inputs[0].GetName();
+      auto index_it = input_indices.find(source);
+      if (index_it == input_indices.end()) {
+        // Shape of a constant is constant and needs no runtime key. Otherwise
+        // follow shape-preserving producers (a Transpose kept only for its
+        // shape, for example) back to the fused inputs that determine it.
+        if (initializer_names.count(source) == 0 &&
+            !CollectShapePreservingSources(source, producers, input_indices,
+                                           initializer_names, &sources)) {
+          return false;
+        }
+      } else {
+        sources.insert(index_it->second);
+      }
+      continue;
+    }
+    if (kShapeOnlyOps.count(op) == 0) {
+      return false;
+    }
+    for (Ort::ConstValueInfo input : node_inputs) {
+      const std::string input_name = input.GetName();
+      if (!input_name.empty()) {
+        pending.push_back(input_name);
+      }
+    }
+  }
+  source_indices->assign(sources.begin(), sources.end());
+  std::sort(source_indices->begin(), source_indices->end());
+  return true;
+}
+
 }  // namespace musa_ep

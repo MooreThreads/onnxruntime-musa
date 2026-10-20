@@ -155,6 +155,20 @@ OrtStatus* Gather::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Gather, kOnnxDomain, 1, 10,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
+         .AddTypeConstraint("Tind", IntTensorTypes())),
+    Gather)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Gather, kOnnxDomain, 11, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
+         .AddTypeConstraint("Tind", IntTensorTypes())),
+    Gather)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Gather, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())

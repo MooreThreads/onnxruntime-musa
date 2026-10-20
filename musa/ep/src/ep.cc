@@ -28,6 +28,7 @@
 #include "ep_stream.h"
 #include "fusion/fusion_matcher.h"
 #include "fusion/fusion_node_compute.h"
+#include "graph/capability_predicates.h"
 #include "graph/cpu_preferred_nodes.h"
 #include "graph_mermaid_dump.h"
 #include "plugin_ep_utils.h"
@@ -57,6 +58,15 @@ bool DisableAllFusions() {
 bool DisableShapeReshapeFusion() {
   static const bool disabled =
       EnvFlagEnabled("ORT_MUSA_DISABLE_SHAPE_RESHAPE_FUSION");
+  return disabled;
+}
+
+// Same-submit A/B switch: disabling only stops the matcher from claiming
+// Tile+Concat nodes, so a latency difference under one binary can be attributed
+// to the fusion itself instead of to a different build.
+bool DisableTileConcatFusion() {
+  static const bool disabled =
+      EnvFlagEnabled("ORT_MUSA_DISABLE_TILE_CONCAT_FUSION");
   return disabled;
 }
 
@@ -237,7 +247,11 @@ OrtStatus* CollectSupportedNodeCandidates(
     const OrtKernelDef* kernel_def = nullptr;
     RETURN_IF_ERROR(ep_api.EpGraphSupportInfo_LookUpKernel(graph_support_info,
                                                            node, &kernel_def));
-    if (kernel_def != nullptr) {
+    // The registry only matches op/domain/opset/dtype, so ask the per-operator
+    // predicate as well: a kernel that implements a subset of the ONNX
+    // configurations must not claim the nodes it cannot run, or they would
+    // fail during Compute() instead of running on the CPU EP.
+    if (kernel_def != nullptr && IsNodeConfigurationSupported(node)) {
       candidates.nodes.push_back(node);
       candidates.tentative_nodes.push_back(node);
     }
@@ -363,8 +377,13 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
     std::unordered_set<std::string> graph_output_names =
         GetGraphOutputNames(graph);
     std::vector<FusionMatch> fusion_matches;
+    // Filled while the whole graph is still visible: Compile() only gets the
+    // fused subgraph, which no longer holds the chain a shape value comes from.
+    FusionShapeExprHints shape_expr_hints;
+    FusionMaskEndHints mask_end_hints;
     if (!DisableAllFusions()) {
-      fusion_matches = FindFusionMatches(all_nodes, graph_output_names);
+      fusion_matches = FindFusionMatches(all_nodes, graph_output_names,
+                                         &shape_expr_hints, &mask_end_hints);
       if (DisableShapeReshapeFusion()) {
         fusion_matches.erase(
             std::remove_if(fusion_matches.begin(), fusion_matches.end(),
@@ -374,6 +393,18 @@ MusaEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGraph* ort_graph,
                            }),
             fusion_matches.end());
       }
+      if (DisableTileConcatFusion()) {
+        fusion_matches.erase(
+            std::remove_if(fusion_matches.begin(), fusion_matches.end(),
+                           [](const FusionMatch& match) {
+                             return std::string(match.finder) ==
+                                    "FindTileConcatFusions";
+                           }),
+            fusion_matches.end());
+        shape_expr_hints.clear();
+      }
+      ep->AddShapeExprHints(std::move(shape_expr_hints));
+      ep->AddMaskEndHints(std::move(mask_end_hints));
       RETURN_IF_ERROR(RegisterFusionMatches(ep->ep_api_, graph_support_info,
                                             fusion_matches));
     }

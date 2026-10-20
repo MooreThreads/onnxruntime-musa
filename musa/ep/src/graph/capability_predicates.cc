@@ -1,0 +1,230 @@
+// Copyright (c) Moore Threads Technology Co., Ltd. All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "graph/capability_predicates.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "activation/gelu_support.h"
+#include "graph/graph_utils.h"
+#include "nn/average_pool_support.h"
+#include "tensor/resize_support.h"
+
+namespace musa_ep {
+namespace {
+
+/// Reads a constant float initializer. Returns nullopt when the value is not a
+/// constant float tensor, i.e. when only the runtime kernel can judge it.
+std::optional<std::vector<float>> ReadConstantFloatTensor(
+    Ort::ConstValueInfo value_info) {
+  if (value_info == nullptr || !value_info.IsConstantInitializer()) {
+    return std::nullopt;
+  }
+
+  Ort::ConstValue value{nullptr};
+  Ort::Status status = value_info.GetInitializer(value);
+  if (!status.IsOK() || !value) {
+    return std::nullopt;
+  }
+
+  const auto info = value.GetTensorTypeAndShapeInfo();
+  if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    return std::nullopt;
+  }
+  const size_t element_count = static_cast<size_t>(info.GetElementCount());
+  if (element_count == 0) {
+    return std::vector<float>();
+  }
+  const float* data = value.GetTensorData<float>();
+  return std::vector<float>(data, data + element_count);
+}
+
+/// Element count of a constant initializer, or nullopt when the tensor only
+/// exists at run time.
+std::optional<int64_t> ConstantTensorElementCount(
+    Ort::ConstValueInfo value_info) {
+  if (value_info == nullptr || !value_info.IsConstantInitializer()) {
+    return std::nullopt;
+  }
+
+  Ort::ConstValue value{nullptr};
+  Ort::Status status = value_info.GetInitializer(value);
+  if (!status.IsOK() || !value) {
+    return std::nullopt;
+  }
+
+  return value.GetTensorTypeAndShapeInfo().GetElementCount();
+}
+
+/// True when the node leaves the optional input at \p index unused, which is
+/// the case when it is omitted or when the graph fills it with a zero-element
+/// constant: exporters that drive Resize through `sizes` commonly pass an empty
+/// `roi` and `scales` initializer next to it, and the kernel reads those as
+/// absent as well. A run-time tensor is assumed to be used, because only the
+/// kernel can see its element count.
+bool InputUnused(const std::vector<Ort::ConstValueInfo>& inputs, size_t index) {
+  if (inputs.size() <= index || inputs[index] == nullptr) {
+    return true;
+  }
+  return ResizeInputUnused(ConstantTensorElementCount(inputs[index]));
+}
+
+/// True when the MUSA Resize kernel can run this node. Attribute values, which
+/// optional input is supplied and the type, rank and shape of X decide the
+/// answer for every node; the values of the roi/scales/sizes tensors are
+/// checked as well when the graph carries them as constant initializers, and
+/// are otherwise left to the kernel.
+bool ResizeConfigurationSupported(Ort::ConstNode node) {
+  ResizeRouteConfig config;
+  config.mode = GetStringAttribute(node, "mode").value_or(kResizeDefaultMode);
+  config.coordinate_transformation_mode =
+      GetStringAttribute(node, "coordinate_transformation_mode")
+          .value_or(kResizeDefaultCoordinateTransformationMode);
+  config.nearest_mode = GetStringAttribute(node, "nearest_mode")
+                            .value_or(kResizeDefaultNearestMode);
+
+  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+  if (inputs.empty() || inputs[0] == nullptr) {
+    return false;
+  }
+  config.has_scales_input = !InputUnused(inputs, 2);
+  config.has_sizes_input = !InputUnused(inputs, 3);
+
+  const Ort::ConstTypeInfo input_type = inputs[0].TypeInfo();
+  if (input_type.GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+  const auto input_info = input_type.GetTensorTypeAndShapeInfo();
+  config.input_rank = static_cast<int64_t>(input_info.GetShape().size());
+  config.input_element_type = input_info.GetElementType();
+  if (ResizeRouteRejection(config) != nullptr) {
+    return false;
+  }
+
+  ResizeRouteValues values;
+  if (inputs.size() > 1) {
+    values.roi_element_count = ConstantTensorElementCount(inputs[1]);
+  }
+  if (config.has_scales_input) {
+    values.scales = ReadConstantFloatTensor(inputs[2]);
+  }
+  if (config.has_sizes_input) {
+    values.sizes = ReadIntInitializerNoLimit(inputs[3]);
+  }
+  values.input_shape = GetStaticShape(inputs[0]);
+  return ResizeRouteValueRejection(config, values) == nullptr;
+}
+
+/// True when the MUSA Slice kernel can run this node.
+///
+/// The device copy walks every slice with a positive step, so the kernel
+/// rejects a non-positive `steps` entry - leaving those nodes on the CPU EP is
+/// better than a node that fails during Compute(). `steps` is the fourth input
+/// of the opset-10 schema and does not exist before opset 10 (the older
+/// schemas have no steps at all). A `steps` tensor that is not a constant
+/// initializer is a run-time value the kernel has to judge, exactly like the
+/// Resize values above.
+bool SliceConfigurationSupported(Ort::ConstNode node) {
+  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+  constexpr size_t kStepsInputIndex = 4;
+  if (inputs.size() <= kStepsInputIndex ||
+      inputs[kStepsInputIndex] == nullptr) {
+    return true;
+  }
+  const std::optional<std::vector<int64_t>> steps =
+      ReadIntInitializerNoLimit(inputs[kStepsInputIndex]);
+  if (!steps.has_value()) {
+    return true;
+  }
+  return std::all_of(steps->begin(), steps->end(),
+                     [](int64_t step) { return step > 0; });
+}
+
+/// True when the MUSA Gelu kernel can run this node.
+///
+/// The route implements the exact erf form. The ONNX Gelu carries
+/// `approximate` as a string, the com.microsoft Gelu as an int (0 = exact,
+/// 1 = tanh); a node asking for the tanh approximation stays on the CPU EP.
+bool GeluConfigurationSupported(Ort::ConstNode node) {
+  std::string approximate = kGeluDefaultApproximate;
+  if (std::optional<std::string> value =
+          GetStringAttribute(node, "approximate");
+      value.has_value()) {
+    approximate = *value;
+  } else if (std::optional<int64_t> value =
+                 GetIntAttribute(node, "approximate");
+             value.has_value()) {
+    approximate = *value == 0 ? kGeluDefaultApproximate : "tanh";
+  }
+  return GeluApproximateRejection(approximate) == nullptr;
+}
+
+/// True when the MUSA AveragePool kernel can run this node.
+///
+/// The kernel covers the auto_pad modes, count_include_pad and the attribute
+/// pads, but not ceil_mode, and it is a device pooling route limited to the
+/// rank and element types the shared route definition lists. A node the route
+/// rejects stays on the CPU EP, where it ran before the kernel was registered.
+bool AveragePoolConfigurationSupported(Ort::ConstNode node) {
+  musa_ep::AveragePoolRouteConfig config;
+  config.auto_pad =
+      GetStringAttribute(node, "auto_pad").value_or(kAveragePoolDefaultAutoPad);
+  config.ceil_mode = GetIntAttribute(node, "ceil_mode").value_or(0);
+  config.count_include_pad =
+      GetIntAttribute(node, "count_include_pad").value_or(0);
+  config.kernel_shape =
+      GetIntsAttribute(node, "kernel_shape").value_or(std::vector<int64_t>{});
+  config.pads = GetIntsAttribute(node, "pads").value_or(std::vector<int64_t>{});
+  config.strides =
+      GetIntsAttribute(node, "strides").value_or(std::vector<int64_t>{});
+
+  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+  if (inputs.empty() || inputs[0] == nullptr) {
+    return false;
+  }
+  const Ort::ConstTypeInfo input_type = inputs[0].TypeInfo();
+  if (input_type.GetONNXType() != ONNX_TYPE_TENSOR) {
+    return false;
+  }
+  const auto input_info = input_type.GetTensorTypeAndShapeInfo();
+  config.input_rank = static_cast<int64_t>(input_info.GetShape().size());
+  config.input_element_type = input_info.GetElementType();
+  return AveragePoolRouteRejection(config) == nullptr;
+}
+
+}  // namespace
+
+bool IsNodeConfigurationSupported(Ort::ConstNode node) {
+  if (IsOnnxOp(node, "Resize")) {
+    return ResizeConfigurationSupported(node);
+  }
+  if (IsOnnxOp(node, "Slice")) {
+    return SliceConfigurationSupported(node);
+  }
+  if (IsOnnxOp(node, "AveragePool")) {
+    return AveragePoolConfigurationSupported(node);
+  }
+  // Gelu is an official ONNX operator from opset 20 on, and the plugin also
+  // registers the com.microsoft Gelu (same semantics, int approximation).
+  if (node.GetOperatorType() == "Gelu" &&
+      (IsOnnxDomain(node.GetDomain()) || node.GetDomain() == "com.microsoft")) {
+    return GeluConfigurationSupported(node);
+  }
+  return true;
+}
+
+}  // namespace musa_ep

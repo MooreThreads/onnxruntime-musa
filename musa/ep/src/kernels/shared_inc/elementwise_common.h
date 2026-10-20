@@ -173,10 +173,20 @@ inline OrtStatus* UnaryDeviceCompute(Ort::KernelContext& ctx,
                                      float alpha = 0.0f) {
   Ort::ConstValue input = ctx.GetInput(0);
   MusaElementType musa_elem_type;
-  if (!ToMusaElementType(elem_type, musa_elem_type) ||
-      !IsGpuMemory(input.GetTensorMemoryInfo())) {
+  if (!ToMusaElementType(elem_type, musa_elem_type)) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }
+
+  const bool input_is_gpu = IsGpuMemory(input.GetTensorMemoryInfo());
+  if (!input_is_gpu && device_op == MusaUnaryOp::Relu &&
+      std::getenv("ORT_MUSA_TEST_FAIL_RELU_CPU_INPUT") != nullptr) {
+    return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                      "test-only Relu CPU-input route reached");
+  }
+
+  musaStream_t stream = GetComputeStream(ctx);
+  DeviceInputBuffer input_buffer;
+  RETURN_IF_ERROR(input_buffer.Bind(input, stream));
 
   Ort::UnownedValue y = ctx.GetOutput(0, shape);
   if (!IsGpuMemory(y.GetTensorMemoryInfo())) {
@@ -184,8 +194,8 @@ inline OrtStatus* UnaryDeviceCompute(Ort::KernelContext& ctx,
   }
 
   musaError_t status = LaunchMusaUnaryKernel(
-      input.GetTensorRawData(), y.GetTensorMutableRawData(), NumElements(shape),
-      device_op, alpha, musa_elem_type, GetComputeStream(ctx));
+      input_buffer.data(), y.GetTensorMutableRawData(), NumElements(shape),
+      device_op, alpha, musa_elem_type, stream);
   if (status == musaErrorNotSupported) {
     return UnsupportedDeviceElementwiseStatus(op_name, elem_type);
   }

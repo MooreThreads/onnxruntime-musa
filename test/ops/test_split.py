@@ -14,12 +14,15 @@
 
 import numpy as np
 import pytest
+from onnx import helper
 
 from op_test_utils import (
     TensorProto,
+    build_graph_model,
     build_model_with_input_types,
     float32_to_bfloat16_bits,
     run_and_compare,
+    run_model_and_compare_with_cpu_fallback,
     run_with_iobinding,
 )
 
@@ -158,6 +161,53 @@ def test_split_equal_six_outputs_fp16():
         inputs={"X": x, "split": split},
         outputs=outputs,
         attrs={"axis": 2},
+    )
+
+
+def test_split_equal_two_outputs_fp16_large_inner():
+    x = np.random.default_rng(9).standard_normal((1, 4, 1029)).astype(np.float16)
+    split = np.array([2, 2], dtype=np.int64)
+    outputs = [("Y0", TensorProto.FLOAT16), ("Y1", TensorProto.FLOAT16)]
+    run_and_compare(
+        "Split",
+        inputs={"X": x, "split": split},
+        outputs=outputs,
+        attrs={"axis": 1},
+    )
+
+
+def test_split_after_reshape_float16_cpu_produced_input(monkeypatch):
+    x = np.random.default_rng(10).standard_normal((1, 4, 1029)).astype(np.float16)
+    shape = np.array([1, 4, 1029], dtype=np.int64)
+    split = np.array([2, 2], dtype=np.int64)
+    model = build_graph_model(
+        [
+            helper.make_node("Sin", ["X"], ["cpu_output"]),
+            helper.make_node("Reshape", ["cpu_output", "shape"], ["reshaped"]),
+            helper.make_node("Split", ["reshaped", "split"], ["Y0", "Y1"], axis=1),
+        ],
+        {"X": x, "shape": shape, "split": split},
+        [("Y0", TensorProto.FLOAT16), ("Y1", TensorProto.FLOAT16)],
+        name="split_after_reshape_float16_cpu_produced_input_graph",
+    )
+
+    monkeypatch.setenv("ORT_MUSA_TEST_FAIL_RESHAPE_CPU_INPUT", "1")
+    # The plugin now runs the MemcpyFromHost node, so the CPU-produced tensor
+    # reaches Reshape in device memory and the test-only CPU-input route must
+    # not be taken.
+    run_model_and_compare_with_cpu_fallback(
+        model,
+        {"X": x, "shape": shape, "split": split},
+        disable_ep_error_fallback=True,
+    )
+
+    monkeypatch.delenv("ORT_MUSA_TEST_FAIL_RESHAPE_CPU_INPUT")
+    run_model_and_compare_with_cpu_fallback(
+        model,
+        {"X": x, "shape": shape, "split": split},
+        rtol=0,
+        atol=0,
+        disable_ep_error_fallback=True,
     )
 
 

@@ -18,9 +18,23 @@
 #undef ORT_API_MANUAL_INIT
 
 #include <memory>
+#include <string>
+#include <vector>
 
+#include "fusion/fusion_matcher.h"
 #include "fusion/fusion_node_compute.h"
 
 bool IsTileConcatFusionGraph(Ort::ConstGraph graph);
+
+// Identifies one Tile+Concat fusion across GetCapability() and Compile(): both
+// sides see the fusion boundary (its input and output value names) but not each
+// other's nodes. Names are sorted and de-duplicated so the order ORT chooses
+// for the fused node's inputs does not matter.
+std::string TileConcatFusionKey(const std::vector<std::string>& input_names,
+                                const std::vector<std::string>& output_names);
+
+// `shape_expr_hints` carries the repeats expressions the matcher proved on the
+// whole graph; Compile() cannot see that chain any more.
 std::unique_ptr<FusionNodeCompute> CreateTileConcatFusion(
-    Ort::ConstGraph graph, Ort::ConstNode fused_node);
+    Ort::ConstGraph graph, Ort::ConstNode fused_node,
+    const musa_ep::FusionShapeExprHints* shape_expr_hints = nullptr);

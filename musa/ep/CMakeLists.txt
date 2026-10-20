@@ -13,6 +13,7 @@ set(MUSA_PLUGIN_SOURCES
   src/ep_profiling.cc
   src/ep_stream.cc
   src/musa_arena.cc
+  src/graph/capability_predicates.cc
   src/graph/cpu_preferred_nodes.cc
   src/graph/graph_utils.cc
   src/graph_mermaid_dump.cc

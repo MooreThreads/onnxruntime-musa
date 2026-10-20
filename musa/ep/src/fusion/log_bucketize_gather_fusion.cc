@@ -165,7 +165,7 @@ Ort::ConstValue ReadInitializerValue(Ort::ConstValueInfo value_info,
 Ort::Value ReadConstantNodeValue(Ort::ConstNode node, const char* name) {
   Ort::ConstOpAttr attr;
   Ort::Status attr_status = node.GetAttributeByName("value", attr);
-  if (!attr_status.IsOK()) {
+  if (!attr_status.IsOK() || !attr) {
     throw std::runtime_error(std::string("LogBucketizeGather ") + name +
                              " requires Constant value");
   }

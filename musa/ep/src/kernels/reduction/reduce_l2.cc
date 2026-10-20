@@ -32,6 +32,13 @@ class ReduceL2 : public OpKernelBase<ReduceL2> {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    ReduceL2, kOnnxDomain, 1, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", ReduceFloatOpset1TensorTypes())
+         .SetInputMemType(1, OrtMemTypeCPUInput)),
+    ReduceL2)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     ReduceL2, kOnnxDomain, 13, 17,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", ReduceL2Opset13TensorTypes())

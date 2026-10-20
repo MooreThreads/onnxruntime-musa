@@ -10,3 +10,8 @@ musaError_t LaunchMusaMaxPoolKernel(const void* input, void* output,
                                     int64_t* indices, MusaMaxPoolParams params,
                                     MusaElementType elem_type,
                                     musaStream_t stream);
+
+musaError_t LaunchMusaAveragePoolKernel(const void* input, void* output,
+                                        MusaAveragePoolParams params,
+                                        MusaElementType elem_type,
+                                        musaStream_t stream);

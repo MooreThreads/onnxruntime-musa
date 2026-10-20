@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "shared_inc/op_kernel_common.h"
 
 namespace {
@@ -59,10 +62,25 @@ std::vector<int64_t> ResolveReshapeOutputShape(
 
 OrtStatus* Reshape::Compute(Ort::KernelContext& ctx) const {
   Ort::ConstValue input0 = ctx.GetInput(0);
+  if (!IsGpuMemory(input0.GetTensorMemoryInfo()) &&
+      std::getenv("ORT_MUSA_TEST_FAIL_RESHAPE_CPU_INPUT") != nullptr) {
+    return Ort::GetApi().CreateStatus(
+        ORT_EP_FAIL, "test-only Reshape CPU-input route reached");
+  }
   auto shape0 = input0.GetTensorTypeAndShapeInfo().GetShape();
   std::vector<int64_t> out_shape =
       ResolveReshapeOutputShape(shape0, ReadIntTensor(ctx, 1), allowzero_);
   Ort::UnownedValue y = ctx.GetOutput(0, out_shape);
+  const void* src = input0.GetTensorRawData();
+  const void* dst = y.GetTensorMutableRawData();
+  const bool inplace = src == dst;
+  if (std::getenv("ORT_MUSA_RESHAPE_TRACE") != nullptr) {
+    std::fprintf(stderr, "MUSA_RESHAPE inplace=%d\n", inplace ? 1 : 0);
+  }
+  if (inplace) {
+    // May-inplace: the allocator reused the input buffer for the output.
+    return nullptr;
+  }
   return CopyRawTensor(input0, y, input0.GetTensorSizeInBytes(),
                        GetComputeStream(ctx));
 }
@@ -100,7 +118,22 @@ OrtStatus* ReshapeString::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Reshape, kOnnxDomain, 13, 19,
+    Reshape, kOnnxDomain, 5, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
+         .SetInputMemType(1, OrtMemTypeCPUInput)
+         // Hard alias: c5 registers MemcpyFromHost, so ORT stages any
+         // CPU-produced input before this kernel runs and Reshape only sees
+         // device tensors (c4 predates c5). Compute() skips the copy when
+         // src == dst and still copies on the defensive different-pointer path.
+         .AddInputOutputAlias(0, 0)),
+    Reshape)
+
+// The opset-21 schema only adds the int4/uint4 element types, which this
+// kernel does not implement (and does not declare), so the opset-13 behaviour
+// still covers the node.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Reshape, kOnnxDomain, 13, 21,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .SetInputMemType(1, OrtMemTypeCPUInput)

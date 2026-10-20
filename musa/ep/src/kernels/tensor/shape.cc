@@ -29,7 +29,18 @@ OrtStatus* Shape::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
-    Shape, kOnnxDomain, 13, 19,
+    Shape, kOnnxDomain, 1, 12,
+    (Ort::KernelDefBuilder()
+         .AddTypeConstraint("T", AllFixedSizeTensorTypesNoBFloat16())
+         .AddTypeConstraint("T1",
+                            GetTensorType(ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64))
+         .SetOutputMemType(0, OrtMemTypeCPUInput)),
+    Shape)
+
+// opset 21 only added the int4/uint4 element types on the input, which the
+// kernel does not implement, so the opset-13 behaviour still covers it.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Shape, kOnnxDomain, 13, 21,
     (Ort::KernelDefBuilder()
          .AddTypeConstraint("T", AllFixedSizeTensorTypes())
          .AddTypeConstraint("T1",

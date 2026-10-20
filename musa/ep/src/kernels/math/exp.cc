@@ -76,6 +76,10 @@ OrtStatus* Exp::Compute(Ort::KernelContext& ctx) const {
 }  // namespace
 
 ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Exp, kOnnxDomain, 6, 12,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Exp)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Exp, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
     Exp)

@@ -15,14 +15,18 @@
 
 #include <musa_runtime.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -275,7 +279,9 @@ class MhtaScaledDotProductAttentionFusionCompute final
       float scale, float mask_scale, MhtaSdpaLayout layout,
       bool boolean_mask = false, bool boolean_mask_int32 = false,
       size_t mask_end_index = kNoInputIndex, int64_t static_mask_end = -1,
-      bool lseq_last_key_mask = false, bool no_external_mask = false)
+      bool lseq_last_key_mask = false, bool no_external_mask = false,
+      bool mask_end_cacheable = false,
+      const std::vector<size_t>& mask_end_source_indices = {})
       : q_index_(q_index),
         k_index_(k_index),
         v_index_(v_index),
@@ -288,7 +294,9 @@ class MhtaScaledDotProductAttentionFusionCompute final
         mask_end_index_(mask_end_index),
         static_mask_end_(static_mask_end),
         lseq_last_key_mask_(lseq_last_key_mask),
-        no_external_mask_(no_external_mask) {}
+        no_external_mask_(no_external_mask),
+        mask_end_cacheable_(mask_end_cacheable),
+        mask_end_source_indices_(mask_end_source_indices) {}
 
   OrtStatus* Compute(OrtKernelContext* kernel_context) const override;
 
@@ -306,6 +314,15 @@ class MhtaScaledDotProductAttentionFusionCompute final
   int64_t static_mask_end_;
   bool lseq_last_key_mask_;
   bool no_external_mask_;
+  bool mask_end_cacheable_;
+  std::vector<size_t> mask_end_source_indices_;
+  // Reading the Slice end from device memory synchronizes the compute stream,
+  // so cache it — but only when the matcher proved the value is a pure
+  // function of the listed input shapes (see ValueDependsOnlyOnInputShapes).
+  mutable std::mutex mask_end_mutex_;
+  mutable bool mask_end_cached_ = false;
+  mutable int64_t mask_end_cached_value_ = -1;
+  mutable std::vector<int64_t> mask_end_cached_shape_key_;
 };
 
 bool IsMhtaSdpaTensorType(ONNXTensorElementDataType elem_type) {
@@ -563,6 +580,34 @@ bool SetupMhtaSdpaMaskParams(const std::vector<int64_t>& mask_shape,
   return true;
 }
 
+OrtStatus* ReadMaskEndValue(Ort::ConstValue mask_end, musaStream_t stream,
+                            int64_t* value) {
+  if (IsGpuMemory(mask_end.GetTensorMemoryInfo())) {
+    // The EP registers MemcpyFromHost (PR #6), so a CPU-produced scalar that
+    // the fused node consumes is copied onto the device before this node runs.
+    // Read the single value back on the compute stream; the copy node precedes
+    // us on that stream. Callers cache the result, so this path runs only when
+    // the input shapes change.
+    int64_t host_value = 0;
+    musaError_t copy_status = musaMemcpyAsync(
+        &host_value, mask_end.GetTensorData<int64_t>(), sizeof(int64_t),
+        musaMemcpyDeviceToHost, stream);
+    if (copy_status != musaSuccess) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                        MusaErrorString(copy_status));
+    }
+    musaError_t sync_status = musaStreamSynchronize(stream);
+    if (sync_status != musaSuccess) {
+      return Ort::GetApi().CreateStatus(ORT_EP_FAIL,
+                                        MusaErrorString(sync_status));
+    }
+    *value = host_value;
+    return nullptr;
+  }
+  *value = mask_end.GetTensorData<int64_t>()[0];
+  return nullptr;
+}
+
 OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
     OrtKernelContext* kernel_context) const {
   try {
@@ -756,13 +801,56 @@ OrtStatus* MhtaScaledDotProductAttentionFusionCompute::Compute(
         Ort::ConstValue mask_end = ctx.GetInput(mask_end_index_);
         auto end_info = mask_end.GetTensorTypeAndShapeInfo();
         if (end_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 ||
-            end_info.GetElementCount() != 1 ||
-            IsGpuMemory(mask_end.GetTensorMemoryInfo())) {
+            end_info.GetElementCount() != 1) {
           return Ort::GetApi().CreateStatus(
               ORT_NOT_IMPLEMENTED,
               "MHTA raw INT32 mask requires a scalar CPU Slice end");
         }
-        mask_end_value = mask_end.GetTensorData<int64_t>()[0];
+        std::vector<int64_t> shape_key;
+        if (mask_end_cacheable_) {
+          for (size_t index : mask_end_source_indices_) {
+            const auto dims =
+                ctx.GetInput(index).GetTensorTypeAndShapeInfo().GetShape();
+            shape_key.insert(shape_key.end(), dims.begin(), dims.end());
+            shape_key.push_back(-1);
+          }
+        }
+        const size_t key_size = shape_key.size();
+        std::lock_guard<std::mutex> lock(mask_end_mutex_);
+        const bool cache_hit = mask_end_cacheable_ && mask_end_cached_ &&
+                               mask_end_cached_shape_key_ == shape_key;
+        bool reread = false;
+        if (cache_hit) {
+          mask_end_value = mask_end_cached_value_;
+        } else {
+          RETURN_IF_ERROR(ReadMaskEndValue(mask_end, stream, &mask_end_value));
+          if (mask_end_cacheable_) {
+            mask_end_cached_ = true;
+            mask_end_cached_value_ = mask_end_value;
+            mask_end_cached_shape_key_ = std::move(shape_key);
+          }
+        }
+        if (mask_end_value != seqlen_k && cache_hit) {
+          // Not shape-derived after all: re-read once and refresh the cache.
+          RETURN_IF_ERROR(ReadMaskEndValue(mask_end, stream, &mask_end_value));
+          mask_end_cached_value_ = mask_end_value;
+          reread = true;
+        }
+        if (std::getenv("ORT_MUSA_MHTA_END_TRACE") != nullptr) {
+          static std::atomic<int> trace_left{64};
+          if (trace_left.load() > 0) {
+            trace_left.fetch_sub(1);
+            std::fprintf(
+                stderr,
+                "MUSA_MHTA_END node=%p cacheable=%d cached=%d hit=%d reread=%d "
+                "key=%zu sel=%zu value=%lld seqlen_k=%lld\n",
+                static_cast<const void*>(this), mask_end_cacheable_ ? 1 : 0,
+                mask_end_cached_ ? 1 : 0, cache_hit ? 1 : 0, reread ? 1 : 0,
+                key_size, mask_end_source_indices_.size(),
+                static_cast<long long>(mask_end_value),
+                static_cast<long long>(seqlen_k));
+          }
+        }
       }
       if (mask_end_value != seqlen_k) {
         return Ort::GetApi().CreateStatus(
@@ -1294,8 +1382,60 @@ bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph) {
           lseq_bf16_shd_boundary);
 }
 
+namespace {
+
+// Compile() only holds the fused subgraph, so the matcher's proof that the
+// end is a function of fused input shapes arrives through the hint map. Both
+// sides key it by the same boundary signature.
+void MaskEndCacheHint(
+    const musa_ep::FusionMaskEndHints* hints, Ort::ConstGraph graph,
+    Ort::ConstNode fused_node,
+    const std::unordered_map<std::string, size_t>& fused_indices,
+    const std::string& end_name, bool* cacheable,
+    std::vector<size_t>* source_indices) {
+  *cacheable = false;
+  source_indices->clear();
+  if (hints == nullptr) {
+    return;
+  }
+  std::vector<std::string> input_names;
+  for (Ort::ConstValueInfo input : fused_node.GetInputs()) {
+    input_names.push_back(Name(input));
+  }
+  for (Ort::ConstValueInfo initializer : graph.GetInitializers()) {
+    input_names.push_back(Name(initializer));
+  }
+  std::vector<std::string> output_names;
+  for (Ort::ConstValueInfo output : fused_node.GetOutputs()) {
+    output_names.push_back(Name(output));
+  }
+  auto hint_it =
+      hints->find(musa_ep::FusionBoundaryKey(input_names, output_names));
+  if (hint_it == hints->end()) {
+    return;
+  }
+  auto end_it = hint_it->second.find(end_name);
+  if (end_it == hint_it->second.end() || end_it->second.empty()) {
+    return;
+  }
+  std::vector<size_t> indices;
+  indices.reserve(end_it->second.size());
+  for (const std::string& name : end_it->second) {
+    auto index_it = fused_indices.find(name);
+    if (index_it == fused_indices.end()) {
+      return;
+    }
+    indices.push_back(index_it->second);
+  }
+  *cacheable = true;
+  *source_indices = std::move(indices);
+}
+
+}  // namespace
+
 std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
-    Ort::ConstGraph graph, Ort::ConstNode fused_node) {
+    Ort::ConstGraph graph, Ort::ConstNode fused_node,
+    const musa_ep::FusionMaskEndHints* mask_end_hints) {
   Ort::ConstNode value_matmul{nullptr};
   Ort::ConstNode score_matmul{nullptr};
   Ort::ConstNode mul_node{nullptr};
@@ -1336,7 +1476,6 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
   }
 
   auto fused_indices = FusedInputIndices(fused_node);
-
   if (where_nodes.size() == 2) {
     Ort::ConstNode post_where{nullptr};
     for (Ort::ConstNode node : graph.GetNodes()) {
@@ -1387,6 +1526,8 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
     bool boolean_mask_int32 = false;
     size_t mask_end_index = kNoInputIndex;
     int64_t static_mask_end = -1;
+    bool mask_end_cacheable = false;
+    std::vector<size_t> mask_end_source_indices;
     auto equal_it = producers.find(Name(mask_input));
     if (equal_it != producers.end() && IsOnnxOp(equal_it->second, "Equal")) {
       const auto equal_inputs = equal_it->second.GetInputs();
@@ -1415,8 +1556,18 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
           end.has_value()) {
         static_mask_end = *end;
       } else {
-        mask_end_index =
-            InputIndex(fused_indices, slice_it->second.GetInputs()[2]);
+        Ort::ConstValueInfo end_value = slice_it->second.GetInputs()[2];
+        const std::string end_name = Name(end_value);
+        mask_end_index = InputIndex(fused_indices, end_value);
+        MaskEndCacheHint(mask_end_hints, graph, fused_node, fused_indices,
+                         end_name, &mask_end_cacheable,
+                         &mask_end_source_indices);
+        // One line per fused raw-INT32-mask attention node at session
+        // creation: 0 means the end is read from the device every run.
+        std::fprintf(stderr,
+                     "MUSA_MHTA_SLICE_END cacheable=%d sources=%zu\n",
+                     mask_end_cacheable ? 1 : 0,
+                     mask_end_source_indices.size());
       }
       boolean_mask_int32 = true;
     }
@@ -1430,7 +1581,8 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
           InputIndex(fused_indices, boundary->v.GetInputs()[0]),
           InputIndex(fused_indices, mask_input), scale, 0.0f,
           MhtaSdpaLayout::kBshdStridedFlash, true, boolean_mask_int32,
-          mask_end_index, static_mask_end);
+          mask_end_index, static_mask_end, false, false,
+          mask_end_cacheable, mask_end_source_indices);
     }
     return std::make_unique<MhtaScaledDotProductAttentionFusionCompute>(
         InputIndex(fused_indices, score_inputs[0]),
@@ -1438,7 +1590,8 @@ std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
         InputIndex(fused_indices, value_inputs[1]),
         InputIndex(fused_indices, mask_input), scale, 0.0f,
         MhtaSdpaLayout::kBhsd, true, boolean_mask_int32, mask_end_index,
-        static_mask_end);
+        static_mask_end, false, false, mask_end_cacheable,
+        mask_end_source_indices);
   }
 
   if (where_nodes.size() == 1 && !add_node && !div_node && !einsum_node &&

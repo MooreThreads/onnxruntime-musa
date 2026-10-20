@@ -57,7 +57,8 @@ size_t Index(const std::unordered_map<std::string, size_t>& m,
 float FloatAttr(Ort::ConstNode n, const char* name, float d) {
   Ort::ConstOpAttr a;
   float x = d;
-  return n.GetAttributeByName(name, a).IsOK() && a.GetValue(x).IsOK() ? x : d;
+  return n.GetAttributeByName(name, a).IsOK() && a && a.GetValue(x).IsOK() ? x
+                                                                           : d;
 }
 
 // Prefer muDNN's GEMM+bias epilogue.  It removes the standalone device bias

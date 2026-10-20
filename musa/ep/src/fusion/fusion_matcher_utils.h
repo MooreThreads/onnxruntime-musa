@@ -59,4 +59,28 @@ bool ValueHasExternalConsumerOrGraphOutput(
 std::optional<int64_t> ReadScalarIntInitializer(Ort::ConstValueInfo value_info);
 bool HasCastBoundary(const std::vector<Ort::ConstNode>& fusion_nodes);
 
+// Sorted, de-duplicated signature of a fusion boundary (input and output value
+// names). GetCapability() and Compile() build the same key from the boundary,
+// which is all either side sees of the other.
+std::string FusionBoundaryKey(const std::vector<std::string>& input_names,
+                              const std::vector<std::string>& output_names);
+
+// Returns true when `value_name` is produced only from shape arithmetic:
+// constants, plus Shape ops over inputs of the current fusion. The output is
+// then a pure function of the shapes of the fused inputs listed in
+// `source_indices` (empty means the value is constant). A Shape whose source
+// is not itself a fused input is accepted when the source is reached from one
+// through shape-preserving ops only (Transpose with a perm attribute, Cast,
+// Identity), or when another Transpose reading the same value produces one of
+// the fusion's inputs (both expose the value's shape up to a fixed
+// permutation). Anything that could make the value depend on data, on a tensor
+// outside the fusion by another path, or on an op that is not shape-only
+// returns false.
+bool ValueDependsOnlyOnInputShapes(
+    const std::string& value_name,
+    const std::unordered_map<std::string, Ort::ConstNode>& producers,
+    const std::unordered_map<std::string, size_t>& input_indices,
+    const std::unordered_set<std::string>& initializer_names,
+    std::vector<size_t>* source_indices);
+
 }  // namespace musa_ep

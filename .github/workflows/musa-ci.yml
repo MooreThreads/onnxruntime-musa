@@ -28,6 +28,21 @@ jobs:
           fetch-depth: 1
           submodules: false
 
+      - name: Configure MUSA toolkit environment
+        run: |
+          set -euo pipefail
+          echo "/usr/local/musa/bin" >> "${GITHUB_PATH}"
+          {
+            echo "MUSA_HOME=/usr/local/musa"
+            echo "LD_LIBRARY_PATH=/usr/local/musa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+            echo "CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:/usr/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+          } >> "${GITHUB_ENV}"
+
+          echo "MUSA_HOME=/usr/local/musa"
+          echo "PATH includes /usr/local/musa/bin in subsequent steps"
+          echo "LD_LIBRARY_PATH=/usr/local/musa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          echo "CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:/usr/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+
       - name: Prepare ONNX Runtime headers
         run: |
           set -euo pipefail

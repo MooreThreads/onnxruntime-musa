@@ -1,0 +1,66 @@
+name: MUSA CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: musa-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: [self-hosted, musa, s5000]
+    timeout-minutes: 90
+    env:
+      CI_ASSETS: /data/ci-assets
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          submodules: false
+
+      - name: Prepare ONNX Runtime headers
+        run: |
+          set -euo pipefail
+          test -d "${CI_ASSETS}/onnxruntime"
+          rm -rf third_party/onnxruntime
+          cp -a "${CI_ASSETS}/onnxruntime" third_party/onnxruntime
+
+      - name: Build plugin and wheel
+        run: |
+          set -euo pipefail
+          echo "Testing commit: $(git rev-parse HEAD)"
+          bash build.sh
+
+      - name: Prepare ONNX Runtime SDK
+        run: |
+          set -euo pipefail
+          test -d "${CI_ASSETS}/ort-sdk"
+          rm -rf build/ort-sdk
+          cp -a "${CI_ASSETS}/ort-sdk" build/ort-sdk
+
+      - name: Install wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --no-deps "onnxruntime==1.26.0"
+
+          shopt -s nullglob
+          wheels=(dist/onnxruntime_ep_musa-*.whl)
+          if (( ${#wheels[@]} != 1 )); then
+            echo "Expected exactly one MUSA wheel, found ${#wheels[@]}" >&2
+            printf '  %s\n' "${wheels[@]}" >&2
+            exit 1
+          fi
+          python -m pip install --no-deps --force-reinstall "${wheels[0]}"
+
+      - name: Run provider tests
+        run: bash test/run_all.sh

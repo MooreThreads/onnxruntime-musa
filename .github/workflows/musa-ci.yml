@@ -1,0 +1,259 @@
+name: MUSA CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: musa-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit Tests
+    runs-on: [self-hosted, musa, s5000]
+    timeout-minutes: 90
+    env:
+      CI_ASSETS: /data/ci-assets
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          submodules: false
+
+      - name: Configure MUSA toolkit environment
+        run: |
+          set -euo pipefail
+          echo "/usr/local/musa/bin" >> "${GITHUB_PATH}"
+          {
+            echo "MUSA_HOME=/usr/local/musa"
+            echo "LD_LIBRARY_PATH=/usr/local/musa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+            echo "CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:/usr/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+          } >> "${GITHUB_ENV}"
+
+          echo "MUSA_HOME=/usr/local/musa"
+          echo "PATH includes /usr/local/musa/bin in subsequent steps"
+          echo "LD_LIBRARY_PATH=/usr/local/musa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          echo "CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:/usr/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+
+      - name: Prepare ONNX Runtime headers
+        run: |
+          set -euo pipefail
+          test -d "${CI_ASSETS}/onnxruntime"
+          rm -rf third_party/onnxruntime
+          cp -a "${CI_ASSETS}/onnxruntime" third_party/onnxruntime
+
+      - name: Build plugin and wheel
+        run: |
+          set -euo pipefail
+          echo "Testing commit: $(git rev-parse HEAD)"
+          bash build.sh
+
+      - name: Prepare ONNX Runtime SDK
+        run: |
+          set -euo pipefail
+          test -d "${CI_ASSETS}/ort-sdk"
+          rm -rf build/ort-sdk
+          cp -a "${CI_ASSETS}/ort-sdk" build/ort-sdk
+
+      - name: Install wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --no-deps "onnxruntime==1.26.0"
+
+          shopt -s nullglob
+          wheels=(dist/onnxruntime_ep_musa-*.whl)
+          if (( ${#wheels[@]} != 1 )); then
+            echo "Expected exactly one MUSA wheel, found ${#wheels[@]}" >&2
+            printf '  %s\n' "${wheels[@]}" >&2
+            exit 1
+          fi
+          python -m pip install --no-deps --force-reinstall "${wheels[0]}"
+
+      - name: Run provider tests
+        run: bash test/run_all.sh
+
+      - name: Package build artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/musa-build"
+          tar -C build -czf "${RUNNER_TEMP}/musa-build/musa-build.tar.gz" \
+            Release/libonnxruntime_providers_musa_plugin.so \
+            ort-sdk
+          tar -tzf "${RUNNER_TEMP}/musa-build/musa-build.tar.gz" >/dev/null
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: musa-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/musa-build/musa-build.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  model-zoo:
+    name: Model Zoo Inference Performance Test
+    needs: test
+    runs-on: [self-hosted, musa, s5000]
+    timeout-minutes: 720
+    env:
+      CI_ASSETS: /data/ci-assets
+      MODEL_ZOO_WORK: /data/ci-work/onnx-model-zoo-${{ github.run_id }}-${{ github.run_attempt }}
+      PERF_RESULTS_DIR: /data/ci-work/onnx-model-zoo-${{ github.run_id }}-${{ github.run_attempt }}/performance-results
+      BASE_SOURCE_DIR: ${{ github.workspace }}/.ci/base-src
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          submodules: false
+
+      - name: Configure MUSA toolkit environment
+        run: |
+          set -euo pipefail
+          echo "/usr/local/musa/bin" >> "${GITHUB_PATH}"
+          {
+            echo "MUSA_HOME=/usr/local/musa"
+            echo "LD_LIBRARY_PATH=/usr/local/musa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+            echo "CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:/usr/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: musa-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/musa-build
+
+      - name: Extract build artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          tar -C build -xzf "${RUNNER_TEMP}/musa-build/musa-build.tar.gz"
+
+          plugin="${GITHUB_WORKSPACE}/build/Release/libonnxruntime_providers_musa_plugin.so"
+          sdk_root="${GITHUB_WORKSPACE}/build/ort-sdk/onnxruntime-linux-x64-1.26.0"
+          test -f "${plugin}"
+          test -f "${sdk_root}/include/onnxruntime_c_api.h"
+          echo "Head commit: $(git rev-parse HEAD)"
+          sha256sum "${plugin}"
+
+      - name: Checkout PR base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          path: .ci/base-src
+          fetch-depth: 1
+          submodules: false
+
+      - name: Build base plugin
+        run: |
+          set -euo pipefail
+          cd "${BASE_SOURCE_DIR}"
+          rm -rf third_party/onnxruntime
+          cp -a "${CI_ASSETS}/onnxruntime" third_party/onnxruntime
+
+          echo "Base commit: $(git rev-parse HEAD)"
+          bash build.sh --clean --no-wheel
+
+          base_plugin="${BASE_SOURCE_DIR}/build/Release/libonnxruntime_providers_musa_plugin.so"
+          test -f "${base_plugin}"
+          sha256sum "${base_plugin}"
+
+      - name: Prepare model zoo
+        run: |
+          set -euo pipefail
+          test -d "${CI_ASSETS}/onnx-model-zoo"
+          rm -rf "${MODEL_ZOO_WORK}"
+          mkdir -p "${MODEL_ZOO_WORK}"
+          cp -al "${CI_ASSETS}/onnx-model-zoo/." "${MODEL_ZOO_WORK}/"
+          rm -rf "${MODEL_ZOO_WORK}/cpp_runners"
+          cp -a "${CI_ASSETS}/onnx-model-zoo/cpp_runners" "${MODEL_ZOO_WORK}/cpp_runners"
+          rm -f "${MODEL_ZOO_WORK}/musa_ep_performance.md"
+          rm -f "${MODEL_ZOO_WORK}/musa_ep_performance_with_multi_stream.md"
+          mkdir -p "${PERF_RESULTS_DIR}"
+          test -f "${MODEL_ZOO_WORK}/JD/real_models/platform/unirank-v2-8layer-combo-v6-online_graph2.onnx"
+
+      - name: Build model zoo runners
+        run: |
+          set -euo pipefail
+          ORT_ROOT="${GITHUB_WORKSPACE}/build/ort-sdk/onnxruntime-linux-x64-1.26.0" \
+            bash "${MODEL_ZOO_WORK}/cpp_runners/build_onnx_runner.sh"
+
+      - name: Benchmark base single-stream
+        run: |
+          set -euo pipefail
+          bash scripts/ci/run_model_zoo_benchmark.sh \
+            base \
+            "${BASE_SOURCE_DIR}/build/Release/libonnxruntime_providers_musa_plugin.so" \
+            single \
+            "${MODEL_ZOO_WORK}" \
+            "${PERF_RESULTS_DIR}"
+
+      - name: Benchmark base multi-stream
+        run: |
+          set -euo pipefail
+          bash scripts/ci/run_model_zoo_benchmark.sh \
+            base \
+            "${BASE_SOURCE_DIR}/build/Release/libonnxruntime_providers_musa_plugin.so" \
+            multi \
+            "${MODEL_ZOO_WORK}" \
+            "${PERF_RESULTS_DIR}"
+
+      - name: Benchmark head single-stream
+        run: |
+          set -euo pipefail
+          bash scripts/ci/run_model_zoo_benchmark.sh \
+            head \
+            "${GITHUB_WORKSPACE}/build/Release/libonnxruntime_providers_musa_plugin.so" \
+            single \
+            "${MODEL_ZOO_WORK}" \
+            "${PERF_RESULTS_DIR}"
+
+      - name: Benchmark head multi-stream
+        run: |
+          set -euo pipefail
+          bash scripts/ci/run_model_zoo_benchmark.sh \
+            head \
+            "${GITHUB_WORKSPACE}/build/Release/libonnxruntime_providers_musa_plugin.so" \
+            multi \
+            "${MODEL_ZOO_WORK}" \
+            "${PERF_RESULTS_DIR}"
+
+      - name: Compare base and head performance
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/compare_model_zoo_performance.py \
+            --baseline-single "${PERF_RESULTS_DIR}/base-single.md" \
+            --candidate-single "${PERF_RESULTS_DIR}/head-single.md" \
+            --baseline-multi "${PERF_RESULTS_DIR}/base-multi.md" \
+            --candidate-multi "${PERF_RESULTS_DIR}/head-multi.md" \
+            --threshold 10 \
+            --output "${PERF_RESULTS_DIR}/model-zoo-performance-comparison.md"
+
+      - name: Upload model zoo reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-zoo-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PERF_RESULTS_DIR }}/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Cleanup model zoo work directory
+        if: always()
+        run: |
+          set -euo pipefail
+          case "${MODEL_ZOO_WORK}" in
+            /data/ci-work/onnx-model-zoo-*) rm -rf "${MODEL_ZOO_WORK}" ;;
+            *) echo "Refusing to remove unexpected path: ${MODEL_ZOO_WORK}" >&2; exit 1 ;;
+          esac

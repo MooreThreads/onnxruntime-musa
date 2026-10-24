@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   test:
-    name: Build and test
+    name: Unit Tests
     runs-on: [self-hosted, musa, s5000]
     timeout-minutes: 90
     env:
@@ -99,13 +99,15 @@ jobs:
           retention-days: 7
 
   model-zoo:
-    name: Model zoo smoke test
+    name: Model Zoo Inference Performance Test
     needs: test
     runs-on: [self-hosted, musa, s5000]
     timeout-minutes: 720
     env:
       CI_ASSETS: /data/ci-assets
       MODEL_ZOO_WORK: /data/ci-work/onnx-model-zoo-${{ github.run_id }}-${{ github.run_attempt }}
+      PERF_RESULTS_DIR: /data/ci-work/onnx-model-zoo-${{ github.run_id }}-${{ github.run_attempt }}/performance-results
+      BASE_SOURCE_DIR: ${{ github.workspace }}/.ci/base-src
       PYTHONUNBUFFERED: "1"
 
     steps:
@@ -142,7 +144,30 @@ jobs:
           sdk_root="${GITHUB_WORKSPACE}/build/ort-sdk/onnxruntime-linux-x64-1.26.0"
           test -f "${plugin}"
           test -f "${sdk_root}/include/onnxruntime_c_api.h"
+          echo "Head commit: $(git rev-parse HEAD)"
           sha256sum "${plugin}"
+
+      - name: Checkout PR base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          path: .ci/base-src
+          fetch-depth: 1
+          submodules: false
+
+      - name: Build base plugin
+        run: |
+          set -euo pipefail
+          cd "${BASE_SOURCE_DIR}"
+          rm -rf third_party/onnxruntime
+          cp -a "${CI_ASSETS}/onnxruntime" third_party/onnxruntime
+
+          echo "Base commit: $(git rev-parse HEAD)"
+          bash build.sh --clean --no-wheel
+
+          base_plugin="${BASE_SOURCE_DIR}/build/Release/libonnxruntime_providers_musa_plugin.so"
+          test -f "${base_plugin}"
+          sha256sum "${base_plugin}"
 
       - name: Prepare model zoo
         run: |
@@ -153,6 +178,9 @@ jobs:
           cp -al "${CI_ASSETS}/onnx-model-zoo/." "${MODEL_ZOO_WORK}/"
           rm -rf "${MODEL_ZOO_WORK}/cpp_runners"
           cp -a "${CI_ASSETS}/onnx-model-zoo/cpp_runners" "${MODEL_ZOO_WORK}/cpp_runners"
+          rm -f "${MODEL_ZOO_WORK}/musa_ep_performance.md"
+          rm -f "${MODEL_ZOO_WORK}/musa_ep_performance_with_multi_stream.md"
+          mkdir -p "${PERF_RESULTS_DIR}"
           test -f "${MODEL_ZOO_WORK}/JD/real_models/platform/unirank-v2-8layer-combo-v6-online_graph2.onnx"
 
       - name: Build model zoo runners
@@ -161,35 +189,63 @@ jobs:
           ORT_ROOT="${GITHUB_WORKSPACE}/build/ort-sdk/onnxruntime-linux-x64-1.26.0" \
             bash "${MODEL_ZOO_WORK}/cpp_runners/build_onnx_runner.sh"
 
-      - name: Run single-stream model zoo test
+      - name: Benchmark base single-stream
         run: |
           set -euo pipefail
-          export MUSA_EP_LIBRARY="${GITHUB_WORKSPACE}/build/Release/libonnxruntime_providers_musa_plugin.so"
-          test -f "${MUSA_EP_LIBRARY}"
-          cd "${MODEL_ZOO_WORK}"
-          bash run_all_onnx.sh --ep musa
-          grep -F '| Fail |' musa_ep_performance.md
-          grep -Fq '| Fail | 0 |' musa_ep_performance.md
+          bash scripts/ci/run_model_zoo_benchmark.sh \
+            base \
+            "${BASE_SOURCE_DIR}/build/Release/libonnxruntime_providers_musa_plugin.so" \
+            single \
+            "${MODEL_ZOO_WORK}" \
+            "${PERF_RESULTS_DIR}"
 
-      - name: Run multi-stream model zoo test
+      - name: Benchmark base multi-stream
         run: |
           set -euo pipefail
-          export MUSA_EP_LIBRARY="${GITHUB_WORKSPACE}/build/Release/libonnxruntime_providers_musa_plugin.so"
-          test -f "${MUSA_EP_LIBRARY}"
-          cd "${MODEL_ZOO_WORK}"
-          bash run_all_onnx.sh --ep musa -s 4 -q 8
-          grep -F '| Fail |' musa_ep_performance_with_multi_stream.md
-          grep -Fq '| Fail | 0 |' musa_ep_performance_with_multi_stream.md
+          bash scripts/ci/run_model_zoo_benchmark.sh \
+            base \
+            "${BASE_SOURCE_DIR}/build/Release/libonnxruntime_providers_musa_plugin.so" \
+            multi \
+            "${MODEL_ZOO_WORK}" \
+            "${PERF_RESULTS_DIR}"
+
+      - name: Benchmark head single-stream
+        run: |
+          set -euo pipefail
+          bash scripts/ci/run_model_zoo_benchmark.sh \
+            head \
+            "${GITHUB_WORKSPACE}/build/Release/libonnxruntime_providers_musa_plugin.so" \
+            single \
+            "${MODEL_ZOO_WORK}" \
+            "${PERF_RESULTS_DIR}"
+
+      - name: Benchmark head multi-stream
+        run: |
+          set -euo pipefail
+          bash scripts/ci/run_model_zoo_benchmark.sh \
+            head \
+            "${GITHUB_WORKSPACE}/build/Release/libonnxruntime_providers_musa_plugin.so" \
+            multi \
+            "${MODEL_ZOO_WORK}" \
+            "${PERF_RESULTS_DIR}"
+
+      - name: Compare base and head performance
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/compare_model_zoo_performance.py \
+            --baseline-single "${PERF_RESULTS_DIR}/base-single.md" \
+            --candidate-single "${PERF_RESULTS_DIR}/head-single.md" \
+            --baseline-multi "${PERF_RESULTS_DIR}/base-multi.md" \
+            --candidate-multi "${PERF_RESULTS_DIR}/head-multi.md" \
+            --threshold 10 \
+            --output "${PERF_RESULTS_DIR}/model-zoo-performance-comparison.md"
 
       - name: Upload model zoo reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: model-zoo-reports-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ env.MODEL_ZOO_WORK }}/musa_ep_performance.md
-            ${{ env.MODEL_ZOO_WORK }}/musa_ep_performance_with_multi_stream.md
-            ${{ env.MODEL_ZOO_WORK }}/error_logs/
+          path: ${{ env.PERF_RESULTS_DIR }}/
           if-no-files-found: ignore
           retention-days: 7
 

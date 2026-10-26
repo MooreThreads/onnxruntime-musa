@@ -175,6 +175,35 @@ def _format_change(value: float | None) -> str:
     return f"{value:+.2f}%"
 
 
+def _mode_failure_label(mode: str) -> str:
+    return "Single-stream latency" if mode == "single" else "Multi-stream QPS"
+
+
+def _failure_detail(row: Comparison, mode: str) -> str:
+    if row.result == "REGRESSION" and row.change_pct is not None:
+        if mode == "single":
+            return f"latency increased by {row.change_pct:.2f}%"
+        return f"QPS decreased by {abs(row.change_pct):.2f}%"
+    if row.change_pct is None:
+        return row.result
+    return f"{row.result}, change {_format_change(row.change_pct)}"
+
+
+def _failure_lines(rows: list[Comparison], mode: str) -> list[str]:
+    return [f"- {row.model}: {_failure_detail(row, mode)}" for row in rows]
+
+
+def _failure_counts(single: list[Comparison], multi: list[Comparison]) -> list[str]:
+    counts: list[str] = []
+    single_failed = sum(row.failed for row in single)
+    multi_failed = sum(row.failed for row in multi)
+    if single_failed:
+        counts.append(f"{single_failed} single-stream latency")
+    if multi_failed:
+        counts.append(f"{multi_failed} multi-stream QPS")
+    return counts
+
+
 def _status_label(row: Comparison, mode: str) -> str:
     if row.result == "PASS":
         return "PASS"
@@ -221,7 +250,9 @@ def build_markdown(
     multi: list[Comparison],
     threshold_pct: float,
 ) -> tuple[str, str]:
-    failed = [row for row in single + multi if row.failed]
+    single_failed = [row for row in single if row.failed]
+    multi_failed = [row for row in multi if row.failed]
+    failed = single_failed + multi_failed
     unmeasured = [row for row in single + multi if row.result == "NOT_MEASURED"]
     model_count = len(single)
 
@@ -232,13 +263,28 @@ def build_markdown(
         f"- Threshold: more than {threshold_pct:g}% slower than base",
         "- Single stream metric: average latency (lower is better)",
         "- Multi stream metric: QPS (higher is better)",
+        f"- Single-stream latency failures: {len(single_failed)}",
+        f"- Multi-stream QPS failures: {len(multi_failed)}",
         f"- Result: {'FAIL' if failed else 'PASS'}",
     ]
     if failed:
-        summary_lines.extend(["", "### Regressions", ""])
-        for row in failed:
-            summary_lines.append(
-                f"- {row.model}: {row.result}, change {_format_change(row.change_pct)}"
+        if single_failed:
+            summary_lines.extend(
+                [
+                    "",
+                    f"### Single-stream latency failures ({len(single_failed)})",
+                    "",
+                    *_failure_lines(single_failed, "single"),
+                ]
+            )
+        if multi_failed:
+            summary_lines.extend(
+                [
+                    "",
+                    f"### Multi-stream QPS failures ({len(multi_failed)})",
+                    "",
+                    *_failure_lines(multi_failed, "multi"),
+                ]
             )
     if unmeasured:
         summary_lines.extend(
@@ -255,7 +301,8 @@ def build_markdown(
         "| Single stream metric | Average latency, lower is better |",
         "| Multi stream metric | QPS, higher is better |",
         f"| Models compared | {model_count} |",
-        f"| Regressions | {len(failed)} |",
+        f"| Single-stream latency failures | {len(single_failed)} |",
+        f"| Multi-stream QPS failures | {len(multi_failed)} |",
         f"| Result | {'FAIL' if failed else 'PASS'} |",
         "",
     ]
@@ -282,8 +329,9 @@ def build_markdown(
     lines.extend(["## Result", ""])
     if failed:
         lines.append(
-            f"FAIL: {len(failed)} model measurement(s) regressed by more than "
-            f"{threshold_pct:g}% or could not be measured."
+            f"FAIL: {len(failed)} failed measurement(s): "
+            + ", ".join(_failure_counts(single, multi))
+            + "."
         )
     else:
         lines.append(
@@ -361,14 +409,36 @@ def main() -> int:
         with args.summary.open("a", encoding="utf-8") as stream:
             stream.write(summary)
 
-    failed = [row for row in single + multi if row.failed]
+    single_failed = [row for row in single if row.failed]
+    multi_failed = [row for row in multi if row.failed]
+    failed = single_failed + multi_failed
     if failed:
-        print(f"Performance gate failed: {len(failed)} regression(s)", file=sys.stderr)
-        for row in failed:
+        print(
+            f"Performance gate failed: {len(failed)} model measurement(s) failed",
+            file=sys.stderr,
+        )
+        if single_failed:
             print(
-                f"  {row.model}: {row.result}, change {_format_change(row.change_pct)}",
+                f"  Single-stream latency: {len(single_failed)} model(s) failed",
                 file=sys.stderr,
             )
+        if multi_failed:
+            print(
+                f"  Multi-stream QPS: {len(multi_failed)} model(s) failed",
+                file=sys.stderr,
+            )
+        for mode, rows in (("single", single_failed), ("multi", multi_failed)):
+            if not rows:
+                continue
+            print(
+                f"\n{_mode_failure_label(mode)} failures ({len(rows)}):",
+                file=sys.stderr,
+            )
+            for row in rows:
+                print(
+                    f"  - {row.model}: {_failure_detail(row, mode)}",
+                    file=sys.stderr,
+                )
         return 1
 
     print("Performance gate passed")

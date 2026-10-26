@@ -318,7 +318,7 @@ def build_markdown(
     )
     lines.extend(
         _table_for_mode(
-            "Multi Stream (-s 4 -q 128)",
+            "Multi Stream (-s 4 -q 1024)",
             multi,
             "multi",
             "QPS",

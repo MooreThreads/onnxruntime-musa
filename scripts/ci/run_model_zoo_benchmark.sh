@@ -15,8 +15,8 @@ Arguments:
   RESULTS_DIR  Directory that receives the report and error logs.
 
 Modes:
-  single  run_all_onnx.sh --ep musa
-  multi   run_all_onnx.sh --ep musa -s 4 -q 128
+  single  run_all_onnx.sh --ep musa --warmup 20 --repeat 100
+  multi   run_all_onnx.sh --ep musa -s 4 -q 1024
 EOF
 }
 
@@ -47,11 +47,11 @@ fi
 case "$MODE" in
 	single)
 		REPORT_NAME="musa_ep_performance.md"
-		RUN_ARGS=(--ep musa)
+		RUN_ARGS=(--ep musa --warmup 20 --repeat 100)
 		;;
 	multi)
 		REPORT_NAME="musa_ep_performance_with_multi_stream.md"
-		RUN_ARGS=(--ep musa -s 4 -q 128)
+		RUN_ARGS=(--ep musa -s 4 -q 1024)
 		;;
 	*)
 		echo "Mode must be single or multi: $MODE" >&2
@@ -107,8 +107,10 @@ fi
 
 if [[ "$MODE" == "single" ]]; then
 	grep -Fq '| Mode | classic |' "$result_path"
+	grep -Fq '| Warmup | 20 |' "$result_path"
+	grep -Fq '| Repeat | 100 |' "$result_path"
 else
-	grep -Fq '| Querys | 128 |' "$result_path"
+	grep -Fq '| Querys | 1024 |' "$result_path"
 	grep -Fq '| Streams | 4 |' "$result_path"
 fi
 

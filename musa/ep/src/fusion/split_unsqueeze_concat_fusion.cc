@@ -45,7 +45,7 @@ std::optional<int64_t> GetIntAttribute(Ort::ConstNode node,
                                        const std::string& name) {
   Ort::ConstOpAttr attr;
   Ort::Status status = node.GetAttributeByName(name, attr);
-  if (!status.IsOK()) {
+  if (!status.IsOK() || !attr) {
     return std::nullopt;
   }
 
@@ -62,7 +62,7 @@ std::optional<std::vector<int64_t>> GetIntsAttribute(Ort::ConstNode node,
                                                      const std::string& name) {
   Ort::ConstOpAttr attr;
   Ort::Status status = node.GetAttributeByName(name, attr);
-  if (!status.IsOK()) {
+  if (!status.IsOK() || !attr) {
     return std::nullopt;
   }
 

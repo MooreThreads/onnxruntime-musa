@@ -19,8 +19,12 @@
 #include "onnxruntime_cxx_api.h"
 #undef ORT_API_MANUAL_INIT
 
+#include "fusion/fusion_matcher.h"
 #include "fusion/fusion_node_compute.h"
 
 bool IsMhtaScaledDotProductAttentionFusionGraph(Ort::ConstGraph graph);
+// `mask_end_hints` carries the Slice-end provenance the matcher proved on the
+// whole graph; Compile() cannot see the end's producer chain any more.
 std::unique_ptr<FusionNodeCompute> CreateMhtaScaledDotProductAttentionFusion(
-    Ort::ConstGraph graph, Ort::ConstNode fused_node);
+    Ort::ConstGraph graph, Ort::ConstNode fused_node,
+    const musa_ep::FusionMaskEndHints* mask_end_hints = nullptr);

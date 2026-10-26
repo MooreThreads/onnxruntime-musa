@@ -22,6 +22,7 @@
 #include <unordered_map>
 
 #include "ep_options.h"
+#include "fusion/fusion_matcher.h"
 
 class FusionNodeCompute;
 class MusaEpFactory;
@@ -45,6 +46,35 @@ class MusaEp : public OrtEp {
   std::unordered_map<std::string, std::unique_ptr<FusionNodeCompute>>&
   GetFusionComputes() {
     return fusion_computes_;
+  }
+
+  // Shape expressions a finder proved while it could still see the whole graph.
+  // Compile() only receives fused subgraphs, so GetCapability() stores them
+  // here.
+  const musa_ep::FusionShapeExprHints& ShapeExprHints() const {
+    return shape_expr_hints_;
+  }
+  void AddShapeExprHints(musa_ep::FusionShapeExprHints hints) {
+    for (auto& [key, values] : hints) {
+      auto& stored = shape_expr_hints_[key];
+      for (auto& [name, hint] : values) {
+        stored.emplace(name, std::move(hint));
+      }
+    }
+  }
+
+  // Mask-end provenance a finder proved while it could still see the whole
+  // graph; Compile() remaps the source names to fused input indices.
+  const musa_ep::FusionMaskEndHints& MaskEndHints() const {
+    return mask_end_hints_;
+  }
+  void AddMaskEndHints(musa_ep::FusionMaskEndHints hints) {
+    for (auto& [key, values] : hints) {
+      auto& stored = mask_end_hints_[key];
+      for (auto& [name, sources] : values) {
+        stored[name] = std::move(sources);
+      }
+    }
   }
 
  private:
@@ -83,4 +113,6 @@ class MusaEp : public OrtEp {
   const OrtLogger& logger_;
   std::unordered_map<std::string, std::unique_ptr<FusionNodeCompute>>
       fusion_computes_;
+  musa_ep::FusionShapeExprHints shape_expr_hints_;
+  musa_ep::FusionMaskEndHints mask_end_hints_;
 };

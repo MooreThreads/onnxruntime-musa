@@ -18,12 +18,30 @@
 #undef ORT_API_MANUAL_INIT
 
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "fusion/fusion_dtype.h"
+#include "fusion/shape_expr.h"
 
 namespace musa_ep {
+
+// Shape expressions a finder proved on the whole graph, keyed first by a
+// signature of the fusion boundary and then by the outer value name they
+// compute. GetCapability() fills this in; Compile() reads it back because the
+// subgraph it receives does not contain the nodes the value is computed from.
+using FusionShapeExprHints =
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string, ShapeExprHint>>;
+
+// Mask-end provenance a finder proved on the whole graph, keyed the same way:
+// boundary signature -> end value name -> names of the fused inputs whose
+// shapes determine that value. Compile() cannot see the end's producer chain
+// and remaps these names to fused input indices.
+using FusionMaskEndHints =
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string, std::vector<std::string>>>;
 
 struct FusionDTypeRejection {
   std::vector<Ort::ConstNode> nodes;
@@ -40,7 +58,9 @@ struct FusionMatch {
 
 std::vector<FusionMatch> FindFusionMatches(
     const std::vector<Ort::ConstNode>& all_nodes,
-    const std::unordered_set<std::string>& graph_output_names);
+    const std::unordered_set<std::string>& graph_output_names,
+    FusionShapeExprHints* shape_expr_hints = nullptr,
+    FusionMaskEndHints* mask_end_hints = nullptr);
 
 std::vector<std::vector<Ort::ConstNode>> FindSplitUnsqueezeConcatFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
@@ -65,7 +85,8 @@ std::vector<std::vector<Ort::ConstNode>> FindSliceConcatFusions(
 std::vector<std::vector<Ort::ConstNode>> FindTileConcatFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& accepted_node_ids);
+    const std::unordered_set<size_t>& accepted_node_ids,
+    FusionShapeExprHints* shape_expr_hints = nullptr);
 std::vector<std::vector<Ort::ConstNode>> FindGemmActivationFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
@@ -166,7 +187,8 @@ std::vector<std::vector<Ort::ConstNode>>
 FindMhtaScaledDotProductAttentionFusions(
     const std::vector<Ort::ConstNode>& all_nodes,
     const std::unordered_set<std::string>& graph_output_names,
-    const std::unordered_set<size_t>& accepted_node_ids);
+    const std::unordered_set<size_t>& accepted_node_ids,
+    FusionMaskEndHints* mask_end_hints = nullptr);
 std::vector<std::vector<Ort::ConstNode>>
 FindQkvAttentionOutputProjectionFusions(
     const std::vector<Ort::ConstNode>& all_nodes,

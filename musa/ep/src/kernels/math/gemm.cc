@@ -42,3 +42,22 @@ ONNX_OPERATOR_VERSIONED_KERNEL_EX(
     Gemm, kOnnxDomain, 13, 19,
     (Ort::KernelDefBuilder().AddTypeConstraint("T", FloatLikeTensorTypes())),
     Gemm)
+
+// The Gemm version differences below opset 13 are type-set and optional-input
+// changes, not arithmetic ones: opset 7 dropped the `broadcast` attribute,
+// opset 9 added the integer element types (which this kernel does not
+// implement, so only the floating-point types are declared) and opset 11 made
+// the C input optional (the kernel already treats a missing third input as no
+// bias). The ranges follow the CUDA EP's splits; the schemas have no bfloat16
+// before opset 13.
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Gemm, kOnnxDomain, 7, 8,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Gemm)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Gemm, kOnnxDomain, 9, 10,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Gemm)
+
+ONNX_OPERATOR_VERSIONED_KERNEL_EX(
+    Gemm, kOnnxDomain, 11, 12,
+    (Ort::KernelDefBuilder().AddTypeConstraint("T", HfdTensorTypes())), Gemm)

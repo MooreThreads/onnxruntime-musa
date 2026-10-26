@@ -13,7 +13,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 - Runtime compute: `SiluFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/silu_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `musa/ep/src/fusion/silu_fusion_matcher.cc` finder source
+- Before-graph topology source: `test/fusion/test_silu_fusion.py::test_silu_fusion_float16_accepts_cpu_produced_input`
 
 ## Extracted ONNX Ops
 
@@ -24,7 +24,12 @@ This file is generated from the current C++ fusion source and matching fusion te
 ```mermaid
 flowchart LR
   subgraph Before[Before fusion]
-    B0["Mul / Sigmoid"]
+    B0["Sin"]
+    B1["Sigmoid"]
+    B2["Mul"]
+    B0 --> B1
+    B0 --> B2
+    B1 --> B2
   end
   subgraph After[After fusion]
     A0["MUSA fused node"]

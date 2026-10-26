@@ -331,7 +331,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         finder_name = "FindMultiKqvMhaOutputProjectionFusions";
       } else if (IsMhtaScaledDotProductAttentionFusionGraph(graph)) {
         fusion_compute =
-            CreateMhtaScaledDotProductAttentionFusion(graph, fused_node);
+            CreateMhtaScaledDotProductAttentionFusion(graph, fused_node,
+                                                      &ep->MaskEndHints());
         finder_name = "FindMhtaScaledDotProductAttentionFusions";
       } else if (IsQkvAttentionOutputProjectionFusionGraph(graph)) {
         fusion_compute =
@@ -420,7 +421,8 @@ OrtStatus* ORT_API_CALL MusaEp::CompileImpl(
         fusion_compute = CreateShapeReshapeFusion(graph, fused_node);
         finder_name = "FindShapeReshapeFusions";
       } else if (IsTileConcatFusionGraph(graph)) {
-        fusion_compute = CreateTileConcatFusion(graph, fused_node);
+        fusion_compute =
+            CreateTileConcatFusion(graph, fused_node, &ep->ShapeExprHints());
         finder_name = "FindTileConcatFusions";
       } else if (IsSliceConcatFusionGraph(graph)) {
         fusion_compute = CreateSliceConcatFusion(graph, fused_node);

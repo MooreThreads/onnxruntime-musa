@@ -148,7 +148,9 @@ void AddFusionMatch(std::vector<FusionMatch>& matches, const char* finder,
 
 std::vector<FusionMatch> FindFusionMatches(
     const std::vector<Ort::ConstNode>& all_nodes,
-    const std::unordered_set<std::string>& graph_output_names) {
+    const std::unordered_set<std::string>& graph_output_names,
+    FusionShapeExprHints* shape_expr_hints,
+    FusionMaskEndHints* mask_end_hints) {
   std::unordered_set<size_t> accepted_node_ids;
   std::vector<FusionMatch> matches;
 
@@ -170,8 +172,8 @@ std::vector<FusionMatch> FindFusionMatches(
   // local SDPA matcher so future ONNX-node-based expansions do not get
   // preempted by the narrower attention chain.
   auto mhta_scaled_dot_product_attention_fusions =
-      FindMhtaScaledDotProductAttentionFusions(all_nodes, graph_output_names,
-                                               accepted_node_ids);
+      FindMhtaScaledDotProductAttentionFusions(
+          all_nodes, graph_output_names, accepted_node_ids, mask_end_hints);
   AddFusionMatch(matches, "FindMhtaScaledDotProductAttentionFusions", false,
                  std::move(mhta_scaled_dot_product_attention_fusions),
                  accepted_node_ids);
@@ -326,8 +328,8 @@ std::vector<FusionMatch> FindFusionMatches(
   AddFusionMatch(matches, "FindShapeReshapeFusions", true,
                  std::move(shape_reshape_fusions), accepted_node_ids);
 
-  auto tile_concat_fusions =
-      FindTileConcatFusions(all_nodes, graph_output_names, accepted_node_ids);
+  auto tile_concat_fusions = FindTileConcatFusions(
+      all_nodes, graph_output_names, accepted_node_ids, shape_expr_hints);
   AddFusionMatch(matches, "FindTileConcatFusions", false,
                  std::move(tile_concat_fusions), accepted_node_ids);
 

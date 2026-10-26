@@ -245,6 +245,25 @@ OrtStatus* GetCpuPreferredNodes(
       }
     }
 
+    // Outputs of nodes this EP does not claim (CPU EP nodes, unfused Constant
+    // nodes, ...) are already host memory. Record them before the walk so a
+    // metadata node reading such a tensor is still recognised as CPU-readable
+    // - the walk itself only discovers them when it happens to pop them.
+    for (const Ort::ConstNode& node : ordered_nodes) {
+      if (provider_nodes.find(node.GetId()) != provider_nodes.end()) {
+        continue;
+      }
+      std::string ep_name = node.GetEpName();
+      if (!ep_name.empty() && ep_name != "CPUExecutionProvider") {
+        continue;
+      }
+      for (Ort::ConstValueInfo output : node.GetOutputs()) {
+        if (output != nullptr) {
+          cpu_output_args.insert(output);
+        }
+      }
+    }
+
     std::unordered_set<size_t> visited;
     visited.reserve(candidates.size());
     std::unordered_set<const OrtNode*> cpu_nodes;

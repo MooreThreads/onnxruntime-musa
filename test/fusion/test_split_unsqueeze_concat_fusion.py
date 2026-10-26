@@ -45,7 +45,13 @@ def _profile_musa_node_names(model_bytes, feeds):
 
 
 def _build_model(
-    part_count, part_width, sequence, with_transpose, explicit_split, include_reshape
+    part_count,
+    part_width,
+    sequence,
+    with_transpose,
+    explicit_split,
+    include_reshape,
+    runtime_shape=False,
 ):
     packed_width = part_count * part_width
     initializers = []
@@ -58,10 +64,42 @@ def _build_model(
         else ["batch", sequence, packed_width]
     )
     if include_reshape:
-        target_shape = helper.make_tensor(
-            "target_shape", TensorProto.INT64, [3], [0, sequence, packed_width]
-        )
-        initializers.append(target_shape)
+        if runtime_shape:
+            # Reshape target computed at runtime (Shape -> Slice -> Concat) instead
+            # of an initializer. The fused node then has to read it from host
+            # memory, which is the CPU-shape-input path fixed here.
+            initializers.extend(
+                [
+                    helper.make_tensor("rt_start", TensorProto.INT64, [1], [0]),
+                    helper.make_tensor("rt_end", TensorProto.INT64, [1], [1]),
+                    helper.make_tensor("rt_axes", TensorProto.INT64, [1], [0]),
+                    helper.make_tensor("dim_seq", TensorProto.INT64, [1], [sequence]),
+                    helper.make_tensor("dim_pw", TensorProto.INT64, [1], [packed_width]),
+                ]
+            )
+            nodes.append(helper.make_node("Shape", ["X"], ["rt_shape"], name="RtShape"))
+            nodes.append(
+                helper.make_node(
+                    "Slice",
+                    ["rt_shape", "rt_start", "rt_end", "rt_axes"],
+                    ["rt_batch"],
+                    name="RtSlice",
+                )
+            )
+            nodes.append(
+                helper.make_node(
+                    "Concat",
+                    ["rt_batch", "dim_seq", "dim_pw"],
+                    ["target_shape"],
+                    axis=0,
+                    name="RtConcat",
+                )
+            )
+        else:
+            target_shape = helper.make_tensor(
+                "target_shape", TensorProto.INT64, [3], [0, sequence, packed_width]
+            )
+            initializers.append(target_shape)
         nodes.append(
             helper.make_node(
                 "Reshape", ["X", "target_shape"], ["R"], name="LateReshape"
@@ -219,3 +257,45 @@ def test_split_unsqueeze_concat_fusion_axis2_to_axis0(
         assert not any(
             name.startswith("LateTranspose") for name in node_names
         ), node_names
+
+
+@pytest.mark.parametrize("with_transpose", [False, True])
+def test_split_unsqueeze_concat_fusion_runtime_shape(with_transpose):
+    """Reshape target computed at runtime (not an initializer).
+
+    Covers the runtime-shape fusion path end to end. Note: this synthetic graph
+    does not reproduce the device-placement failure that a graph model hits
+    (the shape chain here stays on the CPU by itself), so it is coverage rather
+    than a discriminator for that fix.
+    """
+    part_count, part_width, sequence, batch = 2, 5, 4, 3
+    packed_width = part_count * part_width
+    rng = np.random.default_rng(43)
+    x = rng.standard_normal((batch, sequence * packed_width)).astype(np.float32)
+    model_bytes = _build_model(
+        part_count,
+        part_width,
+        sequence,
+        with_transpose,
+        explicit_split=False,
+        include_reshape=True,
+        runtime_shape=True,
+    )
+
+    musa_outputs = run_model_and_compare(
+        model_bytes, {"X": x}, rtol=1e-6, atol=1e-6
+    )
+    reshaped = x.reshape(batch, sequence, packed_width)
+    pieces = np.split(reshaped, part_count, axis=2)
+    expected = np.concatenate(
+        [np.expand_dims(piece, axis=0) for piece in pieces], axis=0
+    )
+    if with_transpose:
+        expected = expected.transpose(0, 1, 3, 2)
+    np.testing.assert_allclose(musa_outputs[0], expected, rtol=0, atol=0)
+
+    node_names = _profile_musa_node_names(model_bytes, {"X": x})
+    assert not any(name.startswith("LateReshape") for name in node_names), node_names
+    assert not any(name.startswith("LateSplit") for name in node_names), node_names
+    assert not any(name.startswith("LateUnsqueeze") for name in node_names), node_names
+    assert not any(name.startswith("LateConcat") for name in node_names), node_names

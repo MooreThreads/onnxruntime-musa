@@ -96,11 +96,17 @@ std::optional<std::vector<int64_t>> GetStaticShape(
   return shape;
 }
 
+/// Reads an int attribute, or nullopt when the node does not carry it.
+///
+/// ORT reports an attribute it cannot provide as OK with an empty handle: an
+/// optional attribute that has no constant default value (Transpose's `perm`,
+/// ReduceMean's `axes`, ...) comes back that way, and every call into the
+/// handle dereferences null. An empty handle therefore means "not present".
 std::optional<int64_t> GetIntAttribute(Ort::ConstNode node,
                                        const std::string& name) {
   Ort::ConstOpAttr attr;
   Ort::Status status = node.GetAttributeByName(name, attr);
-  if (!status.IsOK()) {
+  if (!status.IsOK() || !attr) {
     return std::nullopt;
   }
 
@@ -117,7 +123,8 @@ std::optional<std::vector<int64_t>> GetIntsAttribute(Ort::ConstNode node,
                                                      const std::string& name) {
   Ort::ConstOpAttr attr;
   Ort::Status status = node.GetAttributeByName(name, attr);
-  if (!status.IsOK()) {
+  // An empty handle means the attribute is not present; see above.
+  if (!status.IsOK() || !attr) {
     return std::nullopt;
   }
 
@@ -133,7 +140,8 @@ std::optional<std::string> GetStringAttribute(Ort::ConstNode node,
                                               const std::string& name) {
   Ort::ConstOpAttr attr;
   Ort::Status status = node.GetAttributeByName(name, attr);
-  if (!status.IsOK()) {
+  // An empty handle means the attribute is not present; see above.
+  if (!status.IsOK() || !attr) {
     return std::nullopt;
   }
 
@@ -314,7 +322,7 @@ bool IsZeroFloatConstantOfShape(Ort::ConstNode node) {
 
   Ort::ConstOpAttr attr;
   Ort::Status attr_status = node.GetAttributeByName("value", attr);
-  if (!attr_status.IsOK()) {
+  if (!attr_status.IsOK() || !attr) {
     return true;
   }
 

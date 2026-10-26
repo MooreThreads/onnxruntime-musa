@@ -13,7 +13,7 @@ This file is generated from the current C++ fusion source and matching fusion te
 - Runtime compute: `SplitConcatFusionCompute`
 - Runtime implementation: `musa/ep/src/fusion/split_concat_fusion.cc`
 - `drop_constant_initializers`: `false`
-- Before-graph topology source: `musa/ep/src/fusion/split_concat_fusion_matcher.cc` finder source
+- Before-graph topology source: `test/fusion/test_split_unsqueeze_concat_fusion.py::_build_model`
 
 ## Extracted ONNX Ops
 
@@ -24,12 +24,13 @@ This file is generated from the current C++ fusion source and matching fusion te
 ```mermaid
 flowchart LR
   subgraph Before[Before fusion]
-    B0["Split"]
-    B1["Reshape"]
-    B0 --> B1
+    B0["Shape"]
+    B1["Slice"]
     B2["Concat"]
+    B3["Reshape"]
+    B4["Transpose"]
+    B0 --> B1
     B1 --> B2
-    B3["Transpose"]
     B2 --> B3
   end
   subgraph After[After fusion]

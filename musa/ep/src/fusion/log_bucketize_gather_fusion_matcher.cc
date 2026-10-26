@@ -130,7 +130,7 @@ std::optional<std::vector<int64_t>> ReadSmallIntConstantOrInitializer(
   }
   Ort::ConstOpAttr attr;
   Ort::Status attr_status = producer.GetAttributeByName("value", attr);
-  if (!attr_status.IsOK()) {
+  if (!attr_status.IsOK() || !attr) {
     return std::nullopt;
   }
   Ort::Value value{nullptr};

@@ -1,0 +1,177 @@
+name: MUSA Weekly CPU EP Diff
+
+on:
+  schedule:
+    # Monday 06:00 Asia/Shanghai (UTC+8) = Sunday 22:00 UTC.
+    - cron: "0 22 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: musa-weekly-cpu-ep-diff
+  cancel-in-progress: false
+
+jobs:
+  weekly-cpu-ep-diff:
+    name: Weekly Model Zoo CPU EP Diff
+    runs-on: [self-hosted, musa, s5000]
+    timeout-minutes: 720
+    env:
+      CI_ASSETS: /data/ci-assets
+      MODEL_ZOO_WORK: /data/ci-work/onnx-model-zoo-weekly-cpu-ep-diff-${{ github.run_id }}-${{ github.run_attempt }}
+      RESULTS_DIR: /data/ci-work/onnx-model-zoo-weekly-cpu-ep-diff-${{ github.run_id }}-${{ github.run_attempt }}/results
+      MUSA_VISIBLE_DEVICES: "0"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+          submodules: false
+
+      - name: Configure MUSA toolkit environment
+        run: |
+          set -euo pipefail
+          echo "/usr/local/musa/bin" >> "${GITHUB_PATH}"
+          {
+            echo "MUSA_HOME=/usr/local/musa"
+            echo "LD_LIBRARY_PATH=/usr/local/musa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+            echo "CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:/usr/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Prepare ONNX Runtime headers
+        run: |
+          set -euo pipefail
+          test -d "${CI_ASSETS}/onnxruntime"
+          rm -rf third_party/onnxruntime
+          cp -a "${CI_ASSETS}/onnxruntime" third_party/onnxruntime
+
+      - name: Build master plugin
+        run: |
+          set -euo pipefail
+          echo "Master commit: $(git rev-parse HEAD)"
+          bash build.sh --clean --no-wheel
+          test -f build/Release/libonnxruntime_providers_musa_plugin.so
+          sha256sum build/Release/libonnxruntime_providers_musa_plugin.so
+
+      - name: Prepare model zoo
+        run: |
+          set -euo pipefail
+          test -d "${CI_ASSETS}/onnx-model-zoo"
+          rm -rf "${MODEL_ZOO_WORK}"
+          mkdir -p "${MODEL_ZOO_WORK}"
+          cp -al "${CI_ASSETS}/onnx-model-zoo/." "${MODEL_ZOO_WORK}/"
+          rm -rf "${MODEL_ZOO_WORK}/cpp_runners"
+          cp -a "${CI_ASSETS}/onnx-model-zoo/cpp_runners" "${MODEL_ZOO_WORK}/cpp_runners"
+          mkdir -p "${RESULTS_DIR}"
+          test -f "${MODEL_ZOO_WORK}/run_all_onnx_cpu_ep_diff.sh"
+          test -f "${MODEL_ZOO_WORK}/cpp_runners/build_onnx_runner.sh"
+          test -f "/data/ci-assets/ort-sdk/onnxruntime-linux-x64-1.26.0/include/onnxruntime_c_api.h"
+
+      - name: Build model zoo CPU EP diff runner
+        run: |
+          set -euo pipefail
+          cd "${MODEL_ZOO_WORK}"
+          ORT_ROOT=/data/ci-assets/ort-sdk/onnxruntime-linux-x64-1.26.0/ \
+            bash cpp_runners/build_onnx_runner.sh
+          test -x cpp_runners/onnx_cpu_ep_diff
+
+      - name: Run weekly MUSA-vs-CPU diff
+        run: |
+          set -euo pipefail
+          plugin="${GITHUB_WORKSPACE}/build/Release/libonnxruntime_providers_musa_plugin.so"
+          raw_log="${RESULTS_DIR}/musa-cpu-ep-diff.log"
+          report="${RESULTS_DIR}/musa-weekly-cpu-ep-diff-report.md"
+          test -f "${plugin}"
+
+          commit="$(git rev-parse HEAD)"
+          plugin_sha="$(sha256sum "${plugin}" | awk '{print $1}')"
+
+          cd "${MODEL_ZOO_WORK}"
+          set +e
+          MUSA_EP_LIBRARY="${plugin}" \
+            bash run_all_onnx_cpu_ep_diff.sh --ep musa -s 4 -q 1024 2>&1 | tee "${raw_log}"
+          pipeline_status=("${PIPESTATUS[@]}")
+          run_status=${pipeline_status[0]}
+          tee_status=${pipeline_status[1]}
+          set -e
+
+          summary="$(grep -E '^pass=[0-9]+ fail=[0-9]+ skip=[0-9]+ logs=' "${raw_log}" | tail -n 1 || true)"
+          summary_pattern='^pass=([0-9]+) fail=([0-9]+) skip=([0-9]+) logs='
+          summary_found=0
+          fail_count=""
+          if [[ "${summary}" =~ ${summary_pattern} ]]; then
+            summary_found=1
+            fail_count="${BASH_REMATCH[2]}"
+          fi
+
+          gate_status="FAIL"
+          if [[ "${summary_found}" -eq 1 && "${tee_status}" -eq 0 && "${fail_count}" -eq 0 ]]; then
+            gate_status="PASS"
+          fi
+
+          {
+            echo "# Weekly Model Zoo CPU EP Diff"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Result | **${gate_status}** |"
+            echo '| Branch | `master` |'
+            echo "| Commit | \`${commit}\` |"
+            echo '| Command | `run_all_onnx_cpu_ep_diff.sh --ep musa -s 4 -q 1024` |'
+            echo "| Plugin SHA256 | \`${plugin_sha}\` |"
+            echo "| Summary | \`${summary:-not found}\` |"
+            echo "| Runner exit | \`${run_status}\` |"
+            echo
+            echo "## Diff Output"
+            echo
+            echo '```text'
+            cat "${raw_log}"
+            echo '```'
+          } > "${report}"
+
+          {
+            echo "## Weekly Model Zoo CPU EP Diff"
+            echo
+            echo "- Result: **${gate_status}**"
+            echo "- Commit: \`${commit}\`"
+            echo "- Summary: \`${summary:-not found}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [[ "${summary_found}" -eq 0 ]]; then
+            echo "Could not find the final CPU EP diff summary in ${raw_log}" >&2
+            exit 1
+          fi
+          echo "Weekly CPU EP diff result: ${summary}"
+          if (( tee_status != 0 )); then
+            echo "Failed to write the weekly report log (tee exit ${tee_status})" >&2
+            exit 1
+          fi
+          if (( fail_count != 0 )); then
+            echo "Weekly CPU EP diff gate failed: fail=${fail_count}" >&2
+            exit 1
+          fi
+          echo "Weekly CPU EP diff passed: fail=0 (PASS and SKIPPED are accepted)"
+
+      - name: Upload weekly report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: musa-weekly-cpu-ep-diff-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RESULTS_DIR }}/musa-weekly-cpu-ep-diff-report.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Cleanup model zoo work directory
+        if: always()
+        run: |
+          set -euo pipefail
+          case "${MODEL_ZOO_WORK}" in
+            /data/ci-work/onnx-model-zoo-weekly-cpu-ep-diff-*) rm -rf "${MODEL_ZOO_WORK}" ;;
+            *) echo "Refusing to remove unexpected path: ${MODEL_ZOO_WORK}" >&2; exit 1 ;;
+          esac

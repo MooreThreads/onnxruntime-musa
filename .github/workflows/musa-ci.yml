@@ -1,0 +1,233 @@
+name: MUSA CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: musa-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit Tests
+    runs-on: [self-hosted, musa, s5000]
+    timeout-minutes: 90
+    env:
+      CI_ASSETS: /data/ci-assets
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          submodules: false
+
+      - name: Configure MUSA toolkit environment
+        run: |
+          set -euo pipefail
+          echo "/usr/local/musa/bin" >> "${GITHUB_PATH}"
+          {
+            echo "MUSA_HOME=/usr/local/musa"
+            echo "LD_LIBRARY_PATH=/usr/local/musa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+            echo "CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:/usr/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+          } >> "${GITHUB_ENV}"
+
+          echo "MUSA_HOME=/usr/local/musa"
+          echo "PATH includes /usr/local/musa/bin in subsequent steps"
+          echo "LD_LIBRARY_PATH=/usr/local/musa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          echo "CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:/usr/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+
+      - name: Prepare ONNX Runtime headers
+        run: |
+          set -euo pipefail
+          test -d "${CI_ASSETS}/onnxruntime"
+          rm -rf third_party/onnxruntime
+          cp -a "${CI_ASSETS}/onnxruntime" third_party/onnxruntime
+
+      - name: Build plugin and wheel
+        run: |
+          set -euo pipefail
+          echo "Testing commit: $(git rev-parse HEAD)"
+          bash build.sh
+
+      - name: Install wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --no-deps "onnxruntime==1.26.0"
+
+          shopt -s nullglob
+          wheels=(dist/onnxruntime_ep_musa-*.whl)
+          if (( ${#wheels[@]} != 1 )); then
+            echo "Expected exactly one MUSA wheel, found ${#wheels[@]}" >&2
+            printf '  %s\n' "${wheels[@]}" >&2
+            exit 1
+          fi
+          python -m pip install --no-deps --force-reinstall "${wheels[0]}"
+
+      - name: Run provider tests
+        run: bash test/run_all.sh
+
+      - name: Package build artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/musa-build"
+          tar -C build -czf "${RUNNER_TEMP}/musa-build/musa-build.tar.gz" \
+            Release/libonnxruntime_providers_musa_plugin.so
+          tar -tzf "${RUNNER_TEMP}/musa-build/musa-build.tar.gz" >/dev/null
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: musa-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/musa-build/musa-build.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  model-zoo-cpu-ep-diff:
+    name: Model Zoo CPU EP Diff
+    needs: test
+    runs-on: [self-hosted, musa, s5000]
+    timeout-minutes: 720
+    env:
+      CI_ASSETS: /data/ci-assets
+      MODEL_ZOO_WORK: /data/ci-work/onnx-model-zoo-cpu-ep-diff-${{ github.run_id }}-${{ github.run_attempt }}
+      RESULTS_DIR: /data/ci-work/onnx-model-zoo-cpu-ep-diff-${{ github.run_id }}-${{ github.run_attempt }}/results
+      MUSA_VISIBLE_DEVICES: "0"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          submodules: false
+
+      - name: Configure MUSA toolkit environment
+        run: |
+          set -euo pipefail
+          echo "/usr/local/musa/bin" >> "${GITHUB_PATH}"
+          {
+            echo "MUSA_HOME=/usr/local/musa"
+            echo "LD_LIBRARY_PATH=/usr/local/musa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+            echo "CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:/usr/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: musa-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/musa-build
+
+      - name: Extract build artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          tar -C build -xzf "${RUNNER_TEMP}/musa-build/musa-build.tar.gz"
+
+          plugin="${GITHUB_WORKSPACE}/build/Release/libonnxruntime_providers_musa_plugin.so"
+          test -f "${plugin}"
+          echo "Head commit: $(git rev-parse HEAD)"
+          sha256sum "${plugin}"
+
+      - name: Prepare model zoo
+        run: |
+          set -euo pipefail
+          test -d "${CI_ASSETS}/onnx-model-zoo"
+          rm -rf "${MODEL_ZOO_WORK}"
+          mkdir -p "${MODEL_ZOO_WORK}"
+          cp -al "${CI_ASSETS}/onnx-model-zoo/." "${MODEL_ZOO_WORK}/"
+          rm -rf "${MODEL_ZOO_WORK}/cpp_runners"
+          cp -a "${CI_ASSETS}/onnx-model-zoo/cpp_runners" "${MODEL_ZOO_WORK}/cpp_runners"
+          mkdir -p "${RESULTS_DIR}"
+          test -f "${MODEL_ZOO_WORK}/run_all_onnx_cpu_ep_diff.sh"
+          test -f "${MODEL_ZOO_WORK}/cpp_runners/build_onnx_runner.sh"
+          test -f "/data/ci-assets/ort-sdk/onnxruntime-linux-x64-1.26.0/include/onnxruntime_c_api.h"
+
+      - name: Build model zoo CPU EP diff runner
+        run: |
+          set -euo pipefail
+          cd "${MODEL_ZOO_WORK}"
+          ORT_ROOT=/data/ci-assets/ort-sdk/onnxruntime-linux-x64-1.26.0/ \
+            bash cpp_runners/build_onnx_runner.sh
+          test -x cpp_runners/onnx_cpu_ep_diff
+
+      - name: Run MUSA-vs-CPU diff
+        run: |
+          set -euo pipefail
+          plugin="${GITHUB_WORKSPACE}/build/Release/libonnxruntime_providers_musa_plugin.so"
+          result_log="${RESULTS_DIR}/musa-cpu-ep-diff.log"
+          test -f "${plugin}"
+
+          cd "${MODEL_ZOO_WORK}"
+          set +e
+          MUSA_EP_LIBRARY="${plugin}" \
+            bash run_all_onnx_cpu_ep_diff.sh --ep musa -s 4 -q 16 2>&1 | tee "${result_log}"
+          pipeline_status=("${PIPESTATUS[@]}")
+          run_status=${pipeline_status[0]}
+          tee_status=${pipeline_status[1]}
+          set -e
+
+          if [[ -d "${MODEL_ZOO_WORK}/musa_cpu_diff_logs" ]]; then
+            rm -rf "${RESULTS_DIR}/musa_cpu_diff_logs"
+            cp -a "${MODEL_ZOO_WORK}/musa_cpu_diff_logs" "${RESULTS_DIR}/musa_cpu_diff_logs"
+          fi
+
+          summary="$(grep -E '^pass=[0-9]+ fail=[0-9]+ skip=[0-9]+ logs=' "${result_log}" | tail -n 1 || true)"
+          summary_pattern='^pass=([0-9]+) fail=([0-9]+) skip=([0-9]+) logs='
+          if [[ ! "${summary}" =~ ${summary_pattern} ]]; then
+            echo "Could not find the final CPU EP diff summary in ${result_log}" >&2
+            echo "Diff runner exit code: ${run_status}" >&2
+            exit 1
+          fi
+
+          pass_count="${BASH_REMATCH[1]}"
+          fail_count="${BASH_REMATCH[2]}"
+          skip_count="${BASH_REMATCH[3]}"
+
+          {
+            echo "## Model Zoo CPU EP Diff"
+            echo '```text'
+            echo "${summary}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          echo "CPU EP diff result: pass=${pass_count} fail=${fail_count} skip=${skip_count}"
+          if (( tee_status != 0 )); then
+            echo "Failed to write the CPU EP diff log (tee exit ${tee_status})" >&2
+            exit 1
+          fi
+          if (( fail_count != 0 )); then
+            echo "CPU EP diff gate failed: fail=${fail_count}" >&2
+            exit 1
+          fi
+          if (( run_status != 0 )); then
+            echo "CPU EP diff runner exited with code ${run_status} despite fail=0" >&2
+            exit "${run_status}"
+          fi
+          echo "CPU EP diff gate passed: fail=0 (PASS and SKIPPED are both accepted)"
+
+      - name: Upload CPU EP diff results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-zoo-cpu-ep-diff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RESULTS_DIR }}/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Cleanup model zoo work directory
+        if: always()
+        run: |
+          set -euo pipefail
+          case "${MODEL_ZOO_WORK}" in
+            /data/ci-work/onnx-model-zoo-cpu-ep-diff-*) rm -rf "${MODEL_ZOO_WORK}" ;;
+            *) echo "Refusing to remove unexpected path: ${MODEL_ZOO_WORK}" >&2; exit 1 ;;
+          esac
